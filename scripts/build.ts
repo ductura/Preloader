@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build as esbuild } from 'esbuild';
 import { renderPage } from '../src/page.ts';
+import { isMain } from './is-main.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
@@ -27,7 +28,7 @@ export async function build(outDir: string): Promise<void> {
   writeFileSync(join(outDir, 'index.html'), renderPage({ script, css }));
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMain(import.meta.url)) {
   await build(join(root, 'dist'));
   console.log('dist/index.html');
 }

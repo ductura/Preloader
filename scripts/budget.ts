@@ -2,6 +2,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, normalize, relative, sep } from 'node:path';
 import { gzipSync } from 'node:zlib';
+import { isMain } from './is-main.ts';
 
 export interface Budget {
   total: number;
@@ -57,7 +58,7 @@ export function checkBudget(dir: string, budget: Budget): string[] {
   return problems;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMain(import.meta.url)) {
   const [dir = 'dist', budgetPath = 'budget.json'] = process.argv.slice(2);
   const problems = checkBudget(dir, parseBudget(readFileSync(budgetPath, 'utf8')));
   if (problems.length > 0) {
