@@ -42,7 +42,8 @@ export function checkBudget(dir: string, budget: Budget): string[] {
   const present = new Set(listFiles(dir));
   let sum = 0;
   for (const name of present) {
-    const limit = budget.files[name];
+    // Own keys only: an inherited name such as "toString" must not count as a rule.
+    const limit = Object.hasOwn(budget.files, name) ? budget.files[name] : undefined;
     if (limit === undefined) {
       problems.push(`${name}: nema granice u proračunu`);
       continue;

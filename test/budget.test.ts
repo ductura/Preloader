@@ -59,6 +59,23 @@ describe('checkBudget', () => {
   });
 });
 
+describe('datoteka imena svojstva iz Object.prototype nema pravilo', () => {
+  test.each(['toString', 'constructor', 'hasOwnProperty', 'valueOf', '__proto__'])('%s pada', (name) => {
+    file('index.html', 100);
+    file(name, 10);
+    expect(checkBudget(dir, { total: 10_000, files: { 'index.html': 10_000 } })).toEqual([
+      expect.stringContaining(`${name}: nema granice`),
+    ]);
+  });
+
+  test('pravilo za __proto__ iz JSON-a vrijedi kao obična datoteka', () => {
+    const size = file('__proto__', 100);
+    file('index.html', 100);
+    const budget = parseBudget(`{"total":10000,"files":{"index.html":10000,"__proto__":${size - 1}}}`);
+    expect(checkBudget(dir, budget)).toEqual([expect.stringContaining('__proto__: ')]);
+  });
+});
+
 describe('parseBudget odbija neispravan proračun', () => {
   test.each([
     ['prazno', ''],
