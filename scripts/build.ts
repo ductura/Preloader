@@ -17,6 +17,8 @@ export async function build(outDir: string): Promise<void> {
     target: 'es2020',
     write: false,
     legalComments: 'none',
+    // Stranica je UTF-8; bez \uXXXX bijega za hrvatska slova (proračun veličine).
+    charset: 'utf8',
   });
   const script = bundle.outputFiles[0]?.text.trim() ?? '';
   // "</script" inside the inline script would end the element early.

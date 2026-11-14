@@ -10,7 +10,7 @@ import { UA } from './user-agents.ts';
 function visit(ua: string) {
   const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
   const go = vi.fn<(url: string, delayMs: number) => void>();
-  const route = applyRoute(doc, ua, defaultConfig, go);
+  const route = applyRoute(doc, { userAgent: ua }, defaultConfig, go);
   return { doc, go, route };
 }
 
@@ -27,12 +27,12 @@ describe('stranica preloadera', () => {
     expect(go).toHaveBeenCalledWith(defaultConfig.frontends.chrome, 4000);
   });
 
-  test('Chrome na Androidu: mobilno sučelje, bez desktop paketa, odmah dalje', () => {
+  test('Chrome na Androidu: mobilno sučelje, bez desktop paketa, vrijeme za ručni izbor', () => {
     const { doc, go } = visit(UA.chromeAndroid);
     expect(doc.body.dataset['frontend']).toBe('mobile');
     expect(href(doc, 'open-app')).toBe(defaultConfig.frontends.mobile);
     expect(doc.getElementById('desktop-offer')?.hidden).toBe(true);
-    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.mobile, 0);
+    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.mobile, 4000);
   });
 
   test('Edge na Windowsu: ostala sučelja + Windows paket', () => {
