@@ -10,10 +10,10 @@ import { clientText as text } from './text.ts';
 export type Navigate = (url: string, delayMs: number) => (() => void) | void;
 
 /**
- * U prikazu računala korisnik ima vremena kliknuti preuzimanje ili ručni izbor paketa
- * (i na Linuxu ili nepoznatom sustavu) prije preusmjeravanja. Mobilni prikaz ide odmah.
+ * Prije preusmjeravanja korisnik uvijek ima vremena za preuzimanje ili ručni izbor,
+ * i u mobilnom prikazu i kad je izbor zapamćen, da ga može promijeniti (P-0.3).
  */
-export const REDIRECT_DELAY_DESKTOP_MS = 4000;
+export const REDIRECT_DELAY_MS = 4000;
 
 /** Putanje weba još su iz P-0.1 (odluka 1 otvorena): prikaz računala bira prema pregledniku. */
 function frontendFor(view: View, userAgent: string): Frontend {
@@ -62,7 +62,7 @@ export function applyRoute(
   render(doc, route, decision);
 
   const section = doc.getElementById('choice');
-  let cancel = navigate(route.url, decision.view === 'desktop' || route.desktopPackage ? REDIRECT_DELAY_DESKTOP_MS : 0);
+  let cancel = navigate(route.url, REDIRECT_DELAY_MS);
   if (!section) return route;
   section.hidden = false;
   section.addEventListener('click', (event) => {

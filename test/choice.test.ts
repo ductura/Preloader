@@ -5,7 +5,7 @@ import { resolveChoice, type Decision } from '../src/choice/resolve.ts';
 import {
   browserStore, CHOICE_VERSION, readChoice, STORAGE_KEY, writeChoice, type Choice, type ChoiceStore,
 } from '../src/choice/store.ts';
-import { applyRoute } from '../src/client.ts';
+import { applyRoute, REDIRECT_DELAY_MS } from '../src/client.ts';
 import { defaultConfig } from '../src/config.ts';
 import { choosePackage, chooseView, type Signals } from '../src/detect/index.ts';
 import { renderPage } from '../src/page.ts';
@@ -186,7 +186,34 @@ describe('ručni izbor na stranici', () => {
     expect(first.doc.getElementById('desktop-offer')?.hidden).toBe(true);
     const next = visit({ userAgent: UA.chromeWindows }, store);
     expect(next.route.frontend).toBe('mobile');
-    expect(next.go).toHaveBeenCalledWith(defaultConfig.frontends.mobile, 0);
+    expect(next.go).toHaveBeenCalledWith(defaultConfig.frontends.mobile, REDIRECT_DELAY_MS);
+  });
+
+  test('zapamćen „Mobitel”: prije odlaska korisnik može vratiti „Računalo” (pravi timer)', () => {
+    vi.useFakeTimers();
+    try {
+      const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
+      const store = stored({ v: 1, view: 'mobile' });
+      const assign = vi.fn<(url: string) => void>();
+      // Isti oblik kao `src/main.ts`: setTimeout + clearTimeout.
+      applyRoute(doc, { userAgent: UA.chromeWindows }, defaultConfig, (url, delayMs) => {
+        const id = setTimeout(() => assign(url), delayMs);
+        return () => clearTimeout(id);
+      }, store);
+      vi.advanceTimersByTime(REDIRECT_DELAY_MS - 1);
+      expect(assign).not.toHaveBeenCalled();
+      (doc.querySelector('[data-view="desktop"]') as HTMLElement).click();
+      vi.runAllTimers();
+      expect(assign).not.toHaveBeenCalled();
+      expect(doc.getElementById('open-app')?.getAttribute('href')).toBe(defaultConfig.frontends.chrome);
+      expect(readChoice(store).view).toBe('desktop');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('svaki prikaz, i automatski mobilni, čeka prije odlaska', () => {
+    for (const s of signalSpace) for (const [, delay] of visit(s).go.mock.calls) expect(delay).toBe(REDIRECT_DELAY_MS);
   });
 
   test('zapamćeno računalo pobjeđuje automatski mobilni prikaz', () => {
