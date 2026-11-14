@@ -1,0 +1,55 @@
+/* Papir i grafit (Ductus docs/design/DESIGN-SYSTEM.md §3, §5): grafitna ljuska, bijeli list, prigušeno zlato. */
+:root {
+  --ground: #242422;
+  --sheet: #fcfbf8;
+  --ink: #242422;
+  --ink-2: #55534d;
+  --accent: #806529;
+  --accent-hover: #6b5420;
+  --accent-ink: #fcfbf8;
+  --radius: 6px;
+  --radius-control: 5px;
+  --focus-width: 3px;
+  --focus-offset: 4px;
+  --ff-ui: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ff-display: "Newsreader", Georgia, "Times New Roman", serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--ground);
+  font: 400 13.5px/1.5 var(--ff-ui);
+}
+.sheet {
+  width: 100%;
+  max-width: 480px;
+  padding: 40px 32px;
+  background: var(--sheet);
+  color: var(--ink);
+  border-radius: var(--radius);
+  box-shadow: 0 22px 80px #0003;
+}
+.brand { margin: 0 0 12px; font: 400 42px/1.08 var(--ff-display); letter-spacing: -0.025em; }
+.brand span { color: var(--accent); }
+.lead { margin: 0 0 24px; color: var(--ink-2); }
+a { color: var(--accent); text-underline-offset: 3px; }
+a:focus-visible { outline: var(--focus-width) solid var(--accent); outline-offset: var(--focus-offset); }
+.button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 20px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: var(--radius-control);
+  text-decoration: none;
+  font-weight: 600;
+}
+.button:hover { background: var(--accent-hover); }
+noscript ul { padding-left: 20px; }
+@media (max-width: 640px) { body { font-size: 14px; } .sheet { padding: 32px 20px; } }
