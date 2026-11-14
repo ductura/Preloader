@@ -9,3 +9,20 @@ jobs:
     uses: ductura/.github/.github/workflows/ci-node.yml@98f62800577910b24451809d40c247ee1f04c7c1 # main, DAN-735
     with:
       scripts: typecheck test build budget
+  # P-0.11: matrica uređaja u tri motora (Chromium, Firefox, WebKit). Opera je ručna provjera.
+  e2e-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version-file: .nvmrc, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: Install browsers
+        run: pnpm exec playwright install --with-deps chromium firefox webkit
+      - run: pnpm e2e
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: e2e-matrix-report, path: playwright-report/, retention-days: 7 }
