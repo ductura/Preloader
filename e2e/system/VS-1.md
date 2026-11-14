@@ -1,6 +1,6 @@
 # VS-1 i VS-2: sistemski scenarij od ulaza do potpisane revizije
 
-Linear DAN-760. Ovo je specifikacija, ne izvršni test. Rastavlja tekst prihvata DAN-760 na tvrdnje. Svaka tvrdnja navodi korak, opažanje koje test može provjeriti strojno (HTTP odgovor, tekst u sučelju, zapis u lokalnom dnevniku ili vrijednost na poslužitelju) i današnje stanje dokaza. Izvršni test piše se kad postoje server (DAN-758) i web (DAN-759). Svaka tvrdnja ovdje postaje jedan ili više njegovih koraka, a ID tvrdnje (npr. `VS-1.6`) ide u naziv koraka (`test.step`).
+Linear DAN-760. Ovo je specifikacija, ne izvršni test. Rastavlja tekst prihvata DAN-760 na tvrdnje. Svaka tvrdnja navodi korak, opažanje koje test može provjeriti strojno (HTTP odgovor, tekst u sučelju, zapis u lokalnom dnevniku ili vrijednost na poslužitelju) i današnje stanje dokaza. Izvršni test piše se kad budu isporučeni dio servera iz DAN-758 i web iz DAN-759. Svaka tvrdnja ovdje postaje jedan ili više njegovih koraka, a ID tvrdnje (npr. `VS-1.6`) ide u naziv koraka (`test.step`).
 
 Uzor za oblik testa je Ductus `e2e/login/evidence.spec.ts` na `d52a92c3`. Uz tvrdnje se navodi koji se njegov obrazac (helper ili test) može prenijeti. Imena helpera odnose se na tu datoteku.
 
@@ -14,8 +14,8 @@ Uzor za oblik testa je Ductus `e2e/login/evidence.spec.ts` na `d52a92c3`. Uz tvr
 
 ## Oznake stanja dokaza
 
-- **NEPROVJERENO (DAN-758):** tvrdnja traži server ili njegov odgovor, a server još ne postoji.
-- **NEPROVJERENO (DAN-759):** tvrdnja traži web pod `/app/`, a web još ne postoji.
+- **NEPROVJERENO (DAN-758):** tvrdnja traži dio servera iz DAN-758 ili njegov odgovor, a taj dio još nije isporučen.
+- **NEPROVJERENO (DAN-759):** tvrdnja traži web pod `/app/` iz DAN-759, a taj web još nije isporučen.
 - **NEPROVJERENO (uređaj):** tvrdnja traži izvođenje na fizičkom uređaju. Emulacija tu tvrdnju ne dokazuje.
 - **DJELOMIČNO:** dio tvrdnje danas dokazuje test koji je naveden. Ostatak čeka označene zadatke.
 
