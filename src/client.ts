@@ -1,24 +1,85 @@
-// Logika u pregledniku: odabire sučelje i paket prema UA-u i upisuje ih u stranicu.
+// Logika u pregledniku: odluke iz P-0.2, ručni izbor (P-0.3) i upis u stranicu.
+import { resolveChoice, type Decision } from './choice/resolve.ts';
+import { readChoice, writeChoice, type Choice, type ChoiceStore } from './choice/store.ts';
 import type { Config } from './config.ts';
-import { route, type Route } from './detect.ts';
-import { text } from './text.ts';
+import { detectBrowser, type DesktopPackage, type Frontend, type Route } from './detect.ts';
+import { choosePackage, chooseView, type Signals, type View } from './detect/index.ts';
+import { clientText as text } from './text.ts';
 
-export type Navigate = (url: string, delayMs: number) => void;
+/** Zakazuje odlazak na web; može vratiti funkciju koja ga otkazuje. */
+export type Navigate = (url: string, delayMs: number) => (() => void) | void;
 
-/** S ponuđenim paketom korisnik ima vremena kliknuti preuzimanje prije preusmjeravanja. */
-export const REDIRECT_DELAY_WITH_PACKAGE_MS = 4000;
+/**
+ * U prikazu računala korisnik ima vremena kliknuti preuzimanje ili ručni izbor paketa
+ * (i na Linuxu ili nepoznatom sustavu) prije preusmjeravanja. Mobilni prikaz ide odmah.
+ */
+export const REDIRECT_DELAY_DESKTOP_MS = 4000;
 
-export function applyRoute(doc: Document, ua: string, config: Config, navigate: Navigate): Route {
-  const r = route(ua, config);
+/** Putanje weba još su iz P-0.1 (odluka 1 otvorena): prikaz računala bira prema pregledniku. */
+function frontendFor(view: View, userAgent: string): Frontend {
+  if (view === 'mobile') return 'mobile';
+  return detectBrowser(userAgent) === 'chrome' ? 'chrome' : 'other';
+}
+
+function toRoute(d: Decision, userAgent: string, config: Config): Route {
+  const frontend = frontendFor(d.view, userAgent);
+  return {
+    frontend,
+    url: config.frontends[frontend],
+    desktopPackage: d.package,
+    downloadUrl: d.package ? config.downloads[d.package] : null,
+  };
+}
+
+function render(doc: Document, r: Route, d: Decision): void {
   doc.body.dataset['frontend'] = r.frontend;
   doc.getElementById('open-app')?.setAttribute('href', r.url);
   const offer = doc.getElementById('desktop-offer');
   const link = doc.getElementById('desktop-download');
-  if (offer && link && r.desktopPackage && r.downloadUrl) {
-    link.setAttribute('href', r.downloadUrl);
-    link.textContent = text.download(r.desktopPackage);
-    offer.hidden = false;
+  if (offer && link) {
+    // Samo poveznica: preuzimanje počinje tek na klik korisnika.
+    link.setAttribute('href', r.downloadUrl ?? '');
+    link.textContent = r.desktopPackage ? text.download(r.desktopPackage) : '';
+    offer.hidden = !r.desktopPackage;
   }
-  navigate(r.url, r.desktopPackage ? REDIRECT_DELAY_WITH_PACKAGE_MS : 0);
-  return r;
+  for (const b of doc.querySelectorAll<HTMLElement>('#choice button')) {
+    const on = b.dataset['view'] ? b.dataset['view'] === d.view : b.dataset['package'] === d.package;
+    b.setAttribute('aria-pressed', String(on));
+  }
+}
+
+export function applyRoute(
+  doc: Document,
+  signals: Signals,
+  config: Config,
+  navigate: Navigate,
+  store: ChoiceStore | null = null,
+): Route {
+  const auto: Decision = { view: chooseView(signals), package: choosePackage(signals) };
+  let manual: Choice = readChoice(store);
+  let decision = resolveChoice(auto, manual);
+  const route = toRoute(decision, signals.userAgent, config);
+  render(doc, route, decision);
+
+  const section = doc.getElementById('choice');
+  let cancel = navigate(route.url, decision.view === 'desktop' || route.desktopPackage ? REDIRECT_DELAY_DESKTOP_MS : 0);
+  if (!section) return route;
+  section.hidden = false;
+  section.addEventListener('click', (event) => {
+    const button = (event.target as Element | null)?.closest?.('button');
+    if (!button) return;
+    const view = button.getAttribute('data-view') as View | null;
+    const pkg = button.getAttribute('data-package') as DesktopPackage | null;
+    if (!view && !pkg) return;
+    // Korisnik bira: automatsko preusmjeravanje više ne smije preteći njegov klik.
+    cancel?.();
+    cancel = undefined;
+    manual = view ? { ...manual, view } : { ...manual, package: pkg ?? undefined };
+    const saved = writeChoice(store, manual);
+    decision = resolveChoice(auto, manual);
+    render(doc, toRoute(decision, signals.userAgent, config), decision);
+    const status = doc.getElementById('choice-status');
+    if (status) status.textContent = saved ? text.choiceSaved : text.choiceNotSaved;
+  });
+  return route;
 }

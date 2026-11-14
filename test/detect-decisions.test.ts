@@ -143,6 +143,6 @@ test('odluke stanu u ostatak proračuna veličine iz P-0.1', async () => {
   rmSync(dir, { recursive: true, force: true });
   const budget = parseBudget(readFileSync('budget.json', 'utf8'));
   expect(decisions).toBeLessThan(1024);
-  // Zbroj zasebnih gzipova je gornja granica: zajednička izgradnja sažima bolje.
-  expect(page + decisions).toBeLessThanOrEqual(budget.total);
+  // Od P-0.3 stranica sama ugrađuje odluke, pa se mjeri izgrađena stranica, ne zbroj.
+  expect(page).toBeLessThanOrEqual(budget.total);
 });

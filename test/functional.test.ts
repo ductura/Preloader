@@ -10,7 +10,7 @@ import { UA } from './user-agents.ts';
 function visit(ua: string) {
   const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
   const go = vi.fn<(url: string, delayMs: number) => void>();
-  const route = applyRoute(doc, ua, defaultConfig, go);
+  const route = applyRoute(doc, { userAgent: ua }, defaultConfig, go);
   return { doc, go, route };
 }
 
