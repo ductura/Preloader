@@ -1,30 +1,33 @@
 # Ductura / preloader
 
-Sedmi razvojni dio. Na ulazu (ductura.org) prepoznaje uređaj i preglednik, otvara odgovarajuće web-sučelje i nudi desktop paket.
+Ulaz u Ducturu (ductura.org). Statična stranica koja u pregledniku prepoznaje uređaj i preglednik, otvara odgovarajuće web-sučelje i nudi desktop paket. Ne zove nijedan poslužitelj.
 
 | Uređaj / preglednik | Sučelje | Desktop paket |
 |---|---|---|
-| Chrome na Windowsu ili macOS-u | `web-chrome` | Windows ili macOS |
-| Mobitel ili tablet (bilo koji preglednik) | `web-mobile` | – |
-| Firefox, Safari, Edge, Opera i ostali na računalu | `web-other` | Windows ili macOS |
+| Chrome na Windowsu ili macOS-u | `chrome` | Windows ili macOS |
+| Mobitel ili tablet (bilo koji preglednik) | `mobile` | – |
+| Firefox, Safari, Edge, Opera i ostali na računalu | `other` | Windows ili macOS |
 
-## Funkcionalna provjera
+Bez JavaScripta stranica nudi sve izbore. Putanje su u `src/config.ts`. Vizualni smjer je „papir i grafit” (Ductus `docs/design/DESIGN-SYSTEM.md`).
 
-Chrome na Macu otvara Chrome sučelje i nudi macOS paket. Chrome na Androidu otvara mobilno sučelje.
-Pokriva je `test/functional.test.js`.
-
-## Pokretanje
+## Naredbe
 
 ```bash
-npm start          # http://localhost:3000
-npm test
-npm run test:helpers
-npm run test:functional
+pnpm install
+pnpm typecheck   # strogi TypeScript
+pnpm test        # vitest
+pnpm build       # dist/index.html (stil i skripta ugrađeni)
+pnpm budget      # gzip proračun iz budget.json; prekoračenje vraća izlazni kod 1
 ```
 
-Putanje sučelja i paketa podešavaju se varijablama `FRONTEND_CHROME`, `FRONTEND_MOBILE`, `FRONTEND_OTHER`, `DOWNLOAD_WINDOWS`, `DOWNLOAD_MACOS` (vidi `src/config.js`).
+CI poziva `ci-node.yml` iz `ductura/.github` sa skriptama `typecheck test build budget`.
+
+## Proračun veličine
+
+`budget.json` zadaje gzip granicu za svaku datoteku u `dist` i za zbroj. Pada ako je datoteka iznad granice, zbroj iznad ukupne granice, datoteka iz proračuna nedostaje ili datoteka u `dist` nema granicu.
 
 ## Otvoreno
 
 - iPadOS 13+ u zadanom načinu predstavlja se kao Mac. Za njega treba dodati provjeru na klijentu (`navigator.maxTouchPoints`).
 - Za Windows na ARM-u i Apple Silicon/Intel treba odlučiti nude li se zasebni paketi.
+- Usklađivanje s jednim web repozitorijem (putanja `/app/`) ide zasebnim korakom.

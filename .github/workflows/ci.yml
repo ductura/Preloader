@@ -2,14 +2,10 @@ name: CI
 on:
   push: { branches: [main] }
   pull_request:
+permissions:
+  contents: read
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - name: Testovi pomoćnih funkcija
-        run: npm run test:helpers
-      - name: Funkcionalni testovi
-        run: npm run test:functional
+  node:
+    uses: ductura/.github/.github/workflows/ci-node.yml@98f62800577910b24451809d40c247ee1f04c7c1 # main, DAN-735
+    with:
+      scripts: typecheck test build budget
