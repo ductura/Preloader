@@ -1,0 +1,14 @@
+{
+  "name": "@ductura/preloader",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ductura ulaz: prepoznaje uređaj i preglednik, otvara odgovarajući frontend i nudi desktop paket",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test \"test/*.test.js\"",
+    "test:helpers": "node --test test/helpers.test.js",
+    "test:functional": "node --test test/functional.test.js"
+  }
+}
