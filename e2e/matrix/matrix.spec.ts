@@ -18,6 +18,8 @@ type Pkg = keyof typeof defaultConfig.downloads;
 const frontendFor = (d: MatrixDevice, view: 'desktop' | 'mobile'): Frontend =>
   view === 'mobile' ? 'mobile' : d.desktopFrontend;
 
+const CLOCK_START = Date.UTC(2026, 0, 1);
+
 let d: MatrixDevice;
 
 test.beforeEach(async ({ page, context }, info) => {
@@ -31,8 +33,9 @@ test.beforeEach(async ({ page, context }, info) => {
     const path = new URL(route.request().url()).pathname;
     return route.fulfill({ contentType: 'text/html; charset=utf-8', body: path === '/' ? page_html : STUB });
   });
-  // Lažni sat: preusmjeravanje nakon REDIRECT_DELAY_MS ne smije preteći provjere.
-  await page.clock.install();
+  // Lažni sat, zaustavljen prije učitavanja: preusmjeravanje nakon REDIRECT_DELAY_MS ide samo uz `runFor`.
+  await page.clock.install({ time: CLOCK_START });
+  await page.clock.pauseAt(CLOCK_START + 1000);
   await page.goto('/');
 });
 
