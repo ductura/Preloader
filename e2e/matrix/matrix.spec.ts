@@ -9,7 +9,8 @@ import { matrixDevice, type MatrixDevice } from './devices.ts';
 
 const page_html = readFileSync(new URL('../../dist/index.html', import.meta.url), 'utf8');
 /** Odredište weba ili paketa: samo oznaka da je navigacija stigla na pravu putanju. */
-const STUB = '<!doctype html><html lang="hr"><title>odredište</title><p>odredište</p></html>';
+// `<meta charset>`: WebKit u `route.fulfill` ne čita charset iz Content-Type; stranica preloadera ga već ima.
+const STUB = '<!doctype html><html lang="hr"><meta charset="utf-8"><title>odredište</title><p>odredište</p></html>';
 
 type Frontend = keyof typeof defaultConfig.frontends;
 type Pkg = keyof typeof defaultConfig.downloads;
