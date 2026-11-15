@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "build": "node scripts/build.ts",
-    "budget": "node scripts/budget.ts dist budget.json"
+    "budget": "node scripts/budget.ts dist budget.json",
+    "e2e": "node scripts/build.ts && playwright test -c e2e/matrix/playwright.config.ts"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -20,6 +21,7 @@
     ]
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@types/node": "^24.19.2",
     "esbuild": "^0.28.2",
     "happy-dom": "^21.0.4",

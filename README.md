@@ -18,9 +18,10 @@ pnpm typecheck   # strogi TypeScript
 pnpm test        # vitest
 pnpm build       # dist/index.html (stil i skripta ugrađeni)
 pnpm budget      # gzip proračun iz budget.json; prekoračenje vraća izlazni kod 1
+pnpm e2e         # matrica preglednika (P-0.11): izgradnja + Playwright u Chromiumu, Firefoxu i WebKitu
 ```
 
-CI poziva `ci-node.yml` iz `ductura/.github` sa skriptama `typecheck test build budget`.
+CI poziva `ci-node.yml` iz `ductura/.github` sa skriptama `typecheck test build budget`. Posao `e2e-matrix` instalira tri preglednika i pokreće `pnpm e2e`; Opera je ručna provjera.
 
 ## Proračun veličine
 
