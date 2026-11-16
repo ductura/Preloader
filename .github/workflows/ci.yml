@@ -26,3 +26,34 @@ jobs:
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: e2e-matrix-report, path: playwright-report/, retention-days: 7 }
+
+  # The one required status (DAN-885): green only when every job above
+  # succeeded; failure, cancelled, skipped or a missing result fails it.
+  # A plain job, so the check is named exactly ci-ok.
+  ci-ok:
+    name: ci-ok
+    if: ${{ always() }}
+    needs: [node, e2e-matrix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Every needed job succeeded
+        shell: bash
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          # ci-ok:begin
+          set -euo pipefail
+          if ! jq -e 'type == "object" and length > 0' >/dev/null 2>&1 <<< "$NEEDS"; then
+            echo "::error::needs must be a non-empty JSON object"
+            exit 1
+          fi
+          problems="$(jq -r 'to_entries[] | ((.value | objects | .result) // "missing") as $r
+            | select($r != "success") | "job \(.key) result: \($r)"' <<< "$NEEDS")"
+          if [ -n "$problems" ]; then
+            while IFS= read -r line; do echo "::error::$line"; done <<< "$problems"
+            exit 1
+          fi
+          echo "ci-ok: $(jq length <<< "$NEEDS") job(s) passed"
+          # ci-ok:end
