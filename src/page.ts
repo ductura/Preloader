@@ -1,6 +1,6 @@
 // Statična stranica preloadera; skripta i stil ugrađuju se pri izgradnji.
 import { defaultConfig, type Config } from './config.ts';
-import { clientText, PACKAGE_LABELS, text } from './text.ts';
+import { clientText, errorText, PACKAGE_LABELS, text } from './text.ts';
 
 const ENTITIES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, (c) => ENTITIES[c] ?? c);
@@ -43,6 +43,31 @@ ${choice(config.downloads.windows, clientText.download('windows'))}
 ${choice(config.downloads.macos, clientText.download('macos'))}
 </ul>
 </noscript>
+</main>
+<script>${assets.script}</script>
+</body>
+</html>
+`;
+}
+
+/** Stranica greške (DAN-935-2): bez skripte opći tekst; skripta prema `?status=` upisuje tekst stanja. */
+export function renderErrorPage(assets: { script: string; css: string }): string {
+  const e = escapeHtml;
+  const { title, body } = errorText.general;
+  return `<!doctype html>
+<html lang="hr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${e(title)} · Ductura</title>
+<style>${assets.css}</style>
+</head>
+<body>
+<main class="sheet">
+<p class="brand">Ductur<span>a</span></p>
+<h1 id="error-title">${e(title)}</h1>
+<p id="error-body" class="lead">${e(body)}</p>
+<p><a class="button" href="/">${e(text.home)}</a></p>
 </main>
 <script>${assets.script}</script>
 </body>
