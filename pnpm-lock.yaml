@@ -11,6 +11,9 @@ importers:
       '@axe-core/playwright':
         specifier: 4.14.0
         version: 4.14.0(playwright-core@1.63.0)
+      '@ductura/contracts':
+        specifier: https://github.com/ductura/server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz
+        version: https://github.com/ductura/server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz
       '@playwright/test':
         specifier: 1.63.0
         version: 1.63.0
@@ -46,6 +49,10 @@ packages:
     engines: {node: '>=22.12.0'}
     peerDependencies:
       playwright-core: '>= 1.0.0'
+
+  '@ductura/contracts@https://github.com/ductura/server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz':
+    resolution: {integrity: sha512-s7Jp9VSwai9K/7azDNruikV0rIjLzb1c2CuJlb8wQtKPVjA5iZFqrd6bGUkHAEFDXFxge2uM+Tm2VPUR4Lsz0Q==, tarball: https://github.com/ductura/server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz}
+    version: 2.6.0
 
   '@emnapi/core@2.0.0-beta.2':
     resolution: {integrity: sha512-MzCVoWtcg4Pm2B3je5mMvYMvj3MmBKw+fU7vbsJc9/iT8ip6/eYIHo/Dsm/mr+wsHB6SEyJDuxB09Yy6r/8+4A==}
@@ -714,6 +721,8 @@ snapshots:
     dependencies:
       axe-core: 4.14.1
       playwright-core: 1.63.0
+
+  '@ductura/contracts@https://github.com/ductura/server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz': {}
 
   '@emnapi/core@2.0.0-beta.2':
     dependencies:

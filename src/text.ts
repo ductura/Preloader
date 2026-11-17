@@ -21,3 +21,20 @@ export const text = {
   choicePackage: 'Desktop paket',
   frontends: { chrome: 'Sučelje za Chrome', mobile: 'Sučelje za mobitel i tablet', other: 'Sučelje za ostale preglednike' },
 } as const;
+
+/** Stanja greške (P-0.5); ključ bira `errorViewFor` iz `src/errors/`. */
+export const errorText = {
+  badRequest: { title: 'Zahtjev nije prihvaćen', body: 'Poslani podaci nisu ispravnog oblika. Učitajte stranicu ponovno.' },
+  unauthenticated: { title: 'Potrebna je prijava', body: 'Za nastavak se prijavite.' },
+  forbidden: { title: 'Pristup nije dopušten', body: 'Ova stranica nije dostupna Vašem računu.' },
+  notFound: { title: 'Stranica ne postoji', body: 'Provjerite adresu ili se vratite na početnu stranicu.' },
+  timeout: { title: 'Odgovor nije stigao na vrijeme', body: 'Pokušajte ponovno.' },
+  tooManyRequests: { title: 'Previše zahtjeva', body: 'Pričekajte trenutak i pokušajte ponovno.' },
+  internal: { title: 'Greška na poslužitelju', body: 'Zahtjev nije izvršen. Pokušajte ponovno za nekoliko minuta.' },
+  badGateway: { title: 'Poslužitelj nije odgovorio', body: 'Pokušajte ponovno za nekoliko minuta.' },
+  unavailable: { title: 'Ductura trenutačno nije dostupna', body: 'Pokušajte ponovno za nekoliko minuta.' },
+  gatewayTimeout: { title: 'Poslužitelj nije odgovorio na vrijeme', body: 'Pokušajte ponovno za nekoliko minuta.' },
+  sessionExpired: { title: 'Prijava je istekla', body: 'Za nastavak se ponovno prijavite.' },
+  offline: { title: 'Nema veze s mrežom', body: 'Provjerite vezu i pokušajte ponovno.' },
+  general: { title: 'Nešto nije u redu', body: 'Pokušajte ponovno ili se vratite na početnu stranicu.' },
+} as const;
