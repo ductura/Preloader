@@ -56,10 +56,13 @@ const ATTACKS = [
   'C:\\x',
   '/..\\x',
   '/api/v1/auth/login',
+  '/\u2029',
+  // Pet razina kodiranja: iznad MAX_DECODE_ROUNDS, pa se odbija (fails closed).
+  '/%2525252561pi',
 ];
 
 describe('povratna adresa izvan aplikacije daje zadani povratak (prihvat DAN-994)', () => {
-  it.each(ACCEPTANCE)('safeReturnTo(%j) i signInTarget(%j) daju /', (value) => {
+  it.each(ACCEPTANCE)('%j daje /', (value) => {
     expect(safeReturnTo(value)).toBe(DEFAULT_RETURN_TO);
     expect(signInTarget(value)).toBe('/');
     expect(signInHref(signInTarget(value))).toBe('/api/v1/auth/login?returnTo=%2F');
@@ -69,6 +72,7 @@ describe('povratna adresa izvan aplikacije daje zadani povratak (prihvat DAN-994
 describe('safeReturnTo', () => {
   it.each(ATTACKS)('sends %j to the default page', (value) => {
     expect(safeReturnTo(value)).toBe(DEFAULT_RETURN_TO);
+    expect(signInTarget(value)).toBe(DEFAULT_RETURN_TO);
   });
 
   it.each(ATTACKS)('keeps %j on the same origin', (value) => {
@@ -103,13 +107,15 @@ describe('safeReturnTo', () => {
     // DAN-994: kodirana kosa crta i NBSP ostaju putanja istog porijekla.
     ['/%5c%5czlo.test', '/%5c%5czlo.test'],
     ['/\u00a0x', '/%C2%A0x'],
+    // Granica duljine: 512 znakova se zadržava (513 je u ATTACKS).
+    [`/${'a'.repeat(511)}`, `/${'a'.repeat(511)}`],
   ])('keeps the path %j of this application', (value, expected) => {
     expect(safeReturnTo(value)).toBe(expected);
   });
 });
 
 describe('signInTarget', () => {
-  // DAN-325: "/" sends the signed-in person on by role, never to /rad for all.
+  // DAN-325 u Ductusu; u preloaderu je "/" sama ulazna stranica.
   it('defaults to the home page', () => {
     for (const raw of [undefined, null, '', '/', ['/rad', '/upis']]) {
       expect(signInTarget(raw)).toBe('/');

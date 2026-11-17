@@ -3,16 +3,16 @@
 import { DEFAULT_RETURN_TO, safeReturnTo } from './return-to.ts';
 
 /**
- * Where /prijava sends a person after sign-in when nothing else is asked for:
- * the home page, which sends a signed-in person on to their own page by the
- * role the database knows (DAN-325).
+ * Where a person goes after sign-in when nothing else is asked for: "/".
+ * In Ductus that page forwards by role (DAN-325); in the preloader "/" is the
+ * entry page itself, which opens the right interface.
  */
 export const SIGN_IN_DEFAULT_TARGET = DEFAULT_RETURN_TO;
 
 /**
- * The page to return to after sign-in, from the untrusted `returnTo` query of
- * /prijava. The login route checks it again (safeReturnTo); this only keeps
- * the link on the page from carrying what that route would discard.
+ * The page to return to after sign-in, from an untrusted `returnTo` value.
+ * The login route checks it again (safeReturnTo) and decides: a value that
+ * grows past 512 characters once encoded is dropped there, which fails closed.
  */
 export function signInTarget(raw: unknown): string {
   return safeReturnTo(raw);
