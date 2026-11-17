@@ -1,14 +1,19 @@
-// Statična izgradnja: dist/index.html s ugrađenim stilom i skriptom (bez poslužitelja).
+// Statična izgradnja: dist/index.html s ugrađenim stilom i skriptom (bez poslužitelja);
+// tekst za /info/ provjerava se prije pisanja.
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build as esbuild } from 'esbuild';
+import { assertPublicText, textsOf } from '../src/info/index.ts';
 import { renderPage } from '../src/page.ts';
+import { infoText } from '../src/text.ts';
 import { isMain } from './is-main.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
-export async function build(outDir: string): Promise<void> {
+export async function build(outDir: string, info: unknown = infoText): Promise<void> {
+  // Tekst za /info/ bez ustanove i zabranjenog izraza, inače izgradnja pada (P-0.9, D-302).
+  assertPublicText(textsOf(info));
   const bundle = await esbuild({
     entryPoints: [join(root, 'src/main.ts')],
     bundle: true,
