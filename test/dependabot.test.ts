@@ -1,6 +1,7 @@
 // DAN-922: .github/dependabot.yml must match the pinned SchemaStore schema and
 // the repository rule (weekly npm and github-actions updates, each grouped).
 // Same pattern as ductura/.github scripts/dependabot-check.mjs.
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
 import { checkDependabot, loadSchema } from '../scripts/dependabot-check.ts';
@@ -49,4 +50,13 @@ test('accepts a minimal valid configuration', () => {
 
 test("the repository's .github/dependabot.yml passes", () => {
   expect(checkDependabot(readFileSync('.github/dependabot.yml', 'utf8'), schema)).toEqual([]);
+});
+
+// A CRLF checkout (core.autocrlf=true on Windows) would change the pinned bytes:
+// the vendored schema must be checked out with LF everywhere.
+test('the vendored schema is checked out with LF on every platform', () => {
+  const attrs = execFileSync('git', ['check-attr', 'text', 'eol', '--', 'scripts/dependabot/dependabot-2.0.json'], { encoding: 'utf8' });
+  expect(attrs).toContain('text: set');
+  expect(attrs).toContain('eol: lf');
+  expect(schemaBytes.includes(0x0d)).toBe(false);
 });
