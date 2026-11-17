@@ -20,9 +20,11 @@ test('izgradnja daje samo statični index.html sa skriptom i stilom', () => {
   expect(html).toMatch(/<script>[^<]+<\/script>/);
 });
 
-test('izgrađena stranica ne zove nijedan server', () => {
+test('izgrađena stranica zove server samo jednom, za kontekst klijenta (P-0.8)', () => {
   const html = readFileSync(join(out, 'index.html'), 'utf8');
-  for (const call of ['fetch(', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'sendBeacon', 'import(']) {
+  expect(html.split('fetch(').length - 1).toBe(1);
+  expect(html.split('"/api/v1/client-context"').length - 1).toBe(1);
+  for (const call of ['XMLHttpRequest', 'WebSocket', 'EventSource', 'sendBeacon', 'import(']) {
     expect(html).not.toContain(call);
   }
   expect(html).not.toMatch(/https?:\/\//);

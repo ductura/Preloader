@@ -15,3 +15,6 @@ export const defaultConfig: Config = {
     macos: '/download/Ductura-macOS.dmg',
   },
 };
+
+/** Verzija izgradnje (`package.json`); šalje se u kontekstu klijenta (P-0.8). */
+export const APP_VERSION = '0.1.0';
