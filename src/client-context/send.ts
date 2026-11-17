@@ -1,6 +1,6 @@
 // P-0.8: jedan POST s kontekstom klijenta. Ne čeka odgovor i ne baca; pad rute ne mijenja nastavak.
 import type { Operations } from '@ductura/contracts';
-import { detectBrowser } from '../detect.ts';
+import { detectBrowser, type Os } from '../detect.ts';
 import { chooseView, resolvePlatform, type Signals } from '../detect/index.ts';
 
 /** Tijelo rute iz `@ductura/contracts`; samo tip, pa u stranicu ne ulazi kod paketa. */
@@ -13,8 +13,9 @@ export type Fetch = (path: string, init: RequestInit) => Promise<unknown>;
 /** Zatvorene vrijednosti iz signala P-0.2 i širine prozora; ništa drugo ne ulazi. */
 export function clientContextFrom(s: Signals, width: number, appVersion: string): ClientContext {
   const found: unknown = resolvePlatform(s);
-  // Svaki niz iz resolvePlatform je na listi; naslijeđeni ključ hintsa (`__proto__`, `toString`) nije niz.
-  const os = typeof found === 'string' ? (found as ClientContext['os']) : 'other';
+  // Naslijeđeni ključ hintsa (`__proto__`, `toString`) nije niz. Dodjela `Os` tipu iz ugovora pada u
+  // `pnpm typecheck` ako ugovor izbaci vrijednost koju resolvePlatform daje.
+  const os: ClientContext['os'] = typeof found === 'string' ? (found as Os) : 'other';
   const ua = s.userAgent;
   const b = detectBrowser(ua);
   // Na iOS-u je svaki preglednik WebKit; Edge i Opera su Chromium.

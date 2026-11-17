@@ -17,9 +17,10 @@ type Op = {
   operationId?: string; 'x-max-body-bytes'?: number;
   requestBody?: { content: { 'application/json': { schema: { required: string[]; properties: Record<string, { pattern?: string; anyOf?: { const: string }[] }> } } } };
 };
-/** Ruta `client.context.post` iz OpenAPI dokumenta paketa: put, granica tijela i shema. */
-const [PATH, OP] = Object.entries(openapi.paths as unknown as Record<string, Record<string, Op>>)
-  .flatMap(([path, ops]) => Object.values(ops).filter((op) => op.operationId === ID).map((op) => [path, op] as const))[0]!;
+/** Ruta `client.context.post` iz OpenAPI dokumenta paketa: put, metoda, granica tijela i shema. */
+const [PATH, METHOD, OP] = Object.entries(openapi.paths as unknown as Record<string, Record<string, Op>>)
+  .flatMap(([path, ops]) => Object.entries(ops).filter(([, op]) => op.operationId === ID)
+    .map(([method, op]) => [path, method.toUpperCase(), op] as const))[0]!;
 const SCHEMA = OP.requestBody!.content['application/json'].schema;
 const MAX_BYTES = OP['x-max-body-bytes']!;
 const FIELDS = [...SCHEMA.required].sort();
@@ -72,7 +73,7 @@ describe('ugovor iz @ductura/contracts (negativni slučajevi prvi)', () => {
   test('prihvaća ispravna tijela; put i verzija izgradnje slažu se s ugovorom', () => {
     expect(accepts(jcs(GOOD))).toBe(true);
     expect(accepts(jcs({ app: 'desktop', appVersion: '2.0.1', browser: 'chromium', device: 'desktop', os: 'windows', screen: 'medium' }))).toBe(true);
-    expect(CLIENT_CONTEXT_PATH).toBe(PATH);
+    expect([METHOD, CLIENT_CONTEXT_PATH]).toEqual(['POST', PATH]);
     expect(APP_VERSION).toBe(JSON.parse(readFileSync('package.json', 'utf8')).version);
     expect(APP_VERSION_RE.test(APP_VERSION)).toBe(true);
   });
@@ -105,17 +106,26 @@ describe('slanje lažnom serveru', () => {
   }
 
   const widths = [0, 599.5, 600, 839, 840, Number.NaN, -1, Infinity];
-  test.each(Object.entries(UA))('%s: jedan zahtjev, tijelo prolazi shemu', async (_name, userAgent) => {
+  const seenOs = new Set<string>();
+  // Bez dodira i s dodirom: Mac bez dodira šalje `macos`, a isti UA s dodirom je iPad (`ios`).
+  test.each([...Object.entries(UA), ['prazan UA', '']])('%s: jedan zahtjev po širini, tijelo prolazi shemu', async (_name, userAgent) => {
     const { got, fetcher, settled } = await fake((_q, res) => res.writeHead(204).end());
-    for (const width of widths) {
-      sendClientContext(fetcher, { userAgent, maxTouchPoints: 5 }, width, APP_VERSION);
-      await settled();
+    for (const maxTouchPoints of [0, 5]) {
+      for (const width of widths) {
+        sendClientContext(fetcher, { userAgent, maxTouchPoints }, width, APP_VERSION);
+        await settled();
+      }
     }
-    expect(got).toHaveLength(widths.length);
+    expect(got).toHaveLength(2 * widths.length);
     for (const r of got) {
-      expect([r.method, r.url, r.type]).toEqual(['POST', PATH, 'application/json']);
+      expect([r.method, r.url, r.type]).toEqual([METHOD, PATH, 'application/json']);
       expect(accepts(r.body), r.body).toBe(true);
+      seenOs.add(JSON.parse(r.body).os);
     }
+  });
+
+  test('lažni server je primio svaki sustav iz ugovora', () => {
+    expect([...seenOs].sort()).toEqual(SCHEMA.properties['os']!.anyOf!.map((a) => a.const).sort());
   });
 
   test('preslikavanje na zatvorene vrijednosti', () => {
