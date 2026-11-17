@@ -28,6 +28,8 @@ test('izgrađena stranica zove server samo jednom, za kontekst klijenta (P-0.8)'
     expect(html).not.toContain(call);
   }
   expect(html).not.toMatch(/https?:\/\//);
+  // Ugovor ulazi samo kao tip (DAN-926-2): ni validator ni klijent iz @ductura/contracts nisu u stranici.
+  for (const trace of ['invalid_input', 'lone surrogate', 'client.context.post']) expect(html).not.toContain(trace);
 });
 
 test('izgrađena stranica stane u proračun iz repoa', () => {
