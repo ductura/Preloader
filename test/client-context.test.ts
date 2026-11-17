@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
 import {
   CLIENT_APP_VERSION_PATTERN, CLIENT_CONTEXT_MAX_BYTES, CLIENT_CONTEXT_PATH, CLIENT_CONTEXT_VALUES,
-  clientContextBody, clientContextFrom, sendClientContext, type Fetch,
+  APP_VERSION_RE, clientContextBody, clientContextFrom, sendClientContext, type Fetch,
 } from '../src/client-context/index.ts';
 import { APP_VERSION } from '../src/config.ts';
 import { UA } from './user-agents.ts';
@@ -48,6 +48,15 @@ describe('vendorirana kopija prema vektorima izvora (7c0b8ec9)', () => {
       '1.4.0 ', '1.4.0\u007f', '1.4.0.1', '1234567.0.0', '１.4.0', '1.4.0 '].map((v) => [`verzija ${JSON.stringify(v)}`, jcs({ ...GOOD, appVersion: v })]),
   ])('odbija %s', (_name, body) => expect(accepts(body)).toBe(false));
 
+  test('kraći APP_VERSION_RE slaže se s uzorkom izvora', () => {
+    const source = new RegExp(CLIENT_APP_VERSION_PATTERN, 'u');
+    for (const v of ['0.0.0', '1.4.0', '2.0.1', '999999.999999.999999', '1.4', 'v1.4.0', '01.4.0', '1.04.0', '1.4.0-beta',
+      '1.4.0+abcdef0', '1.4.0\n', '1.4.0\r\n', '1.4.0\t', '1.4.0\u00a0', '1.4.0\u007f', '1.4.0.1', '1234567.0.0',
+      '\uff11.4.0', '1.4.0 ', '1.4.0\n1.4.0', '\u0661.4.0', '']) {
+      expect([v, APP_VERSION_RE.test(v)]).toEqual([v, source.test(v)]);
+    }
+  });
+
   test('prihvaća recorded i recorded-desktop-signed-in; verzija izgradnje prolazi uzorak', () => {
     expect(accepts(jcs(GOOD))).toBe(true);
     expect(accepts(jcs({ app: 'desktop', appVersion: '2.0.1', browser: 'chromium', device: 'desktop', os: 'windows', screen: 'medium' }))).toBe(true);
@@ -85,7 +94,7 @@ describe('slanje lažnom serveru', () => {
   test.each(Object.entries(UA))('%s: jedan zahtjev, tijelo prolazi shemu', async (_name, userAgent) => {
     const { got, fetcher, settled } = await fake((_q, res) => res.writeHead(204).end());
     for (const width of widths) {
-      sendClientContext(fetcher, clientContextFrom({ userAgent, maxTouchPoints: 5 }, width, APP_VERSION));
+      sendClientContext(fetcher, { userAgent, maxTouchPoints: 5 }, width, APP_VERSION);
       await settled();
     }
     expect(got).toHaveLength(widths.length);
@@ -108,14 +117,14 @@ describe('slanje lažnom serveru', () => {
 
   test.each([500, 400, 403, 429])('odgovor %i ne blokira nastavak', async (status) => {
     const { got, fetcher, settled } = await fake((_q, res) => res.writeHead(status).end());
-    expect(sendClientContext(fetcher, clientContextFrom({ userAgent: UA.chromeMac }, 1200, '1.0.0'))).toBeUndefined();
+    expect(sendClientContext(fetcher, { userAgent: UA.chromeMac }, 1200, '1.0.0')).toBeUndefined();
     await settled();
     expect(got).toHaveLength(1);
   });
 
   test('prekinuta veza ne blokira nastavak', async () => {
     const { got, fetcher, settled } = await fake((req) => req.socket.destroy());
-    expect(sendClientContext(fetcher, clientContextFrom({ userAgent: UA.chromeMac }, 1200, '1.0.0'))).toBeUndefined();
+    expect(sendClientContext(fetcher, { userAgent: UA.chromeMac }, 1200, '1.0.0')).toBeUndefined();
     await settled();
     expect(got).toHaveLength(1);
   });
@@ -124,29 +133,31 @@ describe('slanje lažnom serveru', () => {
     let arrived!: () => void;
     const seen = new Promise<void>((done) => { arrived = done; });
     const { fetcher } = await fake(() => arrived());
-    expect(sendClientContext(fetcher, clientContextFrom({ userAgent: UA.chromeMac }, 1200, '1.0.0'))).toBeUndefined();
+    expect(sendClientContext(fetcher, { userAgent: UA.chromeMac }, 1200, '1.0.0')).toBeUndefined();
     await seen;
   });
 
   test('fetch koji baca, odbija ili nikad ne završi ne blokira nastavak', async () => {
-    const ctx = clientContextFrom({ userAgent: UA.chromeMac }, 1200, '1.0.0');
-    expect(sendClientContext(() => { throw new TypeError('nema mreže'); }, ctx)).toBeUndefined();
-    expect(sendClientContext(() => Promise.reject(new Error('pad')), ctx)).toBeUndefined();
-    expect(sendClientContext(() => new Promise<never>(() => {}), ctx)).toBeUndefined();
+    const at = [{ userAgent: UA.chromeMac }, 1200, '1.0.0'] as const;
+    expect(sendClientContext(() => { throw new TypeError('nema mreže'); }, ...at)).toBeUndefined();
+    expect(sendClientContext(() => Promise.reject(new Error('pad')), ...at)).toBeUndefined();
+    expect(sendClientContext(() => new Promise<never>(() => {}), ...at)).toBeUndefined();
     await new Promise((done) => setImmediate(done));
   });
 
   test('tijelo: samo šest ključeva po redu; najdulje ispravno tijelo stane u maxBodyBytes', () => {
-    const extra = { screen: 'compact', os: 'ios', toString: 'x', app: 'web', device: 'phone', browser: 'safari', appVersion: '1.0.0', x: 1 };
-    expect(clientContextBody(extra as never)).toBe(jcs({ app: 'web', appVersion: '1.0.0', browser: 'safari', device: 'phone', os: 'ios', screen: 'compact' }));
-    const longest = clientContextBody({ app: 'desktop', appVersion: '999999.999999.999999', browser: 'chromium', device: 'desktop', os: 'android', screen: 'expanded' });
+    const c = clientContextFrom({ userAgent: UA.chromeAndroidTablet }, 900, '999999.999999.999999');
+    expect(Object.keys(c)).toEqual(FIELDS);
+    expect(clientContextBody(c)).toBe(jcs(c));
+    // Najdulje vrijednosti s lista: desktop/chromium/desktop/android/expanded.
+    const longest = jcs({ ...c, app: 'desktop', browser: 'chromium', device: 'desktop' });
     expect([longest.length, accepts(longest)]).toEqual([128, true]);
   });
 
   test('loša verzija: ništa se ne šalje', () => {
     let calls = 0;
     for (const v of ['1.4', '1.4.0\r\n', '1.4.0 ', '']) {
-      sendClientContext(() => { calls += 1; return Promise.resolve(); }, clientContextFrom({ userAgent: UA.chromeMac }, 1200, v));
+      sendClientContext(() => { calls += 1; return Promise.resolve(); }, { userAgent: UA.chromeMac }, 1200, v);
     }
     expect(calls).toBe(0);
   });
