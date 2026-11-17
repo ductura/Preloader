@@ -55,8 +55,8 @@ const patterns = [
     term: `${x} + ${y}`,
     // Do dvije kratke riječi između („AI ga je napisao”) ili ništa unutar iste riječi („aipostotak”).
     spaced: new RegExp(`${pairPattern(x, y, ' ?(\\p{L}{1,4} ){0,2}')}|${pairPattern(y, x, ' ?(\\p{L}{1,4} ){0,2}')}`, 'u'),
-    // Spojena slova samo za korijene od barem tri slova: `ai` bi hvatao preko granica riječi („pisanja iz”).
-    compact: x === 'ai' || y === 'ai' ? null : new RegExp(`${pairPattern(x, y, '')}|${pairPattern(y, x, '')}`, 'u'),
+    // Spojena slova pokriva prazno „između”; nad tekstom samo od slova par bi hvatao preko granica riječi.
+    compact: null,
   })),
 ];
 
