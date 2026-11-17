@@ -1,0 +1,13 @@
+/* Stranica /info/ (DAN-969-2): zasebna datoteka da proračun glavne stranice ne raste. Boje i oblici iz style.css. */
+.sheet { max-width: 720px; }
+.brand { font-size: 32px; }
+h1 { margin: 0 0 8px; font: 400 28px/1.15 var(--ff-display); }
+h2 { margin: 28px 0 8px; font-size: 15px; }
+ul { margin: 0; padding-left: 20px; }
+li { margin-bottom: 6px; }
+.mark { color: var(--ink-2); font-style: italic; }
+.wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 8px 10px; border-bottom: 1px solid #24242226; text-align: left; }
+td { font-weight: 600; }
+.meta { color: var(--ink-2); }
