@@ -1,66 +1,80 @@
-// P-0.8 nad lažnim serverom: tijelo prolazi shemu `client.context.post`, a pad rute ne blokira nastavak.
+// P-0.8 nad lažnim serverom: tijelo prolazi shemu `client.context.post` iz `@ductura/contracts`,
+// a pad rute ne blokira nastavak.
+import { canonicalJson, validateInput, VALIDATORS, type OperationId } from '@ductura/contracts';
+import openapi from '@ductura/contracts/openapi/v1.json' with { type: 'json' };
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, test } from 'vitest';
 import {
-  CLIENT_APP_VERSION_PATTERN, CLIENT_CONTEXT_MAX_BYTES, CLIENT_CONTEXT_PATH, CLIENT_CONTEXT_VALUES,
-  APP_VERSION_RE, clientContextBody, clientContextFrom, sendClientContext, type Fetch,
+  APP_VERSION_RE, CLIENT_CONTEXT_PATH, clientContextBody, clientContextFrom, sendClientContext, type Fetch,
 } from '../src/client-context/index.ts';
 import { APP_VERSION } from '../src/config.ts';
 import { UA } from './user-agents.ts';
 
-const LISTS = CLIENT_CONTEXT_VALUES as unknown as Record<string, readonly string[]>;
-const FIELDS = [...Object.keys(LISTS), 'appVersion'].sort();
+const ID: OperationId = 'client.context.post';
+type Op = {
+  operationId?: string; 'x-max-body-bytes'?: number;
+  requestBody?: { content: { 'application/json': { schema: { required: string[]; properties: Record<string, { pattern?: string; anyOf?: { const: string }[] }> } } } };
+};
+/** Ruta `client.context.post` iz OpenAPI dokumenta paketa: put, granica tijela i shema. */
+const [PATH, OP] = Object.entries(openapi.paths as unknown as Record<string, Record<string, Op>>)
+  .flatMap(([path, ops]) => Object.values(ops).filter((op) => op.operationId === ID).map((op) => [path, op] as const))[0]!;
+const SCHEMA = OP.requestBody!.content['application/json'].schema;
+const MAX_BYTES = OP['x-max-body-bytes']!;
+const FIELDS = [...SCHEMA.required].sort();
 
-/** Provjera tijela kao `parseClientContext` (ductura/server `server/http/client-context.ts`, 7c0b8ec9). */
+/** Tijelo kakvo server prima: unutar granice, JSON, prolazi validator paketa i jednako je svom JCS obliku. */
 function accepts(text: string): boolean {
-  if (Buffer.byteLength(text) > CLIENT_CONTEXT_MAX_BYTES) return false;
+  if (Buffer.byteLength(text) > MAX_BYTES) return false;
   let value: unknown;
   try { value = JSON.parse(text); } catch { return false; }
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const r = value as Record<string, unknown>;
-  if (Object.keys(r).sort().join() !== FIELDS.join()) return false;
-  if (typeof r['appVersion'] !== 'string' || !new RegExp(CLIENT_APP_VERSION_PATTERN, 'u').test(r['appVersion'])) return false;
-  if (Object.entries(LISTS).some(([k, list]) => typeof r[k] !== 'string' || !list.includes(r[k] as string))) return false;
-  return `{${FIELDS.map((k) => `"${k}":${JSON.stringify(r[k])}`).join(',')}}` === text;
+  return validateInput(ID, 'body', value) && canonicalJson(value) === text;
 }
 
 const GOOD = { app: 'web', appVersion: '1.4.0', browser: 'firefox', device: 'desktop', os: 'linux', screen: 'expanded' };
-const jcs = (o: Record<string, unknown>) => `{${Object.keys(o).sort().map((k) => `"${k}":${JSON.stringify(o[k])}`).join(',')}}`;
+const jcs = (o: Record<string, unknown>) => canonicalJson(o);
+const { os: _os, ...noOs } = GOOD;
+const BAD_VERSIONS = ['1.4', 'v1.4.0', '01.4.0', '1.04.0', '+1.4.0', '-1.4.0', '1.4.0-beta', '1.4.0+abcdef0', '1.4.0\n',
+  '1.4.0\r\n', '\r\n1.4.0', '1.4.0\t', '1.4.0\u00a0', '\u00a01.4.0', '1.4.0\u007f', '1.4.0 ', '1.4.0.1', '1234567.0.0',
+  '\uff11.4.0', '\u0661.4.0', '1.4.0\n1.4.0', ''];
 
-describe('vendorirana kopija prema vektorima izvora (7c0b8ec9)', () => {
-  test('liste i uzorak jednaki su snimci izvora', () => {
-    expect(CLIENT_CONTEXT_VALUES).toEqual({
-      app: ['web', 'desktop'], os: ['windows', 'macos', 'linux', 'android', 'ios', 'other'],
-      browser: ['chromium', 'firefox', 'safari', 'other'], device: ['desktop', 'tablet', 'phone', 'other'],
-      screen: ['compact', 'medium', 'expanded'],
-    });
-    expect(CLIENT_APP_VERSION_PATTERN).toBe('^(?:0|[1-9][0-9]{0,5})\\.(?:0|[1-9][0-9]{0,5})\\.(?:0|[1-9][0-9]{0,5})$');
-    expect([CLIENT_CONTEXT_PATH, CLIENT_CONTEXT_MAX_BYTES]).toEqual(['/api/v1/client-context', 256]);
+describe('ugovor iz @ductura/contracts (negativni slučajevi prvi)', () => {
+  test('pozitivna kontrola: validator rute postoji i prihvaća ispravno tijelo', () => {
+    expect(typeof VALIDATORS[`${ID}:body`]).toBe('function');
+    expect(validateInput(ID, 'body', GOOD)).toBe(true);
+    expect(accepts(jcs(GOOD))).toBe(true);
   });
 
   test.each([
-    ['invalid-input', jcs({ ...GOOD, os: 'haiku' })], ['unknown-field', jcs({ ...GOOD, screenWidth: 1920 })],
-    ['not-canonical', JSON.stringify(GOOD, null, 1)], ['invalid-json', '{app: web}'],
-    ['body-too-large', jcs({ ...GOOD, x: 'e'.repeat(200) })], ['__proto__', `{"__proto__":"x",${jcs(GOOD).slice(1)}`],
-    ...['1.4', 'v1.4.0', '01.4.0', '1.04.0', '1.4.0-beta', '1.4.0+abcdef0', '1.4.0\n', '1.4.0\r\n', '1.4.0\t',
-      '1.4.0 ', '1.4.0\u007f', '1.4.0.1', '1234567.0.0', '１.4.0', '1.4.0 '].map((v) => [`verzija ${JSON.stringify(v)}`, jcs({ ...GOOD, appVersion: v })]),
-  ])('odbija %s', (_name, body) => expect(accepts(body)).toBe(false));
+    ['ključevi izvan reda', `{"os":"linux",${jcs(GOOD).slice(1).replace(',"os":"linux"', '')}`],
+    ['razmak', jcs(GOOD).replace(':', ': ')], ['dvostruki ključ', `{"os":"haiku",${jcs(GOOD).slice(1)}`],
+    ['dvostruki ključ, oba ispravna', jcs(GOOD).replace('"os":"linux"', '"os":"linux","os":"linux"')],
+    ['nepoznata vrijednost', jcs({ ...GOOD, os: 'haiku' })], ['nepoznato polje', jcs({ ...GOOD, screenWidth: 1920 })],
+    ['nedostaje polje', jcs(noOs)], ['nije kanonski', JSON.stringify(GOOD, null, 1)], ['nije JSON', '{app: web}'],
+    ['preko granice', jcs({ ...GOOD, x: 'e'.repeat(MAX_BYTES) })], ['niz', '[]'], ['null', 'null'], ['broj', '1'],
+    ...['__proto__', 'toString', 'constructor', 'hasOwnProperty'].map((k) => [`vlastiti ključ ${k}`, `{"${k}":"x",${jcs(GOOD).slice(1)}`]),
+    ...BAD_VERSIONS.map((v) => [`verzija ${JSON.stringify(v)}`, jcs({ ...GOOD, appVersion: v })]),
+  ])('odbija: %s', (_name, body) => expect(accepts(body)).toBe(false));
 
-  test('kraći APP_VERSION_RE slaže se s uzorkom izvora', () => {
-    const source = new RegExp(CLIENT_APP_VERSION_PATTERN, 'u');
-    for (const v of ['0.0.0', '1.4.0', '2.0.1', '999999.999999.999999', '1.4', 'v1.4.0', '01.4.0', '1.04.0', '1.4.0-beta',
-      '1.4.0+abcdef0', '1.4.0\n', '1.4.0\r\n', '1.4.0\t', '1.4.0\u00a0', '1.4.0\u007f', '1.4.0.1', '1234567.0.0',
-      '\uff11.4.0', '1.4.0 ', '1.4.0\n1.4.0', '\u0661.4.0', '']) {
-      expect([v, APP_VERSION_RE.test(v)]).toEqual([v, source.test(v)]);
+  test('loša verzija: APP_VERSION_RE se slaže s uzorkom ugovora i ništa se ne šalje', () => {
+    const pattern = new RegExp(SCHEMA.properties['appVersion']!.pattern!, 'u');
+    let calls = 0;
+    for (const v of [...BAD_VERSIONS, '0.0.0', '1.4.0', '999999.999999.999999']) {
+      expect([v, APP_VERSION_RE.test(v)]).toEqual([v, pattern.test(v)]);
     }
+    for (const v of BAD_VERSIONS) {
+      expect(sendClientContext(() => { calls += 1; return Promise.resolve(); }, { userAgent: UA.chromeMac }, 1200, v)).toBeUndefined();
+    }
+    expect(calls).toBe(0);
   });
 
-  test('prihvaća recorded i recorded-desktop-signed-in; verzija izgradnje prolazi uzorak', () => {
+  test('prihvaća ispravna tijela; put i verzija izgradnje slažu se s ugovorom', () => {
     expect(accepts(jcs(GOOD))).toBe(true);
     expect(accepts(jcs({ app: 'desktop', appVersion: '2.0.1', browser: 'chromium', device: 'desktop', os: 'windows', screen: 'medium' }))).toBe(true);
+    expect(CLIENT_CONTEXT_PATH).toBe(PATH);
     expect(APP_VERSION).toBe(JSON.parse(readFileSync('package.json', 'utf8')).version);
+    expect(APP_VERSION_RE.test(APP_VERSION)).toBe(true);
   });
 });
 
@@ -99,7 +113,7 @@ describe('slanje lažnom serveru', () => {
     }
     expect(got).toHaveLength(widths.length);
     for (const r of got) {
-      expect([r.method, r.url, r.type]).toEqual(['POST', '/api/v1/client-context', 'application/json']);
+      expect([r.method, r.url, r.type]).toEqual(['POST', PATH, 'application/json']);
       expect(accepts(r.body), r.body).toBe(true);
     }
   });
@@ -145,20 +159,15 @@ describe('slanje lažnom serveru', () => {
     await new Promise((done) => setImmediate(done));
   });
 
-  test('tijelo: samo šest ključeva po redu; najdulje ispravno tijelo stane u maxBodyBytes', () => {
+  test('tijelo: samo ključevi sheme po redu; najdulje ispravno tijelo stane u x-max-body-bytes', () => {
     const c = clientContextFrom({ userAgent: UA.chromeAndroidTablet }, 900, '999999.999999.999999');
     expect(Object.keys(c)).toEqual(FIELDS);
     expect(clientContextBody(c)).toBe(jcs(c));
-    // Najdulje vrijednosti s lista: desktop/chromium/desktop/android/expanded.
-    const longest = jcs({ ...c, app: 'desktop', browser: 'chromium', device: 'desktop' });
-    expect([longest.length, accepts(longest)]).toEqual([128, true]);
+    // Najdulje tijelo koje ugovor dopušta: najdulja `const` iz `anyOf` za svako polje i najdulja verzija.
+    const longest = jcs(Object.fromEntries(Object.entries(SCHEMA.properties).map(([k, p]) => [k,
+      p.anyOf ? p.anyOf.map((a) => a.const).sort((x, y) => y.length - x.length)[0] : '999999.999999.999999'])));
+    expect(accepts(longest), longest).toBe(true);
+    expect(Buffer.byteLength(longest)).toBeLessThanOrEqual(MAX_BYTES);
   });
 
-  test('loša verzija: ništa se ne šalje', () => {
-    let calls = 0;
-    for (const v of ['1.4', '1.4.0\r\n', '1.4.0 ', '']) {
-      sendClientContext(() => { calls += 1; return Promise.resolve(); }, { userAgent: UA.chromeMac }, 1200, v);
-    }
-    expect(calls).toBe(0);
-  });
 });
