@@ -2,7 +2,7 @@ Kanonski plan migracije: [PLAN-MIGRACIJE.md](https://github.com/ductura/.github/
 
 # Ductura/preloader: plan repozitorija
 
-Stanje: 14. 11. 2026. · **Samo plan.** Izvori kao u [plan servera](https://github.com/ductura/server/blob/main/docs/PLAN.md) i Ductus `origin/main` 220b5db7. Uključuje vlasnikove odluke 14. 11. (A: jedan web repo, prijenos s testovima, ugovor prvi; B: ugovor kao izvor koda, `ductura/.github`, zajednički paket lažnih zamjena).
+Stanje: 14. 11. 2026. · **Samo plan.** Izvori kao u [plan servera](https://github.com/ductura/server/blob/main/docs/PLAN.md) i Ductus `origin/main` 220b5db7. Uključuje vlasnikove odluke 14. 11. (A: jedan web repo, prijenos s testovima, ugovor prvi; B: ugovor kao izvor koda, `ductura/.github`, zajednički paket lažnih zamjena). Ispravak 17. 11.: domena je `ductura.org` (vlasnikova odluka, Ductus#2012 c.6934113245).
 
 ## 1. Svrha i granica
 
@@ -24,7 +24,7 @@ Stanje: 14. 11. 2026. · **Samo plan.** Izvori kao u [plan servera](https://gith
 - Mali Node HTTP poslužitelj (`src/app.js`, `src/index.js`) koji čita UA i vraća HTML s poveznicom na sučelje i paket.
 - `src/detect.js`: `detectOs`, `detectBrowser` (Edge i Opera prije Chromea), `isMobile`, `chooseFrontend` (chrome, mobile, other), `desktopPackageFor`. Samo UA, bez client hints i provjere mogućnosti; iPad koji se predstavlja kao Mac nije prepoznat.
 - Funkcionalni testovi: Chrome na Macu → Chrome sučelje + `.dmg`; Chrome na Androidu → mobilno, bez paketa; Edge na Windowsu → ostala sučelja + Windows paket.
-- `src/config.js`: domena `ductura.org`, putanje `/app/chrome/`, `/app/mobile/`, `/app/web/`, `/download/…`. **Ne slaže se** s migracijom §1c (`/c/`, `/m/`, `/o/`, `/preuzimanje/`) ni s V-0 (`ductura.cfd` ili `.top`, nije odlučeno). Nakon A1 ostaje jedna putanja weba; P-0.1 usklađuje nakon odluke 1 i V-0.
+- `src/config.js`: domena `ductura.org`, putanje `/app/chrome/`, `/app/mobile/`, `/app/web/`, `/download/…`. Domena odgovara odluci od 17. 11. Putanje se **ne slažu** s migracijom §1c (`/c/`, `/m/`, `/o/`, `/preuzimanje/`). Nakon A1 ostaje jedna putanja weba; P-0.1 usklađuje nakon odluke 1.
 - JavaScript i rad na serveru; plan traži TypeScript i statičnu izgradnju s proračunom veličine (migracija §5). `test/user-agents.js` i funkcionalni testovi su polazni fixturei za P-0.2.
 
 ## 3. Sadržaj (PRIJEDLOG gdje plan ne navodi)
@@ -103,11 +103,11 @@ Za `critical` zadatke (P-0.6, P-0.7) PRIJEDLOG: gradi se nad lažnim serverom, a
 
 - Poslovi (reusable iz `ductura/.github`): `lint`, `typecheck`, `test-helpers`, `test-functional` (nad lažnim serverom), `contracts`, `e2e-matrix`, `size-budget`, `a11y`, `secret-scan`, `dependency-review`, `ci-ok`. Noćno `e2e-system`.
 - Risk `critical`: `deploy/edge/**`, `src/consent/**`, `src/sign-in/**`, `.github/**` (PRIJEDLOG tablice, T-0.2).
-- Vlasničke radnje: V-1b, V-2, V-3, odluka 1 (putanja weba i prikaz), V-0 (domena).
+- Vlasničke radnje: V-1b, V-2, V-3, odluka 1 (putanja weba i prikaz), V-0 (e-pošta; domena je odlučena 17. 11.: `ductura.org`).
 
 ## 8. Kriterij izlaza (prvi val)
 
-1. P-0.1 … P-0.11 spojeni; putanje i domena usklađene s odlukom 1, V-0 i A1.
+1. P-0.1 … P-0.11 spojeni; putanje usklađene s odlukom 1 i A1; domena je `ductura.org`.
 2. Matrica zelena u tri motora; ručni izbor radi svugdje; Opera ručno.
 3. Prijava samo AAI@EduHr; pristanak i kolačići po 3d.
 4. Sistemski e2e (VS-1) zelen kroz pravi proxy, sa SHA svih repoa.
