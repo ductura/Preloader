@@ -10,17 +10,20 @@ export const INSTITUTION_TERMS: readonly string[] = [
 
 /**
  * Zatvoren popis iz Rječnika, višerječni izrazi u oba reda riječi. Sami `ljudsk`, `dokaz`, `izvor` i `ai` nisu
- * na popisu: redak tablice ih zabranjuje samo u kontekstu koji podniz ne vidi („ni ljudski ni strojno” je dopušteno).
+ * na popisu: redak tablice ih zabranjuje samo u kontekstu koji podniz ne vidi („ni ljudski ni strojno” je dopušteno). Korijeni su
+ * kratki namjerno (svi oblici i složenice retka, PRODUCT §5), pa obaraju i dopuštene radnje („Kopiraj navod”, „Sakrij”).
  */
 export const FORBIDDEN_TERMS: readonly string[] = [
-  'sumnj', 'rizi', 'anomalij', 'upozoren\\p{L}{0,4} o student', 'vjerojatn', 'autenticn', 'autenticitet',
-  'kopiran', 'prepisan', 'prepisiv', 'tud\\p{L}{0,4} tekst', 'tud\\p{L}{0,4} rijec', 'nestal', 'skriven',
-  'nedostajuc', 'izgubljen', 'plagij', 'plagir', 'izvornost', 'originalnost', 'integritet', 'neobicn',
-  'neuobicajen', 'nepravilnost', 'nije vlastit', 'napisa\\p{L}{0,4} ai', 'ai napisa', 'ai postot',
-  'postot\\p{L}{0,4} ai', 'ud(i|j)\\p{L}{0,4} ai', 'ai ud(i|j)', 'ljudsk\\p{L}{0,4} ud(i|j)', 'ud(i|j)\\p{L}{0,4} ljudsk',
-  'postot\\p{L}{0,4} ljudskost', 'verificiran\\p{L}{0,4} autorstv', 'autorstv\\p{L}{0,4} verificiran',
-  'dokaz\\p{L}{0,4} autorstv', 'ljudsk\\p{L}{0,4} napisan', 'napisa\\p{L}{0,4} covjek', 'covjek napisa',
-  'ai ?\\d', '\\d ?% ?ai',
+  'sumnj', 'rizi', 'anomal', 'upozoren\\p{L}{0,4} o student', 'student\\p{L}{0,4} upozoren', 'vjerojatn', 'autentic',
+  'kopira', 'prepis', 'tud\\p{L}{0,4} tekst', 'tud\\p{L}{0,4} rijec', 'nije (vlastit|njegov|njezin)', 'nesta',
+  'skriv', 'sakri', 'prikri', 'nedostaj', 'izgub', 'plagi', 'izvornost', 'originalnost', 'integritet', 'neobicn',
+  'neuobicajen', 'nepravil', 'napisa\\p{L}{0,4} ai', 'ai napisa', 'ai postot', 'postot\\p{L}{0,4} ai',
+  'ud(i|j)\\p{L}{0,4} ai', 'ai ud(i|j)', 'ljudsk\\p{L}{0,4} ud(i|j)', 'ud(i|j)\\p{L}{0,4} ljudsk',
+  'postot\\p{L}{0,4} ljudskost', 'ljudskost\\p{L}{0,4} postot', 'verificiran\\p{L}{0,4} autorstv',
+  'autorstv\\p{L}{0,4} verificiran', 'dokaz\\p{L}{0,4} autorstv', 'autorstv\\p{L}{0,4} dokaz',
+  'ljudsk\\p{L}{0,4} napisa', 'napisa\\p{L}{0,4} ljudsk', 'napisa\\p{L}{0,4} covjek', 'covjek napisa',
+  // Broj ili % uz AI, ljudsko, podrijetlo ili izvor, u oba reda.
+  '(\\d|%)\\s?(ai|ljudsk|podrijet|izvor)', '(ai|ljudsk|podrijet|izvor)\\p{L}{0,4}\\s?(\\d|%)',
 ];
 
 /** Bez nevidljivih znakova (`\p{Cf}`), kontrolni znak je razmak, NFKD bez oznaka (`\p{M}`), mala slova, jedan razmak. */
@@ -38,7 +41,8 @@ export function normalizeText(text: string): string {
 
 const patterns = [...INSTITUTION_TERMS, ...FORBIDDEN_TERMS].map((term) => ({
   term,
-  spaced: new RegExp(term, 'u'),
+  // Višerječni izraz dopušta jednu kratku riječ između („čovjek je napisao”).
+  spaced: new RegExp(term.replaceAll(' ', ' (\\p{L}{1,3} )?'), 'u'),
   // Jednorječni izraz i nad tekstom samo od slova (`fakul-tet`, `F.P.Z.G.`); višerječni bi tu hvatao preko granica riječi.
   compact: term.includes(' ') ? null : new RegExp(term, 'u'),
 }));

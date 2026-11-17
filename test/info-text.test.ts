@@ -9,25 +9,40 @@ import { infoText } from '../src/text.ts';
 
 /** Primjer riječi za korijen: `\p{L}{0,4}` postaje „a”, a alternative uzimaju prvu granu. */
 const sample = (term: string): string =>
-  term.replaceAll('\\p{L}{0,4}', 'a').replaceAll('\\d', '4').replaceAll(' ?', ' ').replace(/\(([^|)]*)[^)]*\)/g, '$1');
+  term.replaceAll('\\p{L}{0,4}', 'a').replaceAll('\\d', '4').replaceAll('\\s?', ' ').replace(/\(([^|)]*)[^)]*\)/g, '$1');
 
 test.each([...INSTITUTION_TERMS, ...FORBIDDEN_TERMS])('„%s” u tekstu ruši provjeru', (term) => {
   expect(() => assertPublicText([`Ovdje piše ${sample(term)}ski primjer.`])).toThrow(/\/info\//);
 });
 
 test.each([
-  'FAKULTET', 'Fpzg', 'na Sveučilištu', 'sveuciliste', 'visoka škola', 'visoka\tškola', 'visoka\r\nškola',
-  'visoka\rškola', 'visoka\nškola', 'visoka\u0085škola', 'visoka škola', 'visokoškolski', 'visoka–škola',
-  'fakul­tet', 'fakul\u007ftet', 'fakul​tet', 'fakul͏tet', 'fakul️tet', 'fakul̀tet',
-  'fakul\ttet', 'fakul\ftet', 'fakul-tet', 'F.P.Z.G.', 'sveuc​̌ilište', 'autentično',
-  'ｆａｋｕｌｔｅｔ', 'İnstitut', 'ınstitut', 'UNIZG', 'University', 'Faculty',
+  'FAKULTET', 'Fpzg', 'na Sveučilištu', 'sveuciliste', 'visoka\u00a0škola', 'visoka\tškola', 'visoka\r\nškola',
+  'visoka\rškola', 'visoka\nškola', 'visoka\u0085škola', 'visoka\u2028škola', 'visokoškolski', 'visoka–škola',
+  'fakul\u00adtet', 'fakul\u007ftet', 'fakul\u200btet', 'fakul\u034ftet', 'fakul\ufe0ftet', 'fakul\u0300tet',
+  'fakul\ttet', 'fakul\ftet', 'fakul-tet', 'F.P.Z.G.', 'sveuc\u200b\u030cilište', 'autentic\u030cno',
+  '\uff46\uff41\uff4b\uff55\uff4c\uff54\uff45\uff54', '\u0130nstitut', '\u0131nstitut', 'UNIZG', 'University', 'Faculty',
   'tuđeg teksta', 'verificiranog autorstva', 'dokazi autorstva', 'AI napisao', 'upozorenja o studentima',
   'postotka ljudskosti', 'ljudskog udjela', 'napisala čovjek', 'tekst nije vlastiti', 'AI 40', '40 % AI',
 ])('varijanta „%s” ne zaobilazi provjeru', (text) => {
   expect(publicTextProblems([text])).not.toEqual([]);
 });
 
-test.each(['fаkultet', 'Ducturα', 'Ductura', 'Ductura͸', 'Ductura\ud800'])(
+// Neovisno o popisima: oblici i redovi riječi iz retka tablice PRODUCT §5 (svi oblici, oba reda, broj ili %).
+test.each([
+  'Sakriveno', 'Prikriveno', 'skrivati', 'Student je kopirao tekst.', 'kopirano', 'prepisivanje', 'prepisao',
+  'sumnjivo', 'rizik', 'rizični', 'anomalija', 'upozorenje o studentu', 'vjerojatno', 'vjerojatnost', 'autentičnost',
+  'autenticitet', 'AI je napisao', 'napisao AI', 'udio AI-ja', 'ljudski udio', 'postotak ljudskosti', 'AI postotak',
+  '40 AI', 'AI 40', '40 % AI', 'AI: 40 %', '50 % ljudsko', 'ljudsko 50 %', '50 % podrijetlo', '30 % izvor',
+  'izvor 30%', 'verificirano autorstvo', 'dokaz autorstva', 'autorstvo dokazano', 'tuđi tekst', 'tuđe riječi',
+  'nije vlastiti', 'nije njegov', 'nije njezin', 'nestali podaci', 'podaci su nestali', 'nestao', 'nedostajući podaci',
+  'izgubljeni podaci', 'plagijat', 'plagiranje', 'izvornost', 'originalnost', 'integritet', 'neobično',
+  'neuobičajeno', 'nepravilnost', 'nepravilno', 'ljudski napisano', 'napisano ljudski', 'napisao čovjek',
+  'čovjek je napisao',
+])('oblik iz Rječnika „%s” ruši provjeru', (text) => {
+  expect(publicTextProblems([text])).not.toEqual([]);
+});
+
+test.each(['f\u0430kultet', 'Ductur\u03b1', 'Ductura\ue000', 'Ductura\u0378', 'Ductura\ud800'])(
   'znak izvan latinice ili bez značenja („%s”) ruši provjeru',
   (text) => expect(publicTextProblems([text])).not.toEqual([]),
 );
