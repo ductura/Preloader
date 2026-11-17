@@ -53,7 +53,8 @@ function onlyElementText(html: string, tag: 'script' | 'style'): string {
     throw new Error(`CSP page must have exactly one <${tag}> without attributes`);
   }
   const start = open.index + open[0].length + 1;
-  const end = html.slice(start).search(new RegExp(`</${tag}`, 'i'));
+  // Kraj je pravi završni tag (`</style>`, `</style >`), ne `</stylesheet>` u tekstu.
+  const end = html.slice(start).search(new RegExp(`</${tag}[\\t\\n\\f />]`, 'i'));
   if (end < 0) throw new Error(`CSP page <${tag}> is not closed`);
   return html.slice(start, start + end);
 }

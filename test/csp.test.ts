@@ -48,6 +48,12 @@ describe('stranica koja nije točno jedna skripta i jedan stil se odbija', () =>
     await expect(contentSecurityPolicyFor(html)).rejects.toThrow();
   });
 
+  it('</stylesheet> u tekstu stila nije kraj elementa', async () => {
+    const css = 'p::after{content:"</stylesheet>"}';
+    expect(await contentSecurityPolicyFor(page('1', css))).toContain(`style-src '${sha(css)}';`);
+    expect(await contentSecurityPolicyFor(page('1', 'a{}').replace('</style>', '</STYLE >'))).toContain(`style-src '${sha('a{}')}';`);
+  });
+
   it('<noscript> nije skripta', async () => {
     const html = page('1', 'a{}') + '<noscript><p>x</p></noscript>';
     expect(await contentSecurityPolicyFor(html)).toContain(`script-src '${sha('1')}';`);
