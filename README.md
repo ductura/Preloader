@@ -16,12 +16,12 @@ Bez JavaScripta stranica nudi sve izbore. Putanje su u `src/config.ts`. Vizualni
 pnpm install
 pnpm typecheck   # strogi TypeScript
 pnpm test        # vitest
-pnpm build       # dist/index.html i dist/greska.html (stil i skripta ugrađeni)
+pnpm build       # dist/index.html, dist/greska.html i dist/info/index.html (stil ugrađen; skripta osim na /info/)
 pnpm budget      # gzip proračun iz budget.json; prekoračenje vraća izlazni kod 1
 pnpm e2e         # matrica preglednika (P-0.11): izgradnja + Playwright u Chromiumu, Firefoxu i WebKitu
 ```
 
-CI poziva `ci-node.yml` iz `ductura/.github` sa skriptama `typecheck test build budget`. Posao `e2e-matrix` instalira tri preglednika i pokreće `pnpm e2e`; uz matricu idu axe (bez kršenja razine serious ili critical) i ručni izbor samo tipkovnicom (`e2e/matrix/a11y.spec.ts`). Opera je ručna provjera.
+CI poziva `ci-node.yml` iz `ductura/.github` sa skriptama `typecheck test build budget`. Posao `e2e-matrix` instalira tri preglednika i pokreće `pnpm e2e`; uz matricu idu axe na `/` i `/info/` (bez kršenja razine serious ili critical) i ručni izbor samo tipkovnicom (`e2e/matrix/a11y.spec.ts`). Opera je ručna provjera.
 
 ## Proračun veličine
 

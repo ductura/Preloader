@@ -73,3 +73,20 @@ test('odjeljak „Pravila fakulteta” ne ulazi na /info/ (PLAN §1 (3e)); puna 
   const all = leaves(infoText).join(' ').normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
   for (const root of ['fpzg', 'sveucilist', 'fakultet', 'ustanov']) expect(all).not.toContain(root);
 });
+
+test('tablica: svaki redak ima točan odgovor po stupcu (Vi: Da, Mentor: Da, Drugi: Ne)', () => {
+  const head = [...html.matchAll(/<th scope="col">([^<]*)<\/th>/g)].map((m) => decode(m[1]!));
+  expect(head).toEqual(['Prikaz', 'Vi', 'Mentor ili nastavnik zadatka', 'Drugi']);
+  const rows = [...html.matchAll(/<tr><th scope="row">([^<]*)<\/th>((?:<td>[^<]*<\/td>){3})<\/tr>/g)];
+  expect(rows).toHaveLength(3);
+  const wanted = [infoText.seen.rows.live, infoText.seen.rows.replay, infoText.seen.rows.compare];
+  rows.forEach((m, i) => {
+    expect(decode(m[1]!)).toBe(wanted[i]);
+    expect([...m[2]!.matchAll(/<td>([^<]*)<\/td>/g)].map((c) => c[1])).toEqual(['Da', 'Da', 'Ne']);
+  });
+});
+
+test('povratak: točno jedna poveznica na „/” s tekstom iz kataloga', () => {
+  const links = [...html.matchAll(/<a\b[^>]*>[^<]*<\/a>/g)].map((m) => m[0]);
+  expect(links).toEqual(['<a class="button" href="/">Natrag na početnu stranicu</a>']);
+});
