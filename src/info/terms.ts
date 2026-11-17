@@ -5,25 +5,29 @@
 /** Korijeni imena ustanova. Ostale kratice (npr. `fer`) nisu pokrivene: davale bi lažne pogotke. */
 export const INSTITUTION_TERMS: readonly string[] = [
   'fpzg', 'ffzg', 'unizg', 'fakultet', 'facult', 'sveucilis', 'veleucilis', 'univerzitet', 'universit',
-  'visok\\p{L}{0,4} skol', 'visokoskol', 'akademij', 'institut', 'ustanov',
+  'visokoskol', 'akademij', 'institut', 'ustanov',
 ];
 
 /**
- * Zatvoren popis iz Rječnika, višerječni izrazi u oba reda riječi. Sami `ljudsk`, `dokaz`, `izvor` i `ai` nisu
- * na popisu: redak tablice ih zabranjuje samo u kontekstu koji podniz ne vidi („ni ljudski ni strojno” je dopušteno). Korijeni su
- * kratki namjerno (svi oblici i složenice retka, PRODUCT §5), pa obaraju i dopuštene radnje („Kopiraj navod”, „Sakrij”).
+ * Jednorječni korijeni iz Rječnika: svi oblici i složenice retka (PRODUCT §5), pa namjerno obaraju i dopuštene
+ * radnje („Kopiraj navod”, „Sakrij”). Sami `ljudsk`, `dokaz`, `izvor` i `ai` nisu na popisu: redak ih zabranjuje
+ * samo u kontekstu koji podniz ne vidi („ni ljudski ni strojno” je dopušteno), pa su u parovima.
  */
 export const FORBIDDEN_TERMS: readonly string[] = [
-  'sumnj', 'rizi', 'anomal', 'upozoren\\p{L}{0,4} o student', 'student\\p{L}{0,4} upozoren', 'vjerojatn', 'autentic',
-  'kopira', 'prepis', 'tud\\p{L}{0,4} tekst', 'tud\\p{L}{0,4} rijec', 'nije (vlastit|njegov|njezin)', 'nesta',
-  'skriv', 'sakri', 'prikri', 'nedostaj', 'izgub', 'plagi', 'izvornost', 'originalnost', 'integritet', 'neobicn',
-  'neuobicajen', 'nepravil', 'napisa\\p{L}{0,4} ai', 'ai napisa', 'ai postot', 'postot\\p{L}{0,4} ai',
-  'ud(i|j)\\p{L}{0,4} ai', 'ai ud(i|j)', 'ljudsk\\p{L}{0,4} ud(i|j)', 'ud(i|j)\\p{L}{0,4} ljudsk',
-  'postot\\p{L}{0,4} ljudskost', 'ljudskost\\p{L}{0,4} postot', 'verificiran\\p{L}{0,4} autorstv',
-  'autorstv\\p{L}{0,4} verificiran', 'dokaz\\p{L}{0,4} autorstv', 'autorstv\\p{L}{0,4} dokaz',
-  'ljudsk\\p{L}{0,4} napisa', 'napisa\\p{L}{0,4} ljudsk', 'napisa\\p{L}{0,4} covjek', 'covjek napisa',
+  'sumnj', 'rizi', 'anomal', 'vjerojatn', 'autentic', 'kopira', 'prepis', 'nesta', 'skriv', 'sakri', 'prikri',
+  'nedostaj', 'izgub', 'plagi', 'izvornos', 'originalnos', 'integritet', 'neobic', 'neuobicajen', 'nepravil',
   // Broj ili % uz AI, ljudsko, podrijetlo ili izvor, u oba reda.
   '(\\d|%)\\s?(ai|ljudsk|podrijet|izvor)', '(ai|ljudsk|podrijet|izvor)\\p{L}{0,4}\\s?(\\d|%)',
+];
+
+/**
+ * Višerječni izrazi kao par korijena: oba reda riječi, nastavak na svakom korijenu, do dvije kratke riječi
+ * između („Tekst je tuđi.”) i spojena slova bez razmaka („tuđitekst”).
+ */
+export const TERM_PAIRS: readonly (readonly [string, string])[] = [
+  ['visok', 'skol'], ['upozor', 'student'], ['tud', 'tekst'], ['tud', 'rijec'], ['nije', '(vlastit|njegov|njezin)'],
+  ['napisa', 'ai'], ['ai', 'postot'], ['ai', 'ud(i|j)'], ['ljudsk', 'ud(i|j)'], ['ljudskos', 'postot'],
+  ['(verificir|verifikac)', 'autorstv'], ['dokaz', 'autorstv'], ['ljudsk', 'napisa'], ['covjek', 'napisa'],
 ];
 
 /** Bez nevidljivih znakova (`\p{Cf}`), kontrolni znak je razmak, NFKD bez oznaka (`\p{M}`), mala slova, jedan razmak. */
@@ -39,13 +43,22 @@ export function normalizeText(text: string): string {
     .replace(/\s+/gu, ' ');
 }
 
-const patterns = [...INSTITUTION_TERMS, ...FORBIDDEN_TERMS].map((term) => ({
-  term,
-  // Višerječni izraz dopušta jednu kratku riječ između („čovjek je napisao”).
-  spaced: new RegExp(term.replaceAll(' ', ' (\\p{L}{1,3} )?'), 'u'),
-  // Jednorječni izraz i nad tekstom samo od slova (`fakul-tet`, `F.P.Z.G.`); višerječni bi tu hvatao preko granica riječi.
-  compact: term.includes(' ') ? null : new RegExp(term, 'u'),
-}));
+const pairPattern = (x: string, y: string, between: string): string => `${x}\\p{L}{0,5}${between}${y}`;
+const patterns = [
+  ...[...INSTITUTION_TERMS, ...FORBIDDEN_TERMS].map((term) => ({
+    term,
+    spaced: new RegExp(term, 'u'),
+    // I nad tekstom samo od slova (`fakul-tet`, `F.P.Z.G.`).
+    compact: new RegExp(term, 'u') as RegExp | null,
+  })),
+  ...TERM_PAIRS.map(([x, y]) => ({
+    term: `${x} + ${y}`,
+    // Do dvije kratke riječi između („AI ga je napisao”) ili ništa unutar iste riječi („aipostotak”).
+    spaced: new RegExp(`${pairPattern(x, y, ' ?(\\p{L}{1,4} ){0,2}')}|${pairPattern(y, x, ' ?(\\p{L}{1,4} ){0,2}')}`, 'u'),
+    // Spojena slova samo za korijene od barem tri slova: `ai` bi hvatao preko granica riječi („pisanja iz”).
+    compact: x === 'ai' || y === 'ai' ? null : new RegExp(`${pairPattern(x, y, '')}|${pairPattern(y, x, '')}`, 'u'),
+  })),
+];
 
 /** Jedna poruka po nalazu; prazan niz znači da je tekst dopušten. */
 export function publicTextProblems(texts: readonly string[]): string[] {

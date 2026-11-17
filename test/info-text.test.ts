@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { build } from '../scripts/build.ts';
-import { assertPublicText, FORBIDDEN_TERMS, INSTITUTION_TERMS, publicTextProblems, textsOf } from '../src/info/index.ts';
+import { assertPublicText, FORBIDDEN_TERMS, INSTITUTION_TERMS, publicTextProblems, TERM_PAIRS, textsOf } from '../src/info/index.ts';
 import { infoText } from '../src/text.ts';
 
 /** Primjer riječi za korijen: `\p{L}{0,4}` postaje „a”, a alternative uzimaju prvu granu. */
@@ -13,6 +13,12 @@ const sample = (term: string): string =>
 
 test.each([...INSTITUTION_TERMS, ...FORBIDDEN_TERMS])('„%s” u tekstu ruši provjeru', (term) => {
   expect(() => assertPublicText([`Ovdje piše ${sample(term)}ski primjer.`])).toThrow(/\/info\//);
+});
+
+test.each(TERM_PAIRS.map(([x, y]) => [sample(x), sample(y)]))('par „%s” + „%s” ruši provjeru u svakom obliku', (x, y) => {
+  for (const text of [`${x}om ${y}a`, `${y}ima ${x}e`, `${y}a je ${x}i`, `${x}i\u200b${y}`, `${x}-${y}`]) {
+    expect(publicTextProblems([text]), text).not.toEqual([]);
+  }
 });
 
 test.each([
@@ -37,7 +43,8 @@ test.each([
   'nije vlastiti', 'nije njegov', 'nije njezin', 'nestali podaci', 'podaci su nestali', 'nestao', 'nedostajući podaci',
   'izgubljeni podaci', 'plagijat', 'plagiranje', 'izvornost', 'originalnost', 'integritet', 'neobično',
   'neuobičajeno', 'nepravilnost', 'nepravilno', 'ljudski napisano', 'napisano ljudski', 'napisao čovjek',
-  'čovjek je napisao',
+  'čovjek je napisao', 'Tekst je tuđi.', 'Riječi su tuđe.', 'tuđitekst', 'izvornošću', 'originalnošću', 'neobičan',
+  'studentu je upozorenje', 'autorstvo je verificirano', 'verifikacija autorstva', 'udio je ljudski', 'AI ga je napisao',
 ])('oblik iz Rječnika „%s” ruši provjeru', (text) => {
   expect(publicTextProblems([text])).not.toEqual([]);
 });
