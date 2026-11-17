@@ -21,7 +21,7 @@ describe('neispravan hash ne ulazi u politiku', () => {
     ['prazan', ''],
     ['s tabom', `${HASH}\t`],
     ['s CRLF', `${HASH}\r\n`],
-    ['s NBSP', `${HASH} `],
+    ['s NBSP', `${HASH}\u00a0`],
     ['s DEL', `${HASH}\u007f`],
     ['toString', 'toString'],
     ['__proto__', '__proto__'],
@@ -29,10 +29,17 @@ describe('neispravan hash ne ulazi u politiku', () => {
     expect(() => pageContentSecurityPolicy({ scriptHash: bad, styleHash: HASH })).toThrow(/hash/);
     expect(() => pageContentSecurityPolicy({ scriptHash: HASH, styleHash: bad })).toThrow(/hash/);
   });
+
+  it('objekt čiji toString mijenja vrijednost', () => {
+    let n = 0;
+    const tricky = { toString: () => (n++ ? "x' 'unsafe-inline" : HASH) } as unknown as string;
+    expect(() => pageContentSecurityPolicy({ scriptHash: tricky, styleHash: HASH })).toThrow(/hash/);
+    expect(() => pageContentSecurityPolicy({ scriptHash: HASH, styleHash: tricky })).toThrow(/hash/);
+  });
 });
 
 describe('stranica koja nije točno jedna skripta i jedan stil se odbija', () => {
-  it.each([
+  it.each<[string, string]>([
     ['bez skripte', '<style>a{}</style>'],
     ['bez stila', '<script>1</script>'],
     ['dvije skripte', page('1', 'a{}') + '<script>2</script>'],
@@ -44,6 +51,11 @@ describe('stranica koja nije točno jedna skripta i jedan stil se odbija', () =>
     ['komentar', page('1', 'a{}') + '<!-- x -->'],
     ['NUL', page('1\u0000', 'a{}')],
     ['nezatvorena skripta', '<style>a{}</style><script>1'],
+    ['<script/> kao drugi tag', page('1', 'a{}') + '<script/>'],
+    ['<script\t> kao drugi tag', page('1', 'a{}') + '<script\t>2</script>'],
+    ...['svg', 'math', 'template', 'textarea', 'xmp', 'plaintext', 'noembed', 'noframes', 'iframe'].map(
+      (tag): [string, string] => [`skripta u <${tag}>`, `<style>a{}</style><${tag.toUpperCase()}><script>1</script></${tag}>`],
+    ),
   ])('%s', async (_, html) => {
     await expect(contentSecurityPolicyFor(html)).rejects.toThrow();
   });
@@ -54,8 +66,8 @@ describe('stranica koja nije točno jedna skripta i jedan stil se odbija', () =>
     expect(await contentSecurityPolicyFor(page('1', 'a{}').replace('</style>', '</STYLE >'))).toContain(`style-src '${sha('a{}')}';`);
   });
 
-  it('<noscript> nije skripta', async () => {
-    const html = page('1', 'a{}') + '<noscript><p>x</p></noscript>';
+  it('<noscript>, <scripts> i <script-x> nisu skripta', async () => {
+    const html = page('1', 'a{}') + '<noscript><p>x</p></noscript><scripts>2</scripts><script-x>3</script-x><svgx></svgx>';
     expect(await contentSecurityPolicyFor(html)).toContain(`script-src '${sha('1')}';`);
   });
 });
@@ -71,10 +83,14 @@ describe('hash je hash teksta kako ga vidi preglednik', () => {
     expect(await contentSecurityPolicyFor(page('a()', 'b{ }'))).not.toBe(base);
   });
 
-  it('CRLF, sami CR i BOM daju isti hash kao LF bez BOM-a (HTML parser)', async () => {
+  it('CRLF i sami CR daju isti hash kao LF (HTML parser)', async () => {
     const lf = await contentSecurityPolicyFor(page('a()\nb()', 'b{}\nc{}'));
     expect(await contentSecurityPolicyFor(page('a()\r\nb()', 'b{}\r\nc{}'))).toBe(lf);
-    expect(await contentSecurityPolicyFor(`﻿${page('a()\rb()', 'b{}\rc{}')}`)).toBe(lf);
+    expect(await contentSecurityPolicyFor(page('a()\rb()', 'b{}\rc{}'))).toBe(lf);
+  });
+
+  it('BOM unutar teksta ostaje u hashu (preglednik ga ne briše)', async () => {
+    expect(await contentSecurityPolicyFor(page('a()\ufeff', 'b{}'))).toContain(`script-src '${sha('a()\ufeff')}';`);
   });
 });
 
@@ -88,6 +104,7 @@ describe('politika izgrađenog index.html (DAN-995)', () => {
   });
   afterAll(() => rmSync(out, { recursive: true, force: true }));
 
+  // Isto izdvajanje kao u kodu: zajedničku grešku hvata tek e2e u pregledniku (traka w993a).
   const inner = (tag: string) => html.match(new RegExp(`<${tag}>([^]*?)</${tag}>`))?.[1] ?? '';
 
   it('dopušta samo hash vlastite skripte i stila', async () => {
@@ -106,6 +123,7 @@ describe('politika izgrađenog index.html (DAN-995)', () => {
   it('stranica ne treba ništa što bi politika blokirala', () => {
     const markup = html.replace(/<script>[^]*?<\/script>/, '').replace(/<style>[^]*?<\/style>/, '');
     expect(markup).not.toMatch(/\son\w+\s*=|\sstyle\s*=|javascript:/i);
-    expect(inner('script')).not.toMatch(/setAttribute\(\s*["']style|\.cssText/);
+    // Inline stil i rukovatelji iz skripte: setAttribute('style'/'on…') i umetanje HTML-a.
+    expect(inner('script')).not.toMatch(/setAttribute\(\s*["'](style|on)|innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
   });
 });

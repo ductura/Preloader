@@ -25,8 +25,9 @@ export async function scriptHash(text: string): Promise<string> {
 
 /** The page policy. Throws on a malformed hash. */
 export function pageContentSecurityPolicy({ scriptHash: script, styleHash: style }: PolicyHashes): string {
-  if (!HASH.test(script)) throw new Error('CSP script hash must be a sha256 source');
-  if (!HASH.test(style)) throw new Error('CSP style hash must be a sha256 source');
+  // typeof first: an object's toString could pass the test and then return something else.
+  if (typeof script !== 'string' || !HASH.test(script)) throw new Error('CSP script hash must be a sha256 source');
+  if (typeof style !== 'string' || !HASH.test(style)) throw new Error('CSP style hash must be a sha256 source');
   return [
     "default-src 'none'",
     `script-src '${script}'`,
@@ -46,7 +47,7 @@ export function pageContentSecurityPolicy({ scriptHash: script, styleHash: style
  * skripte) baca, jer bi preglednik mogao drukčije podijeliti stranicu.
  */
 function onlyElementText(html: string, tag: 'script' | 'style'): string {
-  // Svaki `<script`/`<style` iza kojeg ne slijedi slovo, broj ili crtica broji se kao tag.
+  // Svaki `<script`/`<style` iza kojeg ne slijedi slovo, broj, `_` ili crtica broji se kao tag.
   const opens = [...html.matchAll(new RegExp(`<${tag}(?![\\w-])`, 'gi'))];
   const open = opens[0];
   if (opens.length !== 1 || open === undefined || html[open.index + open[0].length] !== '>') {
@@ -60,14 +61,23 @@ function onlyElementText(html: string, tag: 'script' | 'style'): string {
 }
 
 /**
- * Politika za izgrađeni index.html. Ulaz se normalizira kao u HTML parseru
- * prije hashiranja (početni BOM otpada, CRLF i sami CR postaju LF). Komentar
- * ili NUL bacaju: mijenjaju ono što preglednik vidi kao tekst elementa.
+ * Omotači u kojima tekst skripte ili stila nije onaj koji preglednik izvrši ili
+ * hashira (SVG/MathML dekodiraju entitete i CDATA; template, textarea i slični
+ * tagovi skrivaju ili prikazuju tekst). Napomena: `<title>` je dopušten jer ga
+ * stranica ima; skripta unutar njega ne bi se izvršila (sigurno, ne šire).
+ */
+const FOREIGN = /<(svg|math|template|textarea|xmp|plaintext|noembed|noframes|iframe)(?![\w-])/i;
+
+/**
+ * Politika za izgrađeni index.html. CRLF i sami CR postaju LF, kao u HTML
+ * parseru prije hashiranja. Komentar, NUL ili strani omotač bacaju: mijenjaju
+ * ono što preglednik vidi kao tekst elementa.
  */
 export async function contentSecurityPolicyFor(html: string): Promise<string> {
-  const text = html.replace(/^﻿/, '').replace(/\r\n?/g, '\n');
+  const text = html.replace(/\r\n?/g, '\n');
   if (text.includes('<!--')) throw new Error('CSP page must not contain an HTML comment');
   if (text.includes('\u0000')) throw new Error('CSP page must not contain NUL');
+  if (FOREIGN.test(text)) throw new Error('CSP page must not wrap content in a foreign or raw-text element');
   return pageContentSecurityPolicy({
     scriptHash: await scriptHash(onlyElementText(text, 'script')),
     styleHash: await scriptHash(onlyElementText(text, 'style')),
