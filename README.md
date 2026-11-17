@@ -16,7 +16,7 @@ Bez JavaScripta stranica nudi sve izbore. Putanje su u `src/config.ts`. Vizualni
 pnpm install
 pnpm typecheck   # strogi TypeScript
 pnpm test        # vitest
-pnpm build       # dist/index.html (stil i skripta ugrađeni)
+pnpm build       # dist/index.html i dist/greska.html (stil i skripta ugrađeni)
 pnpm budget      # gzip proračun iz budget.json; prekoračenje vraća izlazni kod 1
 pnpm e2e         # matrica preglednika (P-0.11): izgradnja + Playwright u Chromiumu, Firefoxu i WebKitu
 ```
@@ -26,6 +26,8 @@ CI poziva `ci-node.yml` iz `ductura/.github` sa skriptama `typecheck test build 
 ## Proračun veličine
 
 `budget.json` zadaje gzip granicu za svaku datoteku u `dist` i za zbroj. Pada ako je datoteka iznad granice, zbroj iznad ukupne granice, datoteka iz proračuna nedostaje ili datoteka u `dist` nema granicu.
+
+Tekstovi stanja greške nisu na glavnoj stranici: `dist/greska.html?status=<status ili kod>` ima vlastitu granicu (izmjereno plus oko 10 %), pa prvi ekran ne raste (`src/errors/README.md`).
 
 ## Otvoreno
 

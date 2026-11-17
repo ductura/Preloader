@@ -15,6 +15,7 @@ export const text = {
   lead: 'Otvaramo Ducturu prilagođenu Vašem uređaju i pregledniku.',
   openApp: 'Otvori Ducturu u pregledniku',
   noscript: 'Bez JavaScripta odaberite sami:',
+  home: 'Natrag na početnu stranicu',
   choiceTitle: 'Odaberite sami',
   choiceView: 'Prikaz',
   views: { desktop: 'Računalo', mobile: 'Mobitel' },
