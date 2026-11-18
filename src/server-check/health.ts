@@ -9,19 +9,25 @@ export type Get = (path: string, init: RequestInit) => Promise<Response>;
 /** `null`: server nije dostupan ili odgovor nema oblik iz ugovora. */
 export type Health = { state: NonNullable<Body['state']>; minClientVersion: string | null } | null;
 
-const VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+/** Isti uzorak kao polja verzija u ugovoru (test ih uspoređuje). */
+export const VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const VERSION_KEYS = ['version', 'apiVersion', 'serverVersion', 'minClientVersion'];
 
 export async function checkHealth(get: Get): Promise<Health> {
   try {
     const r = await get(HEALTH_PATH, { credentials: 'omit', cache: 'no-store' });
     if (r.status !== 200) return null;
-    const b = (await r.json()) as { [K in keyof Body]?: unknown } | null;
-    if (b?.status !== 'ok') return null;
-    const state = b.state ?? 'ok';
-    const min = b.minClientVersion ?? null;
-    if (state !== 'ok' && state !== 'degraded') return null;
-    if (min !== null && !(typeof min === 'string' && VERSION_RE.test(min))) return null;
-    return { state, minClientVersion: min };
+    const b: unknown = await r.json();
+    if (typeof b !== 'object' || b === null || Array.isArray(b)) return null;
+    // Zatvoren oblik kao u ugovoru (additionalProperties: false): nepoznat ključ ili kriva vrijednost je null.
+    for (const [k, v] of Object.entries(b)) {
+      const ok = k === 'status' ? v === 'ok' : k === 'state' ? v === 'ok' || v === 'degraded'
+        : VERSION_KEYS.includes(k) && typeof v === 'string' && VERSION_RE.test(v);
+      if (!ok) return null;
+    }
+    const h = b as Body;
+    if (h.status !== 'ok') return null;
+    return { state: h.state ?? 'ok', minClientVersion: h.minClientVersion ?? null };
   } catch {
     return null;
   }

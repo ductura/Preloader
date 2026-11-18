@@ -2,10 +2,11 @@
 // preloadera nad lažnim serverom. Novi, uklonjeni ili promijenjeni vektor, ili poziv koji šalje
 // drugi oblik, ruši test.
 import { createFakeServer, FAKE_VECTOR_HEADER, ROUTE_TABLE, VECTORS, type FakeVector } from '@ductura/test-fakes/fake-server';
+import openapi from '@ductura/contracts/openapi/v1.json' with { type: 'json' };
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { CLIENT_CONTEXT_PATH, clientContextBody, clientContextFrom, sendClientContext } from '../src/client-context/index.ts';
-import { checkHealth, HEALTH_PATH, type Health } from '../src/server-check/health.ts';
+import { checkHealth, HEALTH_PATH, VERSION_RE, type Health } from '../src/server-check/health.ts';
 import { UA } from './user-agents.ts';
 
 const server = createFakeServer();
@@ -58,9 +59,20 @@ describe('platform.health.get: vektori kroz checkHealth', () => {
     ['status nije ok', { ...ok, status: 'fine' }], ['bez statusa', { state: 'ok' }], ['nepoznato stanje', { ...ok, state: 'down' }],
     ['verzija s v', { ...ok, minClientVersion: 'v1.0.0' }], ['verzija kao niz', { ...ok, minClientVersion: ['1.0.0'] }],
     ['verzija kao broj', { ...ok, minClientVersion: 1 }], ['niz', [ok]], ['null', null], ['tekst', 'ok'],
+    ['stanje null', { ...ok, state: null }], ['verzija null', { ...ok, minClientVersion: null }],
+    ['nepoznato polje', { ...ok, extra: 1 }], ['apiVersion kao broj', { ...ok, apiVersion: 42 }],
+    ['version nije verzija', { status: 'ok', version: 'x' }], ['vodeća nula', { ...ok, minClientVersion: '01.0.0' }],
+    ['sufiks', { ...ok, minClientVersion: '1.0.0-rc' }],
   ])('kriv oblik odgovora 200 daje null: %s', async (_name, body) => {
     const get = () => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }));
     expect(await checkHealth(get)).toBeNull();
+  });
+
+  test('VERSION_RE je uzorak polja verzija iz ugovora', () => {
+    type Prop = { pattern?: string };
+    const op = (openapi.paths as unknown as Record<string, { get: { responses: Record<string, { content: Record<string, { schema: { properties: Record<string, Prop> } }> }> } }>)[HEALTH_PATH]!.get;
+    const props = op.responses['200']!.content['application/json']!.schema.properties;
+    for (const k of ['version', 'apiVersion', 'serverVersion', 'minClientVersion']) expect([k, props[k]?.pattern]).toEqual([k, VERSION_RE.source]);
   });
 
   test('nije JSON ili mreža pada: null, bez bacanja', async () => {
@@ -77,8 +89,14 @@ describe('client.context.post: vektori kroz sendClientContext', () => {
   const reachable = of('client.context.post').filter((v) => same(v.request.body, BODY)
     && v.request.headers?.['content-type'] === 'application/json' && !('content-length' in v.request.headers));
 
-  test('put je iz ugovora i tijelo preloadera pogađa točno ove vektore', () => {
+  test('put je iz ugovora i tijelo preloadera pogađa točno ove vektore (novi ili uklonjeni ruši test)', () => {
     expect(CLIENT_CONTEXT_PATH).toBe(ROUTE_TABLE['client.context.post'].path);
+    expect(of('client.context.post').map((v) => `${v.name}:${v.response.status}`).sort()).toEqual([
+      'body-stream-error:400', 'body-timeout:408', 'body-too-large:413', 'content-length-invalid:400',
+      'content-length-mismatch:400', 'cross-site:403', 'invalid-input:400', 'invalid-json:400', 'not-canonical:400',
+      'origin-mismatch:403', 'origin-missing:403', 'recorded-desktop-signed-in:204', 'recorded:204',
+      'unknown-field:400', 'unsupported-media-type:415',
+    ]);
     expect(reachable.map((v) => v.name)).toEqual(['recorded', 'origin-missing', 'origin-mismatch', 'cross-site']);
   });
 
