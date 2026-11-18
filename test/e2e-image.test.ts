@@ -24,6 +24,12 @@ function parse(text: string): Obj {
 }
 
 const DIGEST = 'eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27';
+// Index digest of each allowed tag: a new Playwright needs a new row here.
+const DIGESTS: Obj = { '1.63.0': DIGEST };
+const NODE_JOB = {
+  uses: 'ductura/.github/.github/workflows/ci-node.yml@98f62800577910b24451809d40c247ee1f04c7c1',
+  with: { scripts: 'typecheck test build budget' },
+};
 const FONTS: [string, string][] = [
   ['DejaVuSans.ttf', 'ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280'],
   ['DejaVuSans-Bold.ttf', '5c1247acef7f2b8522a31742c76d6adcb5569bacc0be7ceaa4dc39dd252ce895'],
@@ -53,6 +59,10 @@ const STEPS: Obj[] = [
   },
 ];
 const FORBIDDEN = /(?<![\w-])(?:apt|apt-get|aptitude|dpkg)(?![\w-])|playwright\S*\s+install/;
+// Shell text without quotes, backslashes and line continuations, so that
+// `ap''t-get`, `playwright "install"` and `playwright \<newline>install` are caught.
+const installs = (s: unknown): boolean =>
+  typeof s !== 'string' || FORBIDDEN.test(s.replace(/\\\r?\n/g, ' ').replace(/['"\\]/g, ''));
 
 // The one version of @playwright/test, playwright and playwright-core in the lockfile.
 function lockVersion(lock: Obj): string {
@@ -79,12 +89,19 @@ function problems(ciText: string, lockText: string, pkgText: string): string[] {
   }
   for (const key of ['env', 'defaults']) if (Object.hasOwn(wf, key)) out.push(`workflow has ${key}`);
   const jobs = isMap(wf['jobs']) ? wf['jobs'] : {};
+  if (!isDeepStrictEqual(Object.keys(jobs), ['node', 'e2e-matrix', 'ci-ok'])) out.push(`jobs: ${Object.keys(jobs).join(',')}`);
+  if (!isDeepStrictEqual(own(jobs, 'node'), NODE_JOB)) out.push('job node is not the ci-node.yml call');
   for (const [name, job] of Object.entries(jobs)) {
-    const runs = isMap(job) && Array.isArray(job['steps']) ? job['steps'].map((s) => own(s, 'run')) : [];
-    if (runs.some((r) => typeof r === 'string' && FORBIDDEN.test(r))) out.push(`job ${name} installs packages or browsers`);
+    if (own(job, 'defaults') !== undefined) out.push(`job ${name} has defaults`);
+    const steps: unknown[] = Array.isArray(own(job, 'steps')) ? (own(job, 'steps') as unknown[]) : [];
+    for (const step of steps) {
+      if (name !== 'e2e-matrix' && own(step, 'uses') !== undefined) out.push(`job ${name} uses an action`);
+      if (![undefined, 'bash'].includes(own(step, 'shell') as string)) out.push(`job ${name} has another shell`);
+      if (own(step, 'run') !== undefined && installs(own(step, 'run'))) out.push(`job ${name} installs packages or browsers`);
+    }
   }
   for (const [name, s] of Object.entries(isMap(scripts) ? scripts : {})) {
-    if (typeof s !== 'string' || FORBIDDEN.test(s)) out.push(`package.json script ${name} installs packages or browsers`);
+    if (installs(s)) out.push(`package.json script ${name} installs packages or browsers`);
   }
   const job = own(jobs, 'e2e-matrix');
   if (!isMap(job)) return [...out, 'no e2e-matrix job'];
@@ -98,7 +115,7 @@ function problems(ciText: string, lockText: string, pkgText: string): string[] {
   const m = typeof image === 'string' ? /^mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-noble@sha256:([0-9a-f]{64})$/.exec(image) : null;
   if (!m) out.push(`image is not a pinned noble Playwright image: ${JSON.stringify(image)}`);
   else if (m[1] !== version) out.push(`image ${m[1]} is not lockfile ${version}`);
-  else if (m[2] !== DIGEST) out.push('image digest is not the pinned one');
+  else if (own(DIGESTS, m[1]) !== m[2]) out.push(`image digest is not the pinned one for ${m[1]}`);
   const steps = Array.isArray(job['steps']) ? job['steps'] : [];
   if (!isDeepStrictEqual(steps, STEPS)) out.push('e2e-matrix steps are not the allowed steps');
   return out;
@@ -115,6 +132,7 @@ const swap = (text: string, from: string, to: string): string => {
 const img = (to: string): string => swap(CI, `image: ${IMAGE}`, `image: ${to}`);
 const E2E = '      - run: pnpm e2e\n';
 const before = (step: string): string => swap(CI, E2E, `${step}${E2E}`);
+const okStep = (step: string): string => swap(CI, '    steps:\n      - name: Every needed job succeeded\n', `    steps:\n      - ${step}\n      - name: Every needed job succeeded\n`);
 const FONT_TEST = "test \"$(fc-match -f '%{family[0]}|%{style[0]}' sans-serif:bold)\" = 'DejaVu Sans|Bold'";
 
 const ciCases: [string, string, RegExp][] = [
@@ -125,19 +143,32 @@ const ciCases: [string, string, RegExp][] = [
   ['sudo apt update', before('      - run: sudo apt update\n'), /installs/],
   ['dpkg -i', before('      - run: dpkg -i x.deb\n'), /installs/],
   ['setup-node is back', before('      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1\n'), /allowed steps/],
+  ['pnpm dlx playwright install', before('      - run: pnpm dlx playwright install\n'), /installs/],
   ['harmless extra step', before('      - run: echo Adapt\n'), /allowed steps/],
   ['|| true on the font check', swap(CI, FONT_TEST, `${FONT_TEST} || true`), /allowed steps/],
   ['continue-on-error on e2e', swap(CI, E2E, `${E2E}        continue-on-error: true\n`), /allowed steps/],
+  ['continue-on-error on the font step', swap(CI, '        shell: bash\n', '        shell: bash\n        continue-on-error: true\n'), /allowed steps/],
+  ['if on e2e', swap(CI, E2E, `${E2E}        if: false\n`), /allowed steps/],
   ['if on the font step', swap(CI, '        shell: bash\n', '        shell: bash\n        if: false\n'), /allowed steps/],
   ['shell changed', swap(CI, '        shell: bash\n', '        shell: sh\n'), /allowed steps/],
   ['HOME removed', swap(CI, '          HOME: /root\n', '          LANG: C\n'), /allowed steps/],
   ['job env', swap(CI, '    timeout-minutes: 20\n', '    timeout-minutes: 20\n    env: { PLAYWRIGHT_BROWSERS_PATH: /tmp }\n'), /e2e-matrix keys/],
   ['job defaults', swap(CI, '    timeout-minutes: 20\n', '    timeout-minutes: 20\n    defaults: { run: { shell: "apt-get install -y x; bash {0}" } }\n'), /e2e-matrix keys/],
+  ['job strategy', swap(CI, '    timeout-minutes: 20\n', '    timeout-minutes: 20\n    strategy: { matrix: { x: [1] } }\n'), /e2e-matrix keys/],
+  ['job if', swap(CI, '    timeout-minutes: 20\n', '    timeout-minutes: 20\n    if: false\n'), /e2e-matrix keys/],
+  ['job continue-on-error', swap(CI, '    timeout-minutes: 20\n', '    timeout-minutes: 20\n    continue-on-error: true\n'), /e2e-matrix keys/],
   ['services', swap(CI, '    timeout-minutes: 20\n', '    timeout-minutes: 20\n    services: { x: { image: y } }\n'), /e2e-matrix keys/],
   ['workflow env', swap(CI, 'permissions:\n', 'env: { HOME: /tmp }\npermissions:\n'), /workflow has env/],
   ['workflow defaults', swap(CI, 'permissions:\n', 'defaults: { run: { shell: sh } }\npermissions:\n'), /workflow has defaults/],
   ['other runner', swap(CI, '    runs-on: ubuntu-24.04\n    timeout-minutes: 20\n', '    runs-on: ubuntu-22.04\n    timeout-minutes: 20\n'), /runner/],
-  ['third job installs browsers', swap(CI, '  ci-ok:\n', '  extra:\n    runs-on: u\n    steps: [{ run: "pnpm exec playwright install" }]\n  ci-ok:\n'), /job extra installs/],
+  ['third job', swap(CI, '  ci-ok:\n', '  extra:\n    runs-on: u\n    steps: [{ run: "pnpm exec playwright install" }]\n  ci-ok:\n'), /jobs: node,e2e-matrix,extra,ci-ok/],
+  ['node job changed', swap(CI, 'scripts: typecheck test build budget', 'scripts: typecheck test build budget e2e'), /job node is not/],
+  ['ci-ok: line continuation', okStep('run: |\n          pnpm exec playwright \\\n          install --with-deps'), /job ci-ok installs/],
+  ['ci-ok: quoted install', okStep(`run: playwright "install"`), /job ci-ok installs/],
+  ['ci-ok: quotes inside apt-get', okStep(`run: sudo ap''t-get install -y x`), /job ci-ok installs/],
+  ['ci-ok: shell runs the install', okStep(`{ shell: "npx playwright install; bash -e {0}", run: "true" }`), /job ci-ok has another shell/],
+  ['ci-ok: local action', okStep('uses: ./.github/actions/install-browsers'), /job ci-ok uses an action/],
+  ['ci-ok: defaults', swap(CI, '    permissions: {}\n', '    permissions: {}\n    defaults: { run: { shell: "apt-get install x; bash {0}" } }\n'), /job ci-ok has defaults/],
   ['image without digest', img('mcr.microsoft.com/playwright:v1.63.0-noble'), /not a pinned/],
   ['other digest', img(IMAGE.replace('eff16c', 'aff16c')), /digest is not the pinned/],
   ['digest in upper case', img(IMAGE.replace('eff16c', 'EFF16C')), /not a pinned/],
@@ -176,6 +207,7 @@ const otherCases: [string, string, string, RegExp][] = [
   ['two playwright-core versions', swap(LOCK, '  playwright-core@1.63.0:\n', '  playwright-core@1.62.0:\n    resolution: {}\n\n  playwright-core@1.63.0:\n'), PKG, /playwright-core versions/],
   ['second @playwright/test', swap(LOCK, pw, `  '@playwright/test@1.62.0':\n    resolution: {}\n\n${pw}`), PKG, /@playwright\/test versions/],
   ['pree2e installs browsers', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "pree2e": "playwright install",'), /script pree2e installs/],
+  ['pree2e with a line continuation', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "pree2e": "playwright \\\\\\ninstall",'), /script pree2e installs/],
   ['postinstall runs apt', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "postinstall": "apt-get update",'), /script postinstall installs/],
 ];
 for (const [name, lock, pkg, reason] of otherCases) {
@@ -183,6 +215,11 @@ for (const [name, lock, pkg, reason] of otherCases) {
     assert.match(problems(CI, lock, pkg).join('\n'), reason);
   });
 }
+
+test('e2e image check refuses: tag and lockfile on 1.64.0 with the 1.63.0 digest', () => {
+  const lock = LOCK.replaceAll('1.63.0', '1.64.0');
+  assert.match(problems(img(IMAGE.replace('1.63.0', '1.64.0')), lock, PKG).join('\n'), /not the pinned one for 1\.64\.0/);
+});
 
 test('ci.yml, the lockfile and package.json pass the e2e image check', () => {
   assert.deepEqual(problems(CI, LOCK, PKG), []);
@@ -208,10 +245,9 @@ test('e2e/fonts holds DejaVu Sans 2.37 with the pinned sha256 and SHA256SUMS', (
 });
 
 test('fonts are binary and SHA256SUMS keeps LF in every checkout', () => {
-  const attrs = execFileSync('git', ['check-attr', 'text', 'eol', '--', 'e2e/fonts/DejaVuSans.ttf', 'e2e/fonts/DejaVuSans-Bold.ttf', 'e2e/fonts/SHA256SUMS'], { encoding: 'utf8' });
-  assert.equal(attrs, [
-    'e2e/fonts/DejaVuSans.ttf: text: unset', 'e2e/fonts/DejaVuSans.ttf: eol: unspecified',
-    'e2e/fonts/DejaVuSans-Bold.ttf: text: unset', 'e2e/fonts/DejaVuSans-Bold.ttf: eol: unspecified',
-    'e2e/fonts/SHA256SUMS: text: set', 'e2e/fonts/SHA256SUMS: eol: lf', '',
-  ].join('\n'));
+  const files = ['e2e/fonts/DejaVuSans.ttf', 'e2e/fonts/DejaVuSans-Bold.ttf', 'e2e/fonts/SHA256SUMS'];
+  const attrs = execFileSync('git', ['check-attr', 'binary', 'diff', 'merge', 'text', 'eol', '--', ...files], { encoding: 'utf8' });
+  const font = (f: string): string[] => ['binary: set', 'diff: unset', 'merge: unset', 'text: unset', 'eol: unspecified'].map((a) => `${f}: ${a}`);
+  const sums = ['binary: unspecified', 'diff: unspecified', 'merge: unspecified', 'text: set', 'eol: lf'].map((a) => `e2e/fonts/SHA256SUMS: ${a}`);
+  assert.equal(attrs, [...font(files[0] ?? ''), ...font(files[1] ?? ''), ...sums, ''].join('\n'));
 });
