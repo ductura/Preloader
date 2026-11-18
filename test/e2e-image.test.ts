@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import { isScalar, parseDocument, visit } from 'yaml';
+import { isAlias, isScalar, parseDocument, visit } from 'yaml';
 
 type Obj = Record<string, unknown>;
 const isMap = (v: unknown): v is Obj =>
@@ -19,7 +19,7 @@ const own = (o: unknown, k: string): unknown => (isMap(o) && Object.hasOwn(o, k)
 
 // Strict reader: any YAML error or warning, a %YAML directive, an explicit
 // tag (`!env`, `!!int "5"`), a merge key `<<` (pnpm's reader would merge it),
-// a duplicate key or a second document fails. A number or boolean
+// an alias as a key, a duplicate key or a second document fails. A number or boolean
 // must be written as decimal digits without a leading zero, true or false:
 // 0x14, 020, +20 or FALSE fail.
 function parse(text: string): Obj {
@@ -33,6 +33,7 @@ function parse(text: string): Obj {
     },
     Pair(_, pair) {
       if (isScalar(pair.key) && pair.key.value === '<<') issues.push('merge key <<');
+      if (isAlias(pair.key)) issues.push('alias as a key');
     },
     Scalar(_, node) {
       if (node.tag !== undefined) issues.push(`explicit tag ${node.tag}`);
@@ -49,6 +50,16 @@ function parse(text: string): Obj {
 const DIGEST = 'eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27';
 // Index digest of each allowed tag: a new Playwright needs a new row here.
 const DIGESTS: Obj = { '1.63.0': DIGEST };
+// Registry integrity of each Playwright package per version: the resolution
+// must be exactly this, so no tarball, file, git or directory source can hide
+// another build under the 1.63.0 key. A new Playwright needs a new row here.
+const INTEGRITY: Obj = {
+  '1.63.0': {
+    '@playwright/test': 'sha512-oxMK4vllB9RK5NQ2l1pq1IfOf2AvnEuj/vYGDj0H2nMtmtZpKtCwt/l00GEO6xjGfpBNAvjovvYdCm50dRQkpQ==',
+    playwright: 'sha512-+7ziBLidS4NaNCdt57SUDT+wYmmd5fmiQejUic/kb+YsYSCPyOOE9sebzMjNmQrsnNpDJqd4WHvV/8lfKfUDUg==',
+    'playwright-core': 'sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==',
+  },
+};
 const FONTS: [string, string][] = [
   ['DejaVuSans.ttf', 'ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280'],
   ['DejaVuSans-Bold.ttf', '5c1247acef7f2b8522a31742c76d6adcb5569bacc0be7ceaa4dc39dd252ce895'],
@@ -139,6 +150,11 @@ function lockVersion(lock: unknown): string {
   for (const name of PW) {
     const found = packages.filter((k) => k.startsWith(`${name}@`)).map((k) => k.slice(name.length + 1));
     if (!isDeepStrictEqual(found, [v])) throw new Error(`lockfile ${name} versions ${found.join(',')} are not [${v}]`);
+    const pinned = own(own(INTEGRITY, v), name);
+    if (typeof pinned !== 'string') throw new Error(`no pinned integrity for Playwright ${v}`);
+    if (!isDeepStrictEqual(own(own(own(lock, 'packages'), `${name}@${v}`), 'resolution'), { integrity: pinned })) {
+      throw new Error(`lockfile resolution of ${name}@${v} is not the pinned integrity`);
+    }
   }
   const walk = (node: unknown, field: string): void => {
     if (typeof node === 'string') {
@@ -307,8 +323,14 @@ const cases: [string, (f: Files) => void, RegExp][] = [
   ['e2e script removed', (f) => void delete at(f.pkg, 'scripts')['e2e'], /script names: budget,build,test,typecheck\n.*e2e script is not/],
   ['typecheck script removed', (f) => void delete at(f.pkg, 'scripts')['typecheck'], /script names: budget,build,e2e,test$/],
   ['scripts missing', (f) => void delete f.pkg['scripts'], /scripts is not a mapping/],
-  ['lockfile on 1.64.0, image on 1.63.0', (f) => bumpLock(f, '1.64.0'), /no pinned image digest for Playwright 1\.64\.0\n.*container\.image is not/],
-  ['tag and lockfile on 1.64.0 with the 1.63.0 digest', (f) => (bumpLock(f, '1.64.0'), setImage(f, IMAGE.replace('1.63.0', '1.64.0'))), /no pinned image digest for Playwright 1\.64\.0/],
+  ['lockfile on 1.64.0, image on 1.63.0', (f) => bumpLock(f, '1.64.0'), /no pinned integrity for Playwright 1\.64\.0/],
+  ['tag and lockfile on 1.64.0 with the 1.63.0 digest', (f) => (bumpLock(f, '1.64.0'), setImage(f, IMAGE.replace('1.63.0', '1.64.0'))), /no pinned integrity for Playwright 1\.64\.0/],
+  ['playwright-core resolved from a tarball', (f) => void (at(f.lock, 'packages', 'playwright-core@1.63.0')['resolution'] = {
+    tarball: 'https://registry.npmjs.org/playwright-core/-/playwright-core-1.64.0.tgz',
+    integrity: 'sha512-AAAA',
+  }), /resolution of playwright-core@1\.63\.0 is not the pinned integrity/],
+  ['playwright with another integrity', (f) => void (at(f.lock, 'packages', 'playwright@1.63.0', 'resolution')['integrity'] = 'sha512-AAAA'), /resolution of playwright@1\.63\.0 is not/],
+  ['@playwright/test resolution gets a key', (f) => void (at(f.lock, 'packages', '@playwright/test@1.63.0', 'resolution')['directory'] = '../x'), /resolution of @playwright\/test@1\.63\.0 is not/],
   ['lockfile without @playwright/test', (f) => void delete at(f.lock, 'importers', '.', 'devDependencies')['@playwright/test'], /no @playwright\/test version/],
   ['two playwright-core versions', (f) => void (at(f.lock, 'packages')['playwright-core@1.62.0'] = {}), /playwright-core versions/],
   ['second @playwright/test', (f) => void (at(f.lock, 'packages')['@playwright/test@1.62.0'] = {}), /@playwright\/test versions/],
@@ -359,6 +381,7 @@ const IMAGE_LINE = `      image: ${IMAGE}\n`;
 test.each([
   ['duplicate container key', swap(IMAGE_LINE, `${IMAGE_LINE}    container: { image: x }\n`), /Map keys must be unique/],
   ['unknown tag', swap('    timeout-minutes: 20\n', '    timeout-minutes: !env 20\n'), /Unresolved tag/],
+  ['alias as a key', swap('    timeout-minutes: 20\n', '    timeout-minutes: &k 20\n    *k : x\n'), /alias as a key/],
   ['tagged quoted number', swap('    timeout-minutes: 5\n', '    timeout-minutes: !!int "5"\n'), /explicit tag tag:yaml\.org,2002:int/],
   ['merge key with the allowed value', swap(IMAGE_LINE, `      <<: *img\n`).replace('permissions:\n', `x-img: &img { image: ${IMAGE} }\npermissions:\n`), /merge key <</],
   ['YAML 1.1 directive', `%YAML 1.1\n---\n${CI_LF}`, /%YAML 1\.1 directive/],
