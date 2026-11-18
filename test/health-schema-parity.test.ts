@@ -25,10 +25,14 @@ const FORMATS: Record<string, { re: RegExp; samples: string[] }> = {
   'date-time': { re: /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)$/, samples: ['2026-01-02T03:04:05Z', '2026-01-02 03:04:05Z'] },
 };
 const SEMVER = '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$';
+/** Znakovi koji nisu ASCII znamenka: slovo, `_`, znakovi oko brojeva, razmak, Unicode i puna širina, eksponent. */
+const NON_DIGITS = ['a', 'x', 'Z', '_', '-', '+', ' ', '/', ':', '\u0663', '\uff12', '\u00b2'];
 /** Oblici jedne komponente verzije: svaka znamenka na prvom i drugom mjestu, duljine 1–3, 9, 10, 20 i 40, vodeća
- *  nula, Unicode znamenka i neznamenke. Tako sužen skup znamenki, duljina komponente ili ukupna duljina ruši paritet. */
+ *  nula i neznamenka ispred, iza i unutar znamenki. Tako svako sužavanje ili proširenje skupa znakova komponente,
+ *  njezine duljine ili ukupne duljine ruši paritet. */
 const PARTS = [...'0123456789', ...[...'0123456789'].map((d) => `1${d}`), ...[...'123456789'].map((d) => d + d), '100', '999',
-  '123456789', '1234567890', '98765432109876543210', '9'.repeat(40), '00', '01', '007', '\u0663', '1\u0663', '', 'a', '-1', '+1'];
+  '123456789', '1234567890', '98765432109876543210', '9'.repeat(40), '00', '01', '007', '',
+  ...NON_DIGITS.flatMap((c) => [c, `${c}2`, `2${c}`, `1${c}2`])];
 /** Vektori po komponentama: svaka komponenta dobiva svaki oblik, ostale ostaju valjane (DAN-934-3). */
 const SEMVER_VECTORS = [0, 1, 2].flatMap((i) => PARTS.map((p) => ['1', '2', '3'].map((c, j) => (j === i ? p : c)).join('.')));
 /** Uzorci koje generator zna, s vektorima uz svaku granicu uzorka. Drugi uzorak ruši test. */
