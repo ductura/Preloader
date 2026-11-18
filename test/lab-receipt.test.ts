@@ -212,6 +212,8 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
   ['a key id that is a number', label('keyId', 5 as unknown as string), trust, expected, SHAPE],
   ['an algorithm in an array', at((r) => { r.signedReceipt.signature['algorithm'] = ['Ed25519']; }), trust, expected, SHAPE],
   ['a digest that is a number', at((r) => { (r.signedReceipt as Record<string, unknown>)['payloadDigestSha256'] = 1; }), trust, expected, SHAPE],
+  // QA c.6990111182: every signature field that is no text, one row each.
+  ...['algorithm', 'keyId', 'keyVersion', 'signatureEncoding', 'signatureBase64Url'].map((k): [string, unknown, ReceiptTrust, unknown, string] => [`a signature ${k} that is a number`, at((r) => { r.signedReceipt.signature[k] = 7; }), trust, expected, SHAPE]),
   ['a Date envelope with the receipt fields', Object.assign(new Date(0), vector()), trust, expected, NOT_SIGNED],
   ...Object.keys(p).map((k): [string, unknown, ReceiptTrust, unknown, string] => [`payload ${k} of the wrong type`, at((r) => { r.signedReceipt.payload[k] = false; }), trust, expected, `${SHAPE} (${k})`]),
   ...Object.keys(p).map((k): [string, unknown, ReceiptTrust, unknown, string] => [`payload ${k} of the right type, refused`, signed({ [k]: REFUSED[k] }), trust, expected, `${SHAPE} (${k})`]),
