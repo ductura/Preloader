@@ -1,23 +1,38 @@
 // DAN-1097-2: e2e-matrix runs in the official Playwright image pinned by digest,
-// with no apt and no `playwright install`. The image lacks DejaVu Sans, so the
-// fonts the DAN-1076 baselines were made with come from e2e/fonts. The job is
-// an allowlist: every step must equal the expected one, in order.
+// with the DejaVu fonts the DAN-1076 baselines were made with from e2e/fonts.
+// ci.yml and the package.json scripts are an allowlist: the parsed workflow
+// must equal ALLOWED key for key and step for step, and the script names must
+// be exactly SCRIPT_NAMES with the e2e script as its exact text. Anything else
+// (a job, a key such as env or defaults, a step, a changed run) fails.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import { parseDocument } from 'yaml';
+import { parseDocument, visit } from 'yaml';
 
 type Obj = Record<string, unknown>;
-const isMap = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isMap = (v: unknown): v is Obj =>
+  typeof v === 'object' && v !== null && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
 const own = (o: unknown, k: string): unknown => (isMap(o) && Object.hasOwn(o, k) ? o[k] : undefined);
 
-// Same reader as test/ci-ok.test.ts: any YAML error or duplicate key fails.
+// Strict reader: any YAML error or warning (an unknown tag), a %YAML
+// directive, a duplicate key or a second document fails. A merge key `<<`
+// stays a plain key, so it is refused as an extra key. A number or boolean
+// must be written as decimal digits without a leading zero, true or false:
+// 0x14, 020, +20 or FALSE fail.
 function parse(text: string): Obj {
-  const doc = parseDocument(text, { uniqueKeys: true, merge: true });
-  if (doc.errors.length > 0) throw new Error(doc.errors.map((e) => e.message).join('; '));
+  const doc = parseDocument(text, { uniqueKeys: true, merge: false });
+  const issues = [...doc.errors, ...doc.warnings].map((e) => e.message);
+  if (doc.directives?.yaml.explicit) issues.push(`%YAML ${doc.directives.yaml.version} directive`);
+  visit(doc, {
+    Scalar(_, node) {
+      const plain = typeof node.value === 'number' || typeof node.value === 'boolean';
+      if (plain && !/^(?:0|[1-9]\d*|true|false)$/.test(node.source ?? '')) issues.push(`scalar ${node.source} is not plain`);
+    },
+  });
+  if (issues.length > 0) throw new Error(issues.join('; '));
   const value: unknown = doc.toJS({ maxAliasCount: 100 });
   if (!isMap(value)) throw new Error('document is not a mapping');
   return value;
@@ -26,16 +41,12 @@ function parse(text: string): Obj {
 const DIGEST = 'eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27';
 // Index digest of each allowed tag: a new Playwright needs a new row here.
 const DIGESTS: Obj = { '1.63.0': DIGEST };
-const NODE_JOB = {
-  uses: 'ductura/.github/.github/workflows/ci-node.yml@98f62800577910b24451809d40c247ee1f04c7c1',
-  with: { scripts: 'typecheck test build budget' },
-};
 const FONTS: [string, string][] = [
   ['DejaVuSans.ttf', 'ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280'],
   ['DejaVuSans-Bold.ttf', '5c1247acef7f2b8522a31742c76d6adcb5569bacc0be7ceaa4dc39dd252ce895'],
 ];
 const SUMS = FONTS.map(([file, hash]) => `${hash}  ${file}\n`).join('');
-const FONT_SCRIPT = `set -euo pipefail
+const FONT_SCRIPT = String.raw`set -euo pipefail
 test "$(node -p 'process.versions.node.split(".")[0]')" = 24
 cd e2e/fonts
 sha256sum --strict --check SHA256SUMS
@@ -46,33 +57,71 @@ for q in sans-serif system-ui sans-serif:lang=hr; do
 done
 test "$(fc-match -f '%{family[0]}|%{style[0]}' sans-serif:bold)" = 'DejaVu Sans|Bold'
 `;
-const STEPS: Obj[] = [
-  { uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1', with: { 'persist-credentials': false } },
-  { uses: 'pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413' },
-  { run: 'pnpm install --frozen-lockfile' },
-  { name: 'Install DejaVu fonts from the repo', shell: 'bash', run: FONT_SCRIPT },
-  { run: 'pnpm e2e', env: { HOME: '/root' } },
-  {
-    if: 'failure()',
-    uses: 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9',
-    with: { name: 'e2e-matrix-report', path: 'playwright-report/', 'retention-days': 7 },
+const CI_OK_SCRIPT = String.raw`# ci-ok:begin
+set -euo pipefail
+if ! jq -e 'type == "object" and length > 0' >/dev/null 2>&1 <<< "$NEEDS"; then
+  echo "::error::needs must be a non-empty JSON object"
+  exit 1
+fi
+problems="$(jq -r 'to_entries[] | ((.value | objects | .result) // "missing") as $r
+  | select($r != "success") | "job \(.key) result: \($r)"' <<< "$NEEDS")"
+if [ -n "$problems" ]; then
+  while IFS= read -r line; do echo "::error::$line"; done <<< "$problems"
+  exit 1
+fi
+echo "ci-ok: $(jq length <<< "$NEEDS") job(s) passed"
+# ci-ok:end
+`;
+const imageOf = (version: string): string => `mcr.microsoft.com/playwright:v${version}-noble@sha256:${String(own(DIGESTS, version))}`;
+
+// The whole of ci.yml as it may be, for the Playwright version of the lockfile.
+const allowed = (version: string): Obj => ({
+  name: 'CI',
+  on: { push: { branches: ['main'] }, pull_request: null },
+  permissions: { contents: 'read' },
+  jobs: {
+    node: {
+      uses: 'ductura/.github/.github/workflows/ci-node.yml@98f62800577910b24451809d40c247ee1f04c7c1',
+      with: { scripts: 'typecheck test build budget' },
+    },
+    'e2e-matrix': {
+      'runs-on': 'ubuntu-24.04',
+      'timeout-minutes': 20,
+      container: { image: imageOf(version) },
+      steps: [
+        { uses: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1', with: { 'persist-credentials': false } },
+        { uses: 'pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413' },
+        { run: 'pnpm install --frozen-lockfile' },
+        { name: 'Install DejaVu fonts from the repo', shell: 'bash', run: FONT_SCRIPT },
+        { run: 'pnpm e2e', env: { HOME: '/root' } },
+        {
+          if: 'failure()',
+          uses: 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9',
+          with: { name: 'e2e-matrix-report', path: 'playwright-report/', 'retention-days': 7 },
+        },
+      ],
+    },
+    'ci-ok': {
+      name: 'ci-ok',
+      if: '${{ always() }}',
+      needs: ['node', 'e2e-matrix'],
+      'runs-on': 'ubuntu-latest',
+      'timeout-minutes': 5,
+      permissions: {},
+      steps: [
+        { name: 'Every needed job succeeded', shell: 'bash', env: { NEEDS: '${{ toJSON(needs) }}' }, run: CI_OK_SCRIPT },
+      ],
+    },
   },
-];
-const FORBIDDEN = /(?<![\w-])(?:apt|apt-get|aptitude|dpkg|dpkg-deb)(?![\w-])|playwright\S*\s+install/;
-// pnpm runs these around install and e2e on its own; `e2e` itself is pinned.
-const LIFECYCLE = /^(?:pre|post)(?:install|e2e)$|^(?:install|prepare|prepublish)$/;
+});
+const SCRIPT_NAMES = ['budget', 'build', 'e2e', 'test', 'typecheck'];
 const E2E_SCRIPT = 'node scripts/build.ts && playwright test -c e2e/matrix/playwright.config.ts';
-// Shell text as the shell joins it: a line continuation (backslash and line
-// end) disappears, as do quotes and backslashes, so that `ap''t-get`,
-// `playwright "install"` and `play\<newline>wright install` are caught.
-const installs = (s: unknown): boolean =>
-  typeof s !== 'string' || FORBIDDEN.test(s.replace(/\\\r?\n/g, '').replace(/['"\\]/g, ''));
 
 // The one version of @playwright/test, playwright and playwright-core in the lockfile.
-function lockVersion(lock: Obj): string {
-  const v = own(own(own(own(lock['importers'], '.'), 'devDependencies'), '@playwright/test'), 'version');
+function lockVersion(lock: unknown): string {
+  const v = own(own(own(own(own(lock, 'importers'), '.'), 'devDependencies'), '@playwright/test'), 'version');
   if (typeof v !== 'string' || !/^\d+\.\d+\.\d+$/.test(v)) throw new Error('lockfile has no @playwright/test version');
-  const packages = isMap(lock['packages']) ? Object.keys(lock['packages']) : [];
+  const packages = isMap(own(lock, 'packages')) ? Object.keys(own(lock, 'packages') as Obj) : [];
   for (const name of ['@playwright/test', 'playwright', 'playwright-core']) {
     const found = packages.filter((k) => k.startsWith(`${name}@`)).map((k) => k.slice(name.length + 1));
     if (!isDeepStrictEqual(found, [v])) throw new Error(`lockfile ${name} versions ${found.join(',')} are not [${v}]`);
@@ -80,171 +129,211 @@ function lockVersion(lock: Obj): string {
   return v;
 }
 
-// Problems of ci.yml against the lockfile and package.json; empty when all is right.
-function problems(ciText: string, lockText: string, pkgText: string): string[] {
-  const out: string[] = [];
-  let wf: Obj, version: string, scripts: unknown;
+const keysOf = (o: Obj): string => Object.keys(o).sort().join(',');
+// Mappings are compared key set by key set, so a problem names its path; any
+// other value (a list of steps, a run text) must be deeply equal.
+function compare(path: string, actual: unknown, expected: unknown, out: string[]): void {
+  if (!isMap(expected)) {
+    if (!isDeepStrictEqual(actual, expected)) out.push(`${path} is not the allowed value`);
+    return;
+  }
+  if (!isMap(actual)) return void out.push(`${path} is not a mapping`);
+  if (keysOf(actual) !== keysOf(expected)) out.push(`${path} keys: ${keysOf(actual)}`);
+  for (const key of Object.keys(expected)) if (Object.hasOwn(actual, key)) compare(`${path}.${key}`, actual[key], expected[key], out);
+}
+
+// Problems of the parsed ci.yml, lockfile and package.json; empty when all is right.
+function problems(wf: unknown, lock: unknown, pkg: unknown): string[] {
+  let version: string;
   try {
-    wf = parse(ciText);
-    version = lockVersion(parse(lockText));
-    scripts = (JSON.parse(pkgText) as Obj)['scripts'];
+    version = lockVersion(lock);
   } catch (e) {
-    return [`unreadable: ${(e as Error).message}`];
+    return [(e as Error).message];
   }
-  for (const key of ['env', 'defaults']) if (Object.hasOwn(wf, key)) out.push(`workflow has ${key}`);
-  const jobs = isMap(wf['jobs']) ? wf['jobs'] : {};
-  if (!isDeepStrictEqual(Object.keys(jobs), ['node', 'e2e-matrix', 'ci-ok'])) out.push(`jobs: ${Object.keys(jobs).join(',')}`);
-  if (!isDeepStrictEqual(own(jobs, 'node'), NODE_JOB)) out.push('job node is not the ci-node.yml call');
-  for (const [name, job] of Object.entries(jobs)) {
-    if (own(job, 'defaults') !== undefined) out.push(`job ${name} has defaults`);
-    const steps: unknown[] = Array.isArray(own(job, 'steps')) ? (own(job, 'steps') as unknown[]) : [];
-    for (const step of steps) {
-      if (name !== 'e2e-matrix' && own(step, 'uses') !== undefined) out.push(`job ${name} uses an action`);
-      if (![undefined, 'bash'].includes(own(step, 'shell') as string)) out.push(`job ${name} has another shell`);
-      if (own(step, 'run') !== undefined && installs(own(step, 'run'))) out.push(`job ${name} installs packages or browsers`);
-    }
-  }
-  for (const [name, s] of Object.entries(isMap(scripts) ? scripts : {})) {
-    if (installs(s)) out.push(`package.json script ${name} installs packages or browsers`);
-    if (LIFECYCLE.test(name)) out.push(`package.json has lifecycle script ${name}`);
-  }
-  if (own(scripts, 'e2e') !== E2E_SCRIPT) out.push('package.json e2e script changed');
-  const job = own(jobs, 'e2e-matrix');
-  if (!isMap(job)) return [...out, 'no e2e-matrix job'];
-  if (!isDeepStrictEqual(Object.keys(job).sort(), ['container', 'runs-on', 'steps', 'timeout-minutes'])) {
-    out.push(`e2e-matrix keys: ${Object.keys(job).join(',')}`);
-  }
-  if (job['runs-on'] !== 'ubuntu-24.04' || job['timeout-minutes'] !== 20) out.push('runner or timeout changed');
-  const container = job['container'];
-  if (!isMap(container) || !isDeepStrictEqual(Object.keys(container), ['image'])) out.push('container is not { image }');
-  const image = own(container, 'image');
-  const m = typeof image === 'string' ? /^mcr\.microsoft\.com\/playwright:v(\d+\.\d+\.\d+)-noble@sha256:([0-9a-f]{64})$/.exec(image) : null;
-  if (!m) out.push(`image is not a pinned noble Playwright image: ${JSON.stringify(image)}`);
-  else if (m[1] !== version) out.push(`image ${m[1]} is not lockfile ${version}`);
-  else if (own(DIGESTS, m[1]) !== m[2]) out.push(`image digest is not the pinned one for ${m[1]}`);
-  const steps = Array.isArray(job['steps']) ? job['steps'] : [];
-  if (!isDeepStrictEqual(steps, STEPS)) out.push('e2e-matrix steps are not the allowed steps');
+  const out: string[] = [];
+  if (typeof own(DIGESTS, version) !== 'string') out.push(`no pinned image digest for Playwright ${version}`);
+  compare('workflow', wf, allowed(version), out);
+  const scripts = own(pkg, 'scripts');
+  if (!isMap(scripts)) return [...out, 'package.json scripts is not a mapping'];
+  if (keysOf(scripts) !== SCRIPT_NAMES.join(',')) out.push(`package.json script names: ${keysOf(scripts)}`);
+  if (own(scripts, 'e2e') !== E2E_SCRIPT) out.push('package.json e2e script is not the allowed text');
   return out;
 }
 
-// Read as LF: a Windows checkout (core.autocrlf=true) has CRLF, and the
-// fixtures below edit the text by LF lines. The CRLF case is tested below.
-const lf = (path: string): string => readFileSync(new URL(path, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
-const CI = lf('../.github/workflows/ci.yml');
-const LOCK = lf('../pnpm-lock.yaml');
-const PKG = lf('../package.json');
-const IMAGE = `mcr.microsoft.com/playwright:v1.63.0-noble@sha256:${DIGEST}`;
-const swap = (text: string, from: string, to: string): string => {
-  assert.ok(text.includes(from), `fixture has ${JSON.stringify(from)}`);
-  return text.replace(from, to);
+const read = (path: string): string => readFileSync(new URL(path, import.meta.url), 'utf8');
+const CI_TEXT = read('../.github/workflows/ci.yml');
+const LOCK_TEXT = read('../pnpm-lock.yaml');
+const PKG_TEXT = read('../package.json');
+const WF = parse(CI_TEXT);
+const LOCK = parse(LOCK_TEXT);
+const PKG = JSON.parse(PKG_TEXT) as Obj;
+
+// Each negative case edits a deep copy of the parsed files, never their text.
+type Files = { wf: Obj; lock: Obj; pkg: Obj };
+const at = (o: unknown, ...path: (string | number)[]): Obj =>
+  path.reduce<Obj>((cur, k) => (cur as Record<string | number, unknown>)[k] as Obj, o as Obj);
+// An own enumerable key, as a parser makes it: `o.__proto__ = v` would set the prototype instead.
+const put = (o: Obj, key: string, value: unknown): void => {
+  Object.defineProperty(o, key, { value, enumerable: true, writable: true, configurable: true });
+  assert.ok(Object.hasOwn(o, key));
 };
-const img = (to: string): string => swap(CI, `image: ${IMAGE}`, `image: ${to}`);
-const E2E = '      - run: pnpm e2e\n';
-const before = (step: string): string => swap(CI, E2E, `${step}${E2E}`);
-const okStep = (step: string): string => swap(CI, '    steps:\n      - name: Every needed job succeeded\n', `    steps:\n      - ${step}\n      - name: Every needed job succeeded\n`);
-const FONT_TEST = "test \"$(fc-match -f '%{family[0]}|%{style[0]}' sans-serif:bold)\" = 'DejaVu Sans|Bold'";
+const job = (f: Files, name: string): Obj => at(f.wf, 'jobs', name);
+const steps = (f: Files, name: string): Obj[] => job(f, name)['steps'] as Obj[];
+const setImage = (f: Files, image: string): void => void (at(job(f, 'e2e-matrix'), 'container')['image'] = image);
+const IMAGE = imageOf('1.63.0');
+const bumpLock = (lock: Obj, to: string): void => {
+  at(lock, 'importers', '.', 'devDependencies', '@playwright/test')['version'] = to;
+  const packages = at(lock, 'packages');
+  for (const key of Object.keys(packages)) {
+    if (/^(?:@playwright\/test|playwright|playwright-core)@1\.63\.0$/.test(key)) {
+      packages[key.replace('1.63.0', to)] = packages[key];
+      delete packages[key];
+    }
+  }
+};
 
-const ciCases: [string, string, RegExp][] = [
-  ['playwright install is back', before('      - run: pnpm exec playwright install --with-deps chromium firefox webkit\n'), /installs/],
-  ['playwright install-deps', before('      - run: npx playwright install-deps\n'), /installs/],
-  ['pinned playwright install', before('      - run: npx playwright@1.63.0 install\n'), /installs/],
-  ['apt-get install', before('      - run: apt-get install -y fonts-dejavu-core\n'), /installs/],
-  ['sudo apt update', before('      - run: sudo apt update\n'), /installs/],
-  ['dpkg -i', before('      - run: dpkg -i x.deb\n'), /installs/],
-  ['setup-node is back', before('      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1\n'), /allowed steps/],
-  ['pnpm dlx playwright install', before('      - run: pnpm dlx playwright install\n'), /installs/],
-  ['harmless extra step', before('      - run: echo Adapt\n'), /^e2e-matrix steps are not the allowed steps$/],
-  ['dpkg-deb', before('      - run: dpkg-deb -x x.deb /\n'), /installs/],
-  ['|| true on the font check', swap(CI, FONT_TEST, `${FONT_TEST} || true`), /allowed steps/],
-  ['continue-on-error on e2e', swap(CI, E2E, `${E2E}        continue-on-error: true\n`), /allowed steps/],
-  ['continue-on-error on the font step', swap(CI, '        shell: bash\n', '        shell: bash\n        continue-on-error: true\n'), /allowed steps/],
-  ['if on e2e', swap(CI, E2E, `${E2E}        if: false\n`), /allowed steps/],
-  ['if on the font step', swap(CI, '        shell: bash\n', '        shell: bash\n        if: false\n'), /allowed steps/],
-  ['shell changed', swap(CI, '        shell: bash\n', '        shell: sh\n'), /allowed steps/],
-  ['HOME removed', swap(CI, '          HOME: /root\n', '          LANG: C\n'), /allowed steps/],
-  ['job env', swap(CI, '    timeout-minutes: 20\n', '    timeout-minutes: 20\n    env: { PLAYWRIGHT_BROWSERS_PATH: /tmp }\n'), /e2e-matrix keys/],
-  ['job defaults', swap(CI, '    timeout-minutes: 20\n', '    timeout-minutes: 20\n    defaults: { run: { shell: "apt-get install -y x; bash {0}" } }\n'), /e2e-matrix keys/],
-  ['job strategy', swap(CI, '    timeout-minutes: 20\n', '    timeout-minutes: 20\n    strategy: { matrix: { x: [1] } }\n'), /e2e-matrix keys/],
-  ['job if', swap(CI, '    timeout-minutes: 20\n', '    timeout-minutes: 20\n    if: false\n'), /e2e-matrix keys/],
-  ['job continue-on-error', swap(CI, '    timeout-minutes: 20\n', '    timeout-minutes: 20\n    continue-on-error: true\n'), /e2e-matrix keys/],
-  ['services', swap(CI, '    timeout-minutes: 20\n', '    timeout-minutes: 20\n    services: { x: { image: y } }\n'), /e2e-matrix keys/],
-  ['workflow env', swap(CI, 'permissions:\n', 'env: { HOME: /tmp }\npermissions:\n'), /workflow has env/],
-  ['workflow defaults', swap(CI, 'permissions:\n', 'defaults: { run: { shell: sh } }\npermissions:\n'), /workflow has defaults/],
-  ['other runner', swap(CI, '    runs-on: ubuntu-24.04\n    timeout-minutes: 20\n', '    runs-on: ubuntu-22.04\n    timeout-minutes: 20\n'), /runner/],
-  ['third job', swap(CI, '  ci-ok:\n', '  extra:\n    runs-on: u\n    steps: [{ run: "pnpm exec playwright install" }]\n  ci-ok:\n'), /jobs: node,e2e-matrix,extra,ci-ok/],
-  ['node job changed', swap(CI, 'scripts: typecheck test build budget', 'scripts: typecheck test build budget e2e'), /job node is not/],
-  ['ci-ok: line continuation', okStep('run: |\n          pnpm exec playwright \\\n          install --with-deps'), /job ci-ok installs/],
-  ['ci-ok: continuation inside a word', okStep('run: |\n          pnpm exec play\\\n          wright install'), /job ci-ok installs/],
-  ['ci-ok: continuation inside apt-get', okStep('run: |\n          sudo ap\\\n          t-get install -y x'), /job ci-ok installs/],
-  ['ci-ok: CRLF continuation inside a word', okStep('run: "pnpm exec play\\\\\\r\\nwright install"'), /job ci-ok installs/],
-  ['ci-ok: quoted install', okStep(`run: playwright "install"`), /job ci-ok installs/],
-  ['ci-ok: quotes inside apt-get', okStep(`run: sudo ap''t-get install -y x`), /job ci-ok installs/],
-  ['ci-ok: shell runs the install', okStep(`{ shell: "npx playwright install; bash -e {0}", run: "true" }`), /job ci-ok has another shell/],
-  ['ci-ok: local action', okStep('uses: ./.github/actions/install-browsers'), /job ci-ok uses an action/],
-  ['ci-ok: defaults', swap(CI, '    permissions: {}\n', '    permissions: {}\n    defaults: { run: { shell: "apt-get install x; bash {0}" } }\n'), /job ci-ok has defaults/],
-  ['image without digest', img('mcr.microsoft.com/playwright:v1.63.0-noble'), /not a pinned/],
-  ['other digest', img(IMAGE.replace('eff16c', 'aff16c')), /digest is not the pinned/],
-  ['digest in upper case', img(IMAGE.replace('eff16c', 'EFF16C')), /not a pinned/],
-  ['digest of 63 characters', img(IMAGE.slice(0, -1)), /not a pinned/],
-  ['two digests', img(`${IMAGE}@sha256:${DIGEST}`), /not a pinned/],
-  ['other registry', img(IMAGE.replace('mcr.microsoft.com', 'docker.io')), /not a pinned/],
-  ['jammy', img(IMAGE.replace('noble', 'jammy')), /not a pinned/],
-  ['older image', img(IMAGE.replace('1.63.0', '1.62.0')), /not lockfile 1\.63\.0/],
-  ['expression', img('"${{ vars.IMAGE }}"'), /not a pinned/],
-  ['CRLF', img(`"${IMAGE}\\r\\n"`), /not a pinned/],
-  ['tab', img(`"${IMAGE}\\t"`), /not a pinned/],
-  ['NBSP', img(`"${IMAGE}\u00a0"`), /not a pinned/],
-  ['DEL', img(`"${IMAGE}\u007f"`), /not a pinned/],
-  ['leading space', img(`" ${IMAGE}"`), /not a pinned/],
-  ['container is a string', swap(CI, `    container:\n      image: ${IMAGE}\n`, `    container: ${IMAGE}\n`), /container is not/],
-  ['no container', swap(CI, `    container:\n      image: ${IMAGE}\n`, ''), /e2e-matrix keys/],
-  ['container options', img(`${IMAGE}\n      options: --user 1001`), /container is not/],
-  ['container credentials', img(`${IMAGE}\n      credentials: { username: x }`), /container is not/],
-  ['container volumes', img(`${IMAGE}\n      volumes: [/a:/b]`), /container is not/],
-  ['container env', img(`${IMAGE}\n      env: { HOME: /tmp }`), /container is not/],
-  ['merge key adds options', swap(img(`${IMAGE}\n      <<: *opts`), 'permissions:\n', 'x-opts: &opts { options: --privileged }\npermissions:\n'), /container is not/],
-  ['duplicate container key', img(`${IMAGE}\n    container: { image: x }`), /unreadable/],
-  ['__proto__ key', img(`${IMAGE}\n      __proto__: { options: x }`), /container is not/],
-  ['toString key', img(`${IMAGE}\n      toString: x`), /container is not/],
+const JOBS = ['node', 'e2e-matrix', 'ci-ok'];
+const JOB_KEYS: [string, unknown][] = [
+  ['env', { CI: 'true' }],
+  ['defaults', { run: { shell: 'sh' } }],
+  ['services', { x: { image: 'y' } }],
+  ['container', { image: 'x' }],
+  ['strategy', { matrix: { x: [1] } }],
+  ['if', 'false'],
+  ['continue-on-error', true],
+  ['Env', { CI: 'true' }],
+  ['__proto__', { env: { CI: 'true' } }],
+  ['toString', 'x'],
 ];
-for (const [name, ci, reason] of ciCases) {
-  test(`e2e image check refuses: ${name}`, () => {
-    assert.match(problems(ci, LOCK, PKG).join('\n'), reason);
+const INSTALL = 'pnpm exec playwright </dev/null install';
+const cases: [string, (f: Files) => void, RegExp][] = [
+  ...JOBS.flatMap((name) =>
+    JOB_KEYS.filter(([key]) => !Object.hasOwn(at(WF, 'jobs', name), key)).map(
+      ([key, value]): [string, (f: Files) => void, RegExp] => [
+        `job ${name} gets ${key}`,
+        (f) => put(job(f, name), key, value),
+        new RegExp(`^workflow\\.jobs\\.${name} keys: `, 'm'),
+      ],
+    ),
+  ),
+  ...['e2e-matrix', 'ci-ok'].flatMap((name): [string, (f: Files) => void, RegExp][] => {
+    const why = new RegExp(`^workflow\\.jobs\\.${name}\\.steps is not the allowed value$`);
+    return [
+      [`${name}: added run step first`, (f) => void steps(f, name).unshift({ run: INSTALL }), why],
+      [`${name}: added run step last`, (f) => void steps(f, name).push({ run: INSTALL }), why],
+      [`${name}: added uses step`, (f) => void steps(f, name).push({ uses: 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020' }), why],
+      [`${name}: step removed`, (f) => void steps(f, name).pop(), why],
+      [`${name}: run text gets || true`, (f) => void (steps(f, name).find((s) => s['shell'])!['run'] += ' || true\n'), why],
+      [`${name}: run text gets a line continuation`, (f) => void (steps(f, name).find((s) => s['shell'])!['run'] += 'play\\\nwright install\n'), why],
+      [`${name}: run text with CRLF`, (f) => void (steps(f, name).find((s) => s['shell'])!['run'] = String(steps(f, name).find((s) => s['shell'])!['run']).replaceAll('\n', '\r\n')), why],
+      [`${name}: shell changed`, (f) => void (steps(f, name).find((s) => s['shell'])!['shell'] = 'sh'), why],
+      [`${name}: step env added`, (f) => void (steps(f, name)[0]!['env'] = { PLAYWRIGHT_BROWSERS_PATH: '/tmp' }), why],
+      [`${name}: step if added`, (f) => void (steps(f, name).find((s) => s['shell'])!['if'] = 'false'), why],
+      [`${name}: step continue-on-error`, (f) => void (steps(f, name).find((s) => s['shell'])!['continue-on-error'] = true), why],
+      [`${name}: step working-directory`, (f) => void (steps(f, name)[0]!['working-directory'] = '/'), why],
+    ];
+  }),
+  ['e2e-matrix: steps reordered', (f) => void steps(f, 'e2e-matrix').reverse(), /e2e-matrix\.steps is not/],
+  ['e2e-matrix: HOME changed', (f) => void (steps(f, 'e2e-matrix')[4]!['env'] = { HOME: '/tmp' }), /e2e-matrix\.steps is not/],
+  ['e2e-matrix: action pin changed', (f) => void (steps(f, 'e2e-matrix')[1]!['uses'] = 'pnpm/action-setup@v6'), /e2e-matrix\.steps is not/],
+  ['e2e-matrix: runner changed', (f) => void (job(f, 'e2e-matrix')['runs-on'] = 'ubuntu-22.04'), /e2e-matrix\.runs-on is not/],
+  ['e2e-matrix: timeout as text', (f) => void (job(f, 'e2e-matrix')['timeout-minutes'] = '20'), /e2e-matrix\.timeout-minutes is not/],
+  ['ci-ok: needs without e2e-matrix', (f) => void (job(f, 'ci-ok')['needs'] = ['node']), /ci-ok\.needs is not/],
+  ['ci-ok: if changed', (f) => void (job(f, 'ci-ok')['if'] = 'success()'), /ci-ok\.if is not/],
+  ['ci-ok: permissions widened', (f) => void (job(f, 'ci-ok')['permissions'] = { contents: 'write' }), /ci-ok\.permissions keys/],
+  ['node: pin changed', (f) => void (job(f, 'node')['uses'] = 'ductura/.github/.github/workflows/ci-node.yml@main'), /node\.uses is not/],
+  ['node: scripts changed', (f) => void (at(job(f, 'node'), 'with')['scripts'] = 'typecheck test build budget e2e'), /node\.with\.scripts is not/],
+  ['job added', (f) => void (at(f.wf, 'jobs')['extra'] = { 'runs-on': 'u', steps: [{ run: INSTALL }] }), /^workflow\.jobs keys: ci-ok,e2e-matrix,extra,node$/m],
+  ['job removed', (f) => void delete at(f.wf, 'jobs')['node'], /^workflow\.jobs keys: ci-ok,e2e-matrix$/m],
+  ['jobs is a list', (f) => void (f.wf['jobs'] = []), /workflow\.jobs is not a mapping/],
+  ['workflow env', (f) => void (f.wf['env'] = { HOME: '/tmp' }), /^workflow keys: /m],
+  ['workflow defaults', (f) => void (f.wf['defaults'] = { run: { shell: 'sh' } }), /^workflow keys: /m],
+  ['workflow concurrency', (f) => void (f.wf['concurrency'] = 'x'), /^workflow keys: /m],
+  ['on read as true', (f) => void ((f.wf['true'] = f.wf['on']), delete f.wf['on']), /^workflow keys: /m],
+  ['workflow __proto__', (f) => put(f.wf, '__proto__', { env: {} }), /^workflow keys: /m],
+  ['on gets workflow_dispatch', (f) => void (at(f.wf, 'on')['workflow_dispatch'] = null), /workflow\.on keys/],
+  ['permissions write-all', (f) => void (f.wf['permissions'] = 'write-all'), /workflow\.permissions is not a mapping/],
+  ['image without digest', (f) => setImage(f, 'mcr.microsoft.com/playwright:v1.63.0-noble'), /container\.image is not/],
+  ['other digest', (f) => setImage(f, IMAGE.replace('eff16c', 'aff16c')), /container\.image is not/],
+  ['digest in upper case', (f) => setImage(f, IMAGE.replace('eff16c', 'EFF16C')), /container\.image is not/],
+  ['digest of 63 characters', (f) => setImage(f, IMAGE.slice(0, -1)), /container\.image is not/],
+  ['two digests', (f) => setImage(f, `${IMAGE}@sha256:${DIGEST}`), /container\.image is not/],
+  ['other registry', (f) => setImage(f, IMAGE.replace('mcr.microsoft.com', 'docker.io')), /container\.image is not/],
+  ['jammy', (f) => setImage(f, IMAGE.replace('noble', 'jammy')), /container\.image is not/],
+  ['older image', (f) => setImage(f, IMAGE.replace('1.63.0', '1.62.0')), /container\.image is not/],
+  ['expression', (f) => setImage(f, '${{ vars.IMAGE }}'), /container\.image is not/],
+  ...['\r\n', '\t', ' ', '\u007f'].map((c): [string, (f: Files) => void, RegExp] => [
+    `image ending in U+${c.charCodeAt(0).toString(16).padStart(4, '0')}`,
+    (f) => setImage(f, `${IMAGE}${c}`),
+    /container\.image is not/,
+  ]),
+  ['leading space', (f) => setImage(f, ` ${IMAGE}`), /container\.image is not/],
+  ['container is a string', (f) => void (job(f, 'e2e-matrix')['container'] = IMAGE), /container is not a mapping/],
+  ...['options', 'credentials', 'volumes', 'env', '<<', '__proto__', 'toString'].map((key): [string, (f: Files) => void, RegExp] => [
+    `container gets ${key}`,
+    (f) => put(at(job(f, 'e2e-matrix'), 'container'), key, { x: '--privileged' }),
+    /container keys: /,
+  ]),
+  ...['pree2e', 'poste2e', 'preinstall', 'postinstall', 'prepare', '__proto__', 'toString'].map((name): [string, (f: Files) => void, RegExp] => [
+    `script ${name} added`,
+    (f) => put(at(f.pkg, 'scripts'), name, 'playwright install'),
+    /package\.json script names: /,
+  ]),
+  ['e2e script changed', (f) => void (at(f.pkg, 'scripts')['e2e'] = `playwright ins$()tall && ${E2E_SCRIPT}`), /e2e script is not/],
+  ['e2e script removed', (f) => void delete at(f.pkg, 'scripts')['e2e'], /script names: budget,build,test,typecheck\n.*e2e script is not/],
+  ['typecheck script removed', (f) => void delete at(f.pkg, 'scripts')['typecheck'], /script names: budget,build,e2e,test$/],
+  ['scripts missing', (f) => void delete f.pkg['scripts'], /scripts is not a mapping/],
+  ['lockfile on 1.64.0, image on 1.63.0', (f) => bumpLock(f.lock, '1.64.0'), /no pinned image digest for Playwright 1\.64\.0\n.*container\.image is not/],
+  ['tag and lockfile on 1.64.0 with the 1.63.0 digest', (f) => (bumpLock(f.lock, '1.64.0'), setImage(f, IMAGE.replace('1.63.0', '1.64.0'))), /no pinned image digest for Playwright 1\.64\.0/],
+  ['lockfile without @playwright/test', (f) => void delete at(f.lock, 'importers', '.', 'devDependencies')['@playwright/test'], /no @playwright\/test version/],
+  ['two playwright-core versions', (f) => void (at(f.lock, 'packages')['playwright-core@1.62.0'] = {}), /playwright-core versions/],
+  ['second @playwright/test', (f) => void (at(f.lock, 'packages')['@playwright/test@1.62.0'] = {}), /@playwright\/test versions/],
+];
+for (const [name, edit, reason] of cases) {
+  test(`e2e allowlist refuses: ${name}`, () => {
+    const f = structuredClone({ wf: WF, lock: LOCK, pkg: PKG });
+    edit(f);
+    assert.match(problems(f.wf, f.lock, f.pkg).join('\n'), reason);
   });
 }
 
-const pw = "  '@playwright/test@1.63.0':\n    resolution";
-const otherCases: [string, string, string, RegExp][] = [
-  ['lockfile on 1.64.0, image on 1.63.0', LOCK.replaceAll('1.63.0', '1.64.0'), PKG, /not lockfile 1\.64\.0/],
-  ['lockfile without @playwright/test', swap(LOCK, "      '@playwright/test':\n", "      '@playwright/tset':\n"), PKG, /no @playwright\/test version/],
-  ['two playwright-core versions', swap(LOCK, '  playwright-core@1.63.0:\n', '  playwright-core@1.62.0:\n    resolution: {}\n\n  playwright-core@1.63.0:\n'), PKG, /playwright-core versions/],
-  ['second @playwright/test', swap(LOCK, pw, `  '@playwright/test@1.62.0':\n    resolution: {}\n\n${pw}`), PKG, /@playwright\/test versions/],
-  ['pree2e installs browsers', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "pree2e": "playwright install",'), /script pree2e installs/],
-  ['pree2e with a line continuation', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "pree2e": "playwright \\\\\\ninstall",'), /script pree2e installs/],
-  ['pree2e with a continuation inside a word', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "pree2e": "play\\\\\\nwright install",'), /script pree2e installs/],
-  ['postinstall runs apt', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "postinstall": "apt-get update",'), /script postinstall installs/],
-  ['prepare script', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "prepare": "node x.js",'), /lifecycle script prepare/],
-  ['e2e script changed', LOCK, swap(PKG, '"e2e": "node scripts/build.ts && ', '"e2e": "node scripts/build.ts && playwright ins$()tall && '), /e2e script changed/],
-];
-for (const [name, lock, pkg, reason] of otherCases) {
-  test(`e2e image check refuses: ${name}`, () => {
-    assert.match(problems(CI, lock, pkg).join('\n'), reason);
-  });
-}
-
-test('e2e image check refuses: tag and lockfile on 1.64.0 with the 1.63.0 digest', () => {
-  const lock = LOCK.replaceAll('1.63.0', '1.64.0');
-  assert.match(problems(img(IMAGE.replace('1.63.0', '1.64.0')), lock, PKG).join('\n'), /not the pinned one for 1\.64\.0/);
+test('ci.yml, the lockfile and package.json equal the allowlist', () => {
+  assert.deepEqual(problems(WF, LOCK, PKG), []);
 });
 
-test('ci.yml, the lockfile and package.json pass the e2e image check', () => {
-  assert.deepEqual(problems(CI, LOCK, PKG), []);
+test('the files read the same with CRLF line ends', () => {
+  const crlf = (t: string): string => t.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n');
+  assert.deepEqual(parse(crlf(CI_TEXT)), WF);
+  assert.deepEqual(parse(crlf(LOCK_TEXT)), LOCK);
+  assert.deepEqual(JSON.parse(crlf(PKG_TEXT)), PKG);
 });
 
-test('the e2e image check gives the same result with CRLF line ends', () => {
-  const crlf = (t: string): string => t.replaceAll('\n', '\r\n');
-  assert.deepEqual(problems(crlf(CI), crlf(LOCK), crlf(PKG)), []);
-  assert.match(problems(crlf(img('mcr.microsoft.com/playwright:v1.63.0-noble')), crlf(LOCK), crlf(PKG)).join('\n'), /not a pinned/);
+// Text cases only for what the reader itself must refuse or keep visible.
+// They edit LF text, so they also run in a CRLF checkout (core.autocrlf).
+const CI_LF = CI_TEXT.replaceAll('\r\n', '\n');
+const swap = (from: string, to: string): string => {
+  assert.ok(CI_LF.includes(from), `ci.yml has ${JSON.stringify(from)}`);
+  return CI_LF.replace(from, to);
+};
+const IMAGE_LINE = `      image: ${IMAGE}\n`;
+test.each([
+  ['duplicate container key', swap(IMAGE_LINE, `${IMAGE_LINE}    container: { image: x }\n`), /Map keys must be unique/],
+  ['unknown tag', swap('    timeout-minutes: 20\n', '    timeout-minutes: !env 20\n'), /Unresolved tag/],
+  ['YAML 1.1 directive', `%YAML 1.1\n---\n${CI_LF}`, /%YAML 1\.1 directive/],
+  ['YAML 1.2 directive', `%YAML 1.2\n---\n${CI_LF}`, /%YAML 1\.2 directive/],
+  ['timeout as 020', swap('    timeout-minutes: 20\n', '    timeout-minutes: 020\n'), /scalar 020 is not plain/],
+  ['second document', `${CI_LF}---\nname: x\n`, /Source contains multiple documents/],
+  ['timeout as 0x14', swap('    timeout-minutes: 20\n', '    timeout-minutes: 0x14\n'), /scalar 0x14 is not plain/],
+  ['persist-credentials as FALSE', swap('persist-credentials: false', 'persist-credentials: FALSE'), /scalar FALSE is not plain/],
+])('reader refuses: %s', (_name, text, reason) => {
+  assert.throws(() => parse(text), reason);
+});
+
+test('reader keeps a merge key, so the allowlist refuses it', () => {
+  const text = swap(IMAGE_LINE, `      <<: *img\n`).replace('permissions:\n', `x-img: &img { image: ${IMAGE} }\npermissions:\n`);
+  const out = problems(parse(text), LOCK, PKG).join('\n');
+  assert.match(out, /^workflow keys: /m);
+  assert.match(out, /container keys: <<$/m);
 });
 
 const fontDir = new URL('../e2e/fonts/', import.meta.url);
