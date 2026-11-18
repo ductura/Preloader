@@ -50,15 +50,27 @@ function parse(text: string): Obj {
 const DIGEST = 'eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27';
 // Index digest of each allowed tag: a new Playwright needs a new row here.
 const DIGESTS: Obj = { '1.63.0': DIGEST };
-// Registry integrity of each Playwright package per version: the resolution
-// must be exactly this, so no tarball, file, git or directory source can hide
-// another build under the 1.63.0 key. A new Playwright needs a new row here.
-const INTEGRITY: Obj = {
+// The Playwright packages of each allowed version exactly as the lockfile
+// must hold them: the importer entry, the packages entries (registry
+// integrity, so no tarball, file, git or directory source) and the snapshots.
+// A new Playwright needs a new row here.
+const LOCK_ROWS: Obj = {
   '1.63.0': {
     '@playwright/test': 'sha512-oxMK4vllB9RK5NQ2l1pq1IfOf2AvnEuj/vYGDj0H2nMtmtZpKtCwt/l00GEO6xjGfpBNAvjovvYdCm50dRQkpQ==',
     playwright: 'sha512-+7ziBLidS4NaNCdt57SUDT+wYmmd5fmiQejUic/kb+YsYSCPyOOE9sebzMjNmQrsnNpDJqd4WHvV/8lfKfUDUg==',
     'playwright-core': 'sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg==',
   },
+};
+const lockEntries = (v: string, integrity: Obj): Record<string, Obj> => {
+  const pkg = (name: string): Obj => ({ resolution: { integrity: integrity[name] }, engines: { node: '>=20' }, hasBin: true });
+  return {
+    packages: { [`@playwright/test@${v}`]: pkg('@playwright/test'), [`playwright@${v}`]: pkg('playwright'), [`playwright-core@${v}`]: pkg('playwright-core') },
+    snapshots: {
+      [`@playwright/test@${v}`]: { dependencies: { playwright: v } },
+      [`playwright@${v}`]: { dependencies: { 'playwright-core': v } },
+      [`playwright-core@${v}`]: {},
+    },
+  };
 };
 const FONTS: [string, string][] = [
   ['DejaVuSans.ttf', 'ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280'],
@@ -136,42 +148,47 @@ const allowed = (version: string): Obj => ({
 const SCRIPT_NAMES = ['budget', 'build', 'e2e', 'test', 'typecheck'];
 const E2E_SCRIPT = 'node scripts/build.ts && playwright test -c e2e/matrix/playwright.config.ts';
 
-// The one version of @playwright/test, playwright and playwright-core in the
-// lockfile. Every name@version anywhere in it (a package or snapshot key, a
-// peer suffix, an npm alias value) and every resolved dependency of these
-// names must be that version, so no second copy or alias can hide.
+// The Playwright version of the lockfile. Named fields must equal LOCK_ROWS:
+// the importer entry is exactly { specifier: v, version: v } (so npm:,
+// workspace:, catalog:, tarball and git specifiers fail), the packages and
+// snapshots keys of the three names are exactly name@v with the pinned
+// entries, and any other snapshot that depends on one of them names v.
 const PW = ['@playwright/test', 'playwright', 'playwright-core'];
-const PW_REF = /(?:^|[(\s])(@playwright\/test|playwright-core|playwright)@([^()\s]*)/g;
-const DEP_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies'];
+const DEP_FIELDS = ['dependencies', 'optionalDependencies'];
 function lockVersion(lock: unknown): string {
-  const v = own(own(own(own(own(lock, 'importers'), '.'), 'devDependencies'), '@playwright/test'), 'version');
+  const importers = own(lock, 'importers');
+  if (!isMap(importers) || !isDeepStrictEqual(keysOf(importers), ['.'])) throw new Error('lockfile importers are not [.]');
+  const entry = own(own(own(importers, '.'), 'devDependencies'), '@playwright/test');
+  const v = own(entry, 'version');
   if (typeof v !== 'string' || !/^\d+\.\d+\.\d+$/.test(v)) throw new Error('lockfile has no @playwright/test version');
-  const packages = isMap(own(lock, 'packages')) ? Object.keys(own(lock, 'packages') as Obj) : [];
-  for (const name of PW) {
-    const found = packages.filter((k) => k.startsWith(`${name}@`)).map((k) => k.slice(name.length + 1));
-    if (!isDeepStrictEqual(found, [v])) throw new Error(`lockfile ${name} versions ${found.join(',')} are not [${v}]`);
-    const pinned = own(own(INTEGRITY, v), name);
-    if (typeof pinned !== 'string') throw new Error(`no pinned integrity for Playwright ${v}`);
-    if (!isDeepStrictEqual(own(own(own(lock, 'packages'), `${name}@${v}`), 'resolution'), { integrity: pinned })) {
-      throw new Error(`lockfile resolution of ${name}@${v} is not the pinned integrity`);
-    }
-  }
-  const walk = (node: unknown, field: string): void => {
-    if (typeof node === 'string') {
-      for (const m of node.matchAll(PW_REF)) if (m[2] !== v) throw new Error(`lockfile refers to ${m[1]}@${m[2]}`);
-    } else if (Array.isArray(node)) node.forEach((x) => walk(x, ''));
-    else if (isMap(node)) {
-      for (const [key, value] of Object.entries(node)) {
-        walk(key, '');
-        const resolved = typeof value === 'string' ? value : own(value, 'version');
-        if (DEP_FIELDS.includes(field) && PW.includes(key) && resolved !== v) {
-          throw new Error(`lockfile resolves ${key} to ${JSON.stringify(resolved)}`);
-        }
-        walk(value, key);
+  if (!isDeepStrictEqual(entry, { specifier: v, version: v })) throw new Error(`lockfile importer @playwright/test is not { specifier: ${v}, version: ${v} }`);
+  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+    const deps = own(own(importers, '.'), field);
+    for (const name of PW) {
+      if (isMap(deps) && Object.hasOwn(deps, name) && !(field === 'devDependencies' && name === '@playwright/test')) {
+        throw new Error(`lockfile importer has ${name} in ${field}`);
       }
     }
-  };
-  walk(lock, '');
+  }
+  const row = own(LOCK_ROWS, v);
+  if (!isMap(row)) throw new Error(`no pinned lockfile entries for Playwright ${v}`);
+  for (const [section, expected] of Object.entries(lockEntries(v, row))) {
+    const actual = own(lock, section);
+    if (!isMap(actual)) throw new Error(`lockfile ${section} is not a mapping`);
+    const keys = Object.keys(actual).filter((k) => PW.some((name) => k.startsWith(`${name}@`)));
+    if (!isDeepStrictEqual(keys.sort(), keysOf(expected))) throw new Error(`lockfile ${section} Playwright keys: ${keys.join(',')}`);
+    for (const key of keys) {
+      if (!isDeepStrictEqual(actual[key], expected[key])) throw new Error(`lockfile ${section} ${key} is not the pinned entry`);
+    }
+  }
+  for (const [key, snapshot] of Object.entries(own(lock, 'snapshots') as Obj)) {
+    for (const field of DEP_FIELDS) {
+      for (const name of PW) {
+        const dep = own(own(snapshot, field), name);
+        if (dep !== undefined && dep !== v) throw new Error(`lockfile snapshot ${key} resolves ${name} to ${JSON.stringify(dep)}`);
+      }
+    }
+  }
   return v;
 }
 
@@ -227,7 +244,7 @@ const job = (f: Files, name: string): Obj => at(f.wf, 'jobs', name);
 const steps = (f: Files, name: string): Obj[] => job(f, name)['steps'] as Obj[];
 const setImage = (f: Files, image: string): void => void (at(job(f, 'e2e-matrix'), 'container')['image'] = image);
 const IMAGE = imageOf('1.63.0');
-// Every 1.63.0 in the parsed lockfile (keys, snapshots, peer suffixes) moves to `to`.
+// Every 1.63.0 in the parsed lockfile (keys, entries, peer suffixes) moves to `to`.
 const bumpLock = (f: Files, to: string): void => {
   f.lock = JSON.parse(JSON.stringify(f.lock).replaceAll('1.63.0', to)) as Obj;
 };
@@ -323,27 +340,51 @@ const cases: [string, (f: Files) => void, RegExp][] = [
   ['e2e script removed', (f) => void delete at(f.pkg, 'scripts')['e2e'], /script names: budget,build,test,typecheck\n.*e2e script is not/],
   ['typecheck script removed', (f) => void delete at(f.pkg, 'scripts')['typecheck'], /script names: budget,build,e2e,test$/],
   ['scripts missing', (f) => void delete f.pkg['scripts'], /scripts is not a mapping/],
-  ['lockfile on 1.64.0, image on 1.63.0', (f) => bumpLock(f, '1.64.0'), /no pinned integrity for Playwright 1\.64\.0/],
-  ['tag and lockfile on 1.64.0 with the 1.63.0 digest', (f) => (bumpLock(f, '1.64.0'), setImage(f, IMAGE.replace('1.63.0', '1.64.0'))), /no pinned integrity for Playwright 1\.64\.0/],
+  ['lockfile on 1.64.0, image on 1.63.0', (f) => bumpLock(f, '1.64.0'), /no pinned lockfile entries for Playwright 1\.64\.0/],
+  ['tag and lockfile on 1.64.0 with the 1.63.0 digest', (f) => (bumpLock(f, '1.64.0'), setImage(f, IMAGE.replace('1.63.0', '1.64.0'))), /no pinned lockfile entries for Playwright 1\.64\.0/],
+  ...([
+    ['npm: alias', 'npm:@playwright/test@1.64.0'],
+    ['workspace:', 'workspace:*'],
+    ['catalog:', 'catalog:'],
+    ['tarball URL', 'https://registry.npmjs.org/@playwright/test/-/test-1.64.0.tgz'],
+    ['git URL', 'github:microsoft/playwright#v1.64.0'],
+    ['another version', '1.64.0'],
+  ] as const).map(([name, specifier]): [string, (f: Files) => void, RegExp] => [
+    `importer specifier as ${name}`,
+    (f) => void (at(f.lock, 'importers', '.', 'devDependencies', '@playwright/test')['specifier'] = specifier),
+    /importer @playwright\/test is not \{ specifier: 1\.63\.0, version: 1\.63\.0 \}/,
+  ]),
+  ['importer version as a tarball URL', (f) => void (at(f.lock, 'importers', '.', 'devDependencies', '@playwright/test')['version'] = 'https://example.invalid/test-1.63.0.tgz'), /no @playwright\/test version/],
+  ['importer without specifier', (f) => void delete at(f.lock, 'importers', '.', 'devDependencies', '@playwright/test')['specifier'], /importer @playwright\/test is not/],
+  ['importer with an extra key', (f) => void (at(f.lock, 'importers', '.', 'devDependencies', '@playwright/test')['dev'] = true), /importer @playwright\/test is not/],
+  ...['__proto__', 'toString'].map((key): [string, (f: Files) => void, RegExp] => [
+    `importer with own key ${key}`,
+    (f) => put(at(f.lock, 'importers', '.', 'devDependencies', '@playwright/test'), key, { specifier: '1.64.0' }),
+    /importer @playwright\/test is not/,
+  ]),
+  ['importer specifier only inherited', (f) => {
+    const deps = at(f.lock, 'importers', '.', 'devDependencies');
+    deps['@playwright/test'] = Object.assign(Object.create({ specifier: '1.63.0' }) as Obj, { version: '1.63.0' });
+  }, /no @playwright\/test version/], // not a plain mapping, so no own version is read
+  ['second importer', (f) => void (at(f.lock, 'importers')['packages/x'] = {}), /importers are not \[\.\]/],
+  ['importer gets playwright-core', (f) => void (at(f.lock, 'importers', '.', 'devDependencies')['playwright-core'] = { specifier: 'link:../x', version: 'link:../x' }), /importer has playwright-core in devDependencies/],
+  ['lockfile without @playwright/test', (f) => void delete at(f.lock, 'importers', '.', 'devDependencies')['@playwright/test'], /no @playwright\/test version/],
   ['playwright-core resolved from a tarball', (f) => void (at(f.lock, 'packages', 'playwright-core@1.63.0')['resolution'] = {
     tarball: 'https://registry.npmjs.org/playwright-core/-/playwright-core-1.64.0.tgz',
     integrity: 'sha512-AAAA',
-  }), /resolution of playwright-core@1\.63\.0 is not the pinned integrity/],
-  ['playwright with another integrity', (f) => void (at(f.lock, 'packages', 'playwright@1.63.0', 'resolution')['integrity'] = 'sha512-AAAA'), /resolution of playwright@1\.63\.0 is not/],
-  ['@playwright/test resolution gets a key', (f) => void (at(f.lock, 'packages', '@playwright/test@1.63.0', 'resolution')['directory'] = '../x'), /resolution of @playwright\/test@1\.63\.0 is not/],
-  ['lockfile without @playwright/test', (f) => void delete at(f.lock, 'importers', '.', 'devDependencies')['@playwright/test'], /no @playwright\/test version/],
-  ['two playwright-core versions', (f) => void (at(f.lock, 'packages')['playwright-core@1.62.0'] = {}), /playwright-core versions/],
-  ['second @playwright/test', (f) => void (at(f.lock, 'packages')['@playwright/test@1.62.0'] = {}), /@playwright\/test versions/],
-  ['snapshot of another playwright-core', (f) => void (at(f.lock, 'snapshots')['playwright-core@1.64.0'] = {}), /refers to playwright-core@1\.64\.0/],
-  ['snapshot dependency on another version', (f) => void (at(f.lock, 'snapshots', 'playwright@1.63.0', 'dependencies')['playwright-core'] = '1.64.0'), /resolves playwright-core to "1\.64\.0"/],
-  ['npm alias for playwright-core', (f) => void (at(f.lock, 'snapshots', 'playwright@1.63.0', 'dependencies')['playwright-core'] = 'patchright-core@1.57.0'), /resolves playwright-core to "patchright-core@1\.57\.0"/],
-  ['alias to another playwright-core under another name', (f) => void (at(f.lock, 'snapshots', 'playwright@1.63.0', 'dependencies')['x'] = 'playwright-core@1.64.0'), /refers to playwright-core@1\.64\.0/],
-  ['peer suffix with another version', (f) => {
-    const snaps = at(f.lock, 'snapshots');
-    snaps['@axe-core/playwright@4.14.0(playwright-core@1.64.0)'] = snaps['@axe-core/playwright@4.14.0(playwright-core@1.63.0)'];
-    delete snaps['@axe-core/playwright@4.14.0(playwright-core@1.63.0)'];
-  }, /refers to playwright-core@1\.64\.0/],
-  ['importer resolves playwright-core elsewhere', (f) => void (at(f.lock, 'importers', '.', 'devDependencies')['playwright-core'] = { specifier: 'x', version: 'link:../x' }), /resolves playwright-core to "link:\.\.\/x"/],
+  }), /packages playwright-core@1\.63\.0 is not the pinned entry/],
+  ['playwright with another integrity', (f) => void (at(f.lock, 'packages', 'playwright@1.63.0', 'resolution')['integrity'] = 'sha512-AAAA'), /packages playwright@1\.63\.0 is not/],
+  ['@playwright/test resolution gets a key', (f) => void (at(f.lock, 'packages', '@playwright/test@1.63.0', 'resolution')['directory'] = '../x'), /packages @playwright\/test@1\.63\.0 is not/],
+  ['packages entry without its key', (f) => void delete at(f.lock, 'packages')['playwright@1.63.0'], /packages Playwright keys: /],
+  ['two playwright-core versions', (f) => void (at(f.lock, 'packages')['playwright-core@1.62.0'] = {}), /packages Playwright keys: .*playwright-core@1\.62\.0/],
+  ['second @playwright/test', (f) => void (at(f.lock, 'packages')['@playwright/test@1.62.0'] = {}), /packages Playwright keys: .*@playwright\/test@1\.62\.0/],
+  ['snapshot of another playwright-core', (f) => void (at(f.lock, 'snapshots')['playwright-core@1.64.0'] = {}), /snapshots Playwright keys: /],
+  ['snapshot dependency on another version', (f) => void (at(f.lock, 'snapshots', 'playwright@1.63.0', 'dependencies')['playwright-core'] = '1.64.0'), /snapshots playwright@1\.63\.0 is not the pinned entry/],
+  ['npm alias for playwright-core', (f) => void (at(f.lock, 'snapshots', 'playwright@1.63.0', 'dependencies')['playwright-core'] = 'patchright-core@1.57.0'), /snapshots playwright@1\.63\.0 is not/],
+  ['snapshot gets another dependency', (f) => void (at(f.lock, 'snapshots', 'playwright@1.63.0', 'dependencies')['x'] = 'playwright-core@1.64.0'), /snapshots playwright@1\.63\.0 is not/],
+  ['axe resolves playwright-core to 1.64.0', (f) => void (at(f.lock, 'snapshots', '@axe-core/playwright@4.14.0(playwright-core@1.63.0)', 'dependencies')['playwright-core'] = '1.64.0'), /resolves playwright-core to "1\.64\.0"/],
+  ['axe resolves playwright-core through npm:', (f) => void (at(f.lock, 'snapshots', '@axe-core/playwright@4.14.0(playwright-core@1.63.0)', 'dependencies')['playwright-core'] = 'npm:playwright-core@1.64.0'), /resolves playwright-core to "npm:playwright-core@1\.64\.0"/],
+  ['snapshot with optional playwright', (f) => void (at(f.lock, 'snapshots', '@axe-core/playwright@4.14.0(playwright-core@1.63.0)')['optionalDependencies'] = { playwright: 'workspace:*' }), /resolves playwright to "workspace:\*"/],
   ['key that joins two keys with a comma', (f) => {
     const ok = job(f, 'ci-ok');
     delete ok['name'];
