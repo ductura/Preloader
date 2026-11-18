@@ -3,7 +3,6 @@
 // checkReceipt passes a receipt only when its signature verifies under the trusted key and it names the commit.
 import { createHash, createPrivateKey, createPublicKey, verify } from 'node:crypto';
 import { types } from 'node:util';
-
 const PKCS8_ED25519 = Buffer.from('302e020100300506032b657004220420', 'hex');
 // A receipt payload is two levels deep; anything near a stack overflow is not one.
 const MAX_DEPTH = 64;
@@ -13,7 +12,6 @@ const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[
 const intrinsic = (key: string) => Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype) as object, key)!.get!;
 const viewBuffer = intrinsic('buffer');
 const viewLength = intrinsic('length');
-
 type Obj = Record<string, unknown>;
 /** The receipt key the lab trusts: derived from the seed, labelled by the registry. */
 export type ReceiptTrust = { keyBase64Url: string; keyId: string; keyVersion: string; evidenceDomainId: string };
@@ -62,10 +60,7 @@ const EXPECTED = Object.fromEntries(['documentId', 'clientTransactionId', 'revis
 /** An object that is neither null, a Proxy nor an array: only then are its descriptors read (exact then wants Object.prototype). */
 const plain = (v: unknown): v is object => typeof v === 'object' && v !== null && !types.isProxy(v) && !Array.isArray(v);
 /** Own enumerable data properties only: no getter, whose reads could differ. */
-const data = (value: object, key: PropertyKey): boolean => {
-  const field = Object.getOwnPropertyDescriptor(value, key);
-  return field !== undefined && field.enumerable === true && Object.hasOwn(field, 'value');
-};
+const data = (value: object, key: PropertyKey): boolean => ((f) => f?.enumerable === true && Object.hasOwn(f, 'value'))(Object.getOwnPropertyDescriptor(value, key));
 /** An object with prototype Object.prototype holding exactly `keys` as its own data properties. */
 function exact(value: object, keys: readonly string[]): value is Obj {
   if (Object.getPrototypeOf(value) !== Object.prototype) return false;
@@ -80,23 +75,18 @@ function dense(value: unknown[]): boolean {
   for (let i = 0; i < value.length; i += 1) if (!data(value, String(i))) return false;
   return true;
 }
-/**
- * RFC 8785 text of a JSON value: plain objects (Object.prototype), plain dense arrays, strings, finite numbers,
- * booleans and null in own enumerable data properties; else `jcs: …`. A string is a string; text goes to jcsText.
- */
-export const jcs = (value: unknown): string => write(value, new Set());
+/** RFC 8785 text of a JSON value (plain objects and dense arrays of strings, finite numbers, booleans, null); else `jcs: …`. */
+export const jcs = (value: unknown): string => only(() => write(value, new Set()));
+/** Any other exception (a getter-free read that still throws, an engine limit) becomes `jcs: …` too. */
+const only = (run: () => string): string => {
+  try { return run(); } catch (e) { throw e instanceof Error && e.message.startsWith('jcs: ') ? e : new Error('jcs: not a JSON value'); }
+};
 /** RFC 8785 text of JSON text: parsed with JSON.parse, then written as jcs writes the value. */
-export function jcsText(text: string): string {
-  let value: unknown;
-  try {
-    if (typeof text !== 'string') throw new Error('not text');
-    value = JSON.parse(text);
-  } catch {
-    throw new Error('jcs: not JSON text');
-  }
+export const jcsText = (text: string): string => only(() => {
+  const value: unknown = typeof text === 'string' ? JSON.parse(text) : fail('jcs: not JSON text');
   uniqueNames(text);
   return write(value, new Set());
-}
+});
 /** Throws when valid JSON text names a member twice in one object (RFC 8785 §3.1), even spelled another way. */
 function uniqueNames(text: string): void {
   const objects: (Set<string> | null)[] = [];
