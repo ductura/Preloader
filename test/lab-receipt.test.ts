@@ -8,9 +8,11 @@ import fc from 'fast-check';
 import { canonicalJson } from '@ductura/contracts';
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import openapi from '@ductura/contracts/openapi/v1.json' with { type: 'json' };
+import { Ajv } from 'ajv';
 import { runInNewContext } from 'node:vm';
 
-import { type ReceiptExpectation, type ReceiptTrust, checkReceipt, jcs, publicKeyFromSeed } from '../scripts/lab/receipt.ts';
+import { type ReceiptExpectation, type ReceiptTrust, checkReceipt, jcs, publicKeyFromSeed, registryRow } from '../scripts/lab/receipt.ts';
 
 type Golden = {
   verificationKey: { spkiDerHex: string; signingSeedSha256: string };
@@ -312,4 +314,139 @@ test('jcs writes every JSON value as canonicalJson does, and the same for its JS
       else assert.equal(jcs(input), reference);
     }
   }), { numRuns: 500 });
+});
+
+// DAN-1096-a1-3: the payload rules against the server's contract schema (@ductura/contracts, ajv as oracle).
+// ajv compiles patterns with the u flag and agrees with /\S/u on NBSP, U+2028, U+FEFF and U+3000; it counts
+// maxLength in code points where the server (TypeBox) counts UTF-16 units, and it accepts lone surrogates,
+// which jcs refuses. Those are the two differences by design.
+type Schema = { properties?: Record<string, Record<string, unknown> & { anyOf?: Record<string, unknown>[] }> } & Record<string, unknown>;
+function schemaWhere(node: unknown, has: (n: Schema) => boolean): Schema {
+  const stack = [node];
+  while (stack.length > 0) {
+    const n = stack.pop();
+    if (typeof n !== 'object' || n === null) continue;
+    if (has(n as Schema)) return n as Schema;
+    stack.push(...Object.values(n));
+  }
+  throw new Error('schema not found');
+}
+const ajv = new Ajv({ strict: false });
+const payloadSchema = schemaWhere(openapi, (n) => n.properties?.['receiptSchema']?.['const'] === 'ductus-evidence-receipt-v2');
+const contract = ajv.compile(payloadSchema);
+const fields = payloadSchema.properties!;
+const COMPARED = new Set(['receiptSchema', 'evidenceDomainId', ...Object.keys(expected)]);
+const LONE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const maxLength = (k: string) => (fields[k]!['maxLength'] ?? fields[k]!.anyOf?.find((a) => a['maxLength'])?.['maxLength']) as number | undefined;
+/** A valid value with one character inserted, replaced or deleted. */
+const oneChange = (v: string) => fc.tuple(fc.nat({ max: v.length }), fc.constantFrom('A', 'F', ':', '\n', '\u00a0', ' ', '0', '\u0301', '\u0085'), fc.nat({ max: 2 }))
+  .map(([i, c, op]) => (op === 0 ? v.slice(0, i) + c + v.slice(i) : op === 1 ? v.slice(0, i) + c + v.slice(i + 1) : v.slice(0, i) + v.slice(i + 1)));
+const valueFor = (k: string) => {
+  const good = p[k];
+  const m = maxLength(k);
+  return fc.oneof(fc.constant(good), typeof good === 'string' ? oneChange(good) : fc.integer({ min: -2, max: 9 }), text.filter((t) => t.length <= 100),
+    fc.integer(), fc.double({ noNaN: true, noDefaultInfinity: true }), fc.constantFrom(null, true, false, 0, -1, 2 ** 53, NaN, Infinity, -Infinity),
+    m === undefined ? fc.constant(good) : fc.constantFrom('x'.repeat(m), 'x'.repeat(m + 1)));
+};
+
+/** checkReceipt agrees with the contract on payload field `k` set to `v`; false when jcs cannot sign `v`. */
+function agrees(k: string, v: unknown): boolean {
+  let receipt: Rec;
+  try {
+    receipt = signed({ [k]: v });
+  } catch {
+    // jcs refuses only a lone surrogate or a number that is not finite; the receipt then has no shape.
+    assert.ok(typeof v === 'number' ? !Number.isFinite(v) : typeof v === 'string' && LONE.test(v), `${k}: ${String(v)}`);
+    assert.match(checkReceipt(at((r) => { r.signedReceipt.payload[k] = v; }), trust, expected) ?? '', /^potpisana potvrda nema oblik v2/);
+    return false;
+  }
+  const reason = checkReceipt(receipt, trust, expected);
+  if (!contract({ ...clone(p), [k]: v })) assert.equal(reason, `${SHAPE} (${k})`, `${k}: ${JSON.stringify(v)}`);
+  else assert.ok(reason === null || (COMPARED.has(k) && reason === `potvrda ne imenuje ovaj commit (${k})`), `${k}: ${JSON.stringify(v)} -> ${reason}`);
+  return true;
+}
+
+test('the payload rules refuse exactly what the contract refuses, field by field (fast-check)', () => {
+  let unsignable = 0;
+  fc.assert(fc.property(fc.constantFrom(...Object.keys(p)).chain((k) => fc.tuple(fc.constant(k), valueFor(k))), ([k, v]) => {
+    if (!agrees(k, v)) unsignable += 1;
+  }), { numRuns: 2000 });
+  assert.ok(unsignable > 0);
+});
+
+// Every valid string field, changed at its edges: anchors, case and separators, not left to chance.
+test.each(Object.keys(p).filter((k) => typeof p[k] === 'string'))('the payload rule of %s agrees with the contract at its edges', (k) => {
+  const good = p[k] as string;
+  for (const v of [`${good}0`, `0${good}`, `x${good}`, `${good}\n`, ` ${good}`, `${good}\u00a0`, good.slice(1), good.slice(0, -1),
+    good.toUpperCase(), good.replace(/[0-9]/u, ':'), good.replace(/-/u, '_')]) agrees(k, v);
+  // Every position with 0, 1 or f in its place: version and variant digits, seconds, hex case.
+  for (let i = 0; i < good.length; i += 1) for (const c of ['0', '1', 'f']) if (good[i] !== c) agrees(k, good.slice(0, i) + c + good.slice(i + 1));
+});
+
+// Verbatim from 20d0f0d: values the contract refuses are refused, and accepted ones not refused where not compared.
+const BAD: unknown[] = [null, 0, -1, -0, 1.5, 2 ** 53, true, '', ' ', '\u00a0', '\t', '\r\n', '\u2028', '\u007f', 'x'.repeat(257),
+  '1', {}, [], ['r-1'], JSON.parse('{"toString":null}'), JSON.parse('{"__proto__":{"a":1}}'), 'tx\r\n', 'tx\t', 'tx\u007f', 'tx\u0085'];
+const GOOD: unknown[] = ['r-0', 'a b', 'x'.repeat(120), 'a'.repeat(64), 1, 2, Number.MAX_SAFE_INTEGER, null,
+  'ductus-evidence-segment-v3', '2026-10-03T06:05:00.000Z', '6f1c2b7e-0d4a-4c3b-9a8e-1b2c3d4e5f60'];
+test('every payload value of the 20d0f0d tables agrees with the contract', () => {
+  for (const k of Object.keys(p)) for (const v of [...BAD, ...GOOD]) agrees(k, v);
+});
+
+test('a contract field the schema refuses is refused: receiptId null is the control', () => {
+  assert.equal(contract({ ...clone(p), receiptId: null }), false);
+  assert.equal(contract(clone(p)), true);
+  assert.equal(checkReceipt(signed({ receiptId: null }), trust, expected), `${SHAPE} (receiptId)`);
+});
+
+test('text length is counted in UTF-16 units, as the server counts it, not in code points as ajv does', () => {
+  const e = '\u{1F600}';
+  for (const [k, v, ok] of [['receiptId', e.repeat(128), true], ['receiptId', e.repeat(129), false],
+    ['evidenceProfileId', e.repeat(60), true], ['evidenceProfileId', e.repeat(61), false]] as const) {
+    assert.equal(checkReceipt(signed({ [k]: v }), trust, expected), ok ? null : `${SHAPE} (${k})`, `${k} ${v.length}`);
+  }
+  assert.equal(contract({ ...clone(p), receiptId: e.repeat(129) }), true);
+  const tx = e.repeat(64);
+  assert.equal(checkReceipt(signed({ clientTransactionId: tx }), trust, { ...expected, clientTransactionId: tx }), null);
+  assert.equal(contract({ ...clone(p), clientTransactionId: `${tx}x` }), true);
+  assert.equal(checkReceipt(signed({ clientTransactionId: `${tx}x` }), trust, expected), `${SHAPE} (clientTransactionId)`);
+  assert.equal(checkReceipt(signed({ clientTransactionId: `${tx}x` }), trust, { ...expected, clientTransactionId: `${tx}x` }), lab('expected.clientTransactionId'));
+});
+
+// registryRow: one row of `psql -t -A`, `key_id|key_version|evidence_domain_id|is_seed_key`.
+const ROW = 'dev-ed25519-0011|spki-sha256-00ff|d21fe0a3-103c-42e5-a29e-c102f9030af5|t';
+test('registryRow takes exactly one row of the seed key, with or without its final newline', () => {
+  const want = { keyId: 'dev-ed25519-0011', keyVersion: 'spki-sha256-00ff', evidenceDomainId: 'd21fe0a3-103c-42e5-a29e-c102f9030af5' };
+  assert.deepEqual(registryRow(ROW), want);
+  assert.deepEqual(registryRow(`${ROW}\n`), want);
+});
+
+const other = 'dev-ed25519-0022|spki-sha256-00ee|d21fe0a3-103c-42e5-a29e-c102f9030af5|f';
+test.each([
+  '', '\n', `\n${ROW}\n`, `${ROW}\n\n`, `${ROW}\n${ROW}\n`, `${ROW}\n${other}\n`, `${other}\n`, ROW.replace('|t', '|true'), ROW.replace('|t', '|T'),
+  ROW.replace('|t', '|'), ROW.replace('|t', ''), ROW.replace('0011|', '0011||'), `${ROW}|x`, `${ROW}\r\n`, ROW.replace('0011', '00\t11'),
+  ROW.replace('0011', '00 11'), ROW.replace('0011', '00\u007f11'), ROW.replace('0011', '00\u00a011'), ROW.replace('0011', '00\u202811'),
+  ROW.replace('0011', '0011\u0301'), ROW.replace('0011', '0011\u{1F600}'), ROW.replace('0011', '0011\ud800'),
+  ROW.replace('dev-ed25519-0011', 'k'.repeat(2049)), ROW.replace('spki-sha256-00ff', 'v'.repeat(257)), ROW.replace('42e5', '12e5'),
+  ROW.replace('d21fe0a3', 'D21FE0A3'),
+])('registryRow refuses %j', (output) => {
+  assert.equal(registryRow(output), null);
+});
+
+test('registryRow agrees with an oracle written from the contract schema (fast-check)', () => {
+  const sig = schemaWhere(openapi, (n) => n.properties?.['signatureBase64Url'] !== undefined && n.properties?.['keyId'] !== undefined).properties!;
+  const keyIdOk = ajv.compile(sig['keyId']!);
+  const keyVersionOk = ajv.compile(sig['keyVersion']!);
+  const uuid = new RegExp(fields['evidenceDomainId']!['pattern'] as string, 'u');
+  const ascii = /^[\x21-\x7e]+$/;
+  const oracle = (f: string[]) => f.length === 4 && f[3] === 't' && ascii.test(f[0]!) && keyIdOk(f[0]) && ascii.test(f[1]!) && keyVersionOk(f[1]) && uuid.test(f[2]!);
+  const label = fc.oneof(fc.stringMatching(/^[\x21-\x7e]{1,12}$/), text, fc.constantFrom('', 'k'.repeat(2048), 'k'.repeat(2049), 'v'.repeat(256), 'v'.repeat(257)));
+  const domain = fc.oneof(fc.uuid({ version: 4 }), fc.uuid(), fc.uuid({ version: 4 }).map((u) => u.toUpperCase()), text);
+  const flag = fc.oneof(fc.constant('t'), fc.constantFrom('f', 'T', 'true', ''), text);
+  fc.assert(fc.property(label, label, domain, flag, fc.boolean(), (a, b, d, t, newline) => {
+    const line = `${a}|${b}|${d}|${t}`;
+    const f = line.split('|');
+    const got = registryRow(`${line}${newline ? '\n' : ''}`);
+    if (!line.includes('\n') && oracle(f)) assert.deepEqual(got, { keyId: f[0], keyVersion: f[1], evidenceDomainId: f[2] });
+    else assert.equal(got, null, JSON.stringify(line));
+  }), { numRuns: 2000 });
 });

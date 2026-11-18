@@ -210,3 +210,18 @@ function check(receipt: unknown, trust: ReceiptTrust, expected: ReceiptExpectati
   const wrong = names.find(([k, v]) => payload[k] !== v);
   return wrong === undefined ? null : `potvrda ne imenuje ovaj commit (${wrong[0]})`;
 }
+
+/**
+ * The one active receipt key of the seed key's domain, from `psql -t -A` output: exactly one row
+ * `key_id|key_version|evidence_domain_id|is_seed_key`, optionally ending in one newline, whose fields obey
+ * the trust rules and whose flag is `t`; otherwise null. Two rows (two active keys in the domain) give null.
+ */
+export function registryRow(output: string): Omit<ReceiptTrust, 'keyBase64Url'> | null {
+  if (typeof output !== 'string') return null;
+  const line = output.endsWith('\n') ? output.slice(0, -1) : output;
+  const fields = line.split('|');
+  // A second row (a second active key) adds fields or a newline the field rules refuse.
+  if (fields.length !== 4 || fields[3] !== 't') return null;
+  const row = { keyId: fields[0]!, keyVersion: fields[1]!, evidenceDomainId: fields[2]! };
+  return TRUST.keyId(row.keyId) && TRUST.keyVersion(row.keyVersion) && TRUST.evidenceDomainId(row.evidenceDomainId) ? row : null;
+}
