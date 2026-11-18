@@ -54,7 +54,7 @@ test.each(['`.<t>`', '`.<T>`', '<c>', '<C> ili', '`.<c>`', '` .<t> `', '`` .<t> 
 
 test.each([
   'ductura.org', 'c.ductura.org', 'Domena je ductura.org.', '(ductura.org).', 'https://ductura.org/api/auth/callback',
-  '@ductura/contracts', 'ductura/.github', 'ductura/web', 'https://github.com/ductura/server',
+  '@ductura/contracts', 'ductura/.github', 'ductura/Institution_front_web_chrome', 'https://github.com/ductura/Institution_server',
   'https://github.com/ductura/.github/blob/main/docs/plan/PLAN-MIGRACIJE.md',
   'Repozitorij organizacije Ductura. Zajednički', 'topologija, window.top, .top { }',
 ])('ductura.org, repo paths and prose are not findings: %s', (s) => {
