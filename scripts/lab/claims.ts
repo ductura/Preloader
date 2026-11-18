@@ -51,6 +51,32 @@ const own = (body: Record<string, unknown> | null, key: string): unknown =>
 
 const isPid = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0;
 
+/** Text with something in it: '' === '' and includes('') hold for anything, so a blank is no evidence. */
+const filled = (v: unknown): v is string => typeof v === 'string' && v.trim() !== '';
+
+const isSha = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
+
+/** A value thrown at us as text, or '-' when even reading it throws. */
+function thrown(e: unknown): string {
+  try {
+    return e instanceof Error ? text(e.message) : text(e);
+  } catch {
+    return '-';
+  }
+}
+
+/** L-1's receipt check run as foreign code: whatever it throws or returns, the answer is null or a reason. */
+function receiptProblem(check: ReceiptCheck | null, receipt: unknown): string | null {
+  if (check === null) return 'nema ključa stoga ili očekivanog commita';
+  let why: unknown;
+  try {
+    why = check(receipt);
+  } catch (e) {
+    return `provjera potvrde: ${thrown(e)}`;
+  }
+  return why === null ? null : filled(why) ? why : 'provjera potvrde nije dala razlog';
+}
+
 /** The body of a 200 answer when it is a JSON object, else null: a body of null or a list counts as no answer. */
 function okBody(a: Answer | null): Record<string, unknown> | null {
   const body: unknown = a?.status === 200 ? a.body : null;
@@ -72,10 +98,7 @@ export function claims(o: Observed): Claim[] {
   const doc = reopened(o);
   const mine = doc === null ? null : sha256Hex(doc);
   const sent = o.sent === null ? null : sha256Hex(o.sent);
-  const why =
-    o.receipt === null
-      ? 'nema ključa stoga ili očekivanog commita'
-      : o.receipt(own(commit, 'receipt'));
+  const why = receiptProblem(o.receipt, own(commit, 'receipt'));
   const first = own(okBody(o.firstOpen), 'documentId');
   const [status, revision] = [own(commit, 'status'), own(commit, 'revision')];
   const [docId, current, docHash] = [own(second, 'documentId'), own(second, 'currentRevision'), own(second, 'documentHash')];
@@ -92,14 +115,14 @@ export function claims(o: Observed): Claim[] {
     ),
     claim(
       'L-3',
-      typeof first === 'string' && docId === first,
+      filled(first) && docId === first,
       `drugi open ${text(o.secondOpen?.status)}, documentId ${text(docId)}`,
     ),
     claim('L-4', current === 1, `currentRevision ${text(current)}`),
     claim(
       'L-5',
-      doc !== null && o.sent !== null && Buffer.compare(doc, o.sent) === 0 && doc.toString('utf8').includes(o.sentence),
-      doc === null ? 'nema dokumenta' : `${doc.byteLength} B, rečenica ${doc.toString('utf8').includes(o.sentence) ? 'je' : 'nije'} u tekstu`,
+      filled(o.sentence) && doc !== null && o.sent !== null && Buffer.compare(doc, o.sent) === 0 && doc.toString('utf8').includes(o.sentence),
+      !filled(o.sentence) ? 'rečenica je prazna' : doc === null ? 'nema dokumenta' : `${doc.byteLength} B, rečenica ${doc.toString('utf8').includes(o.sentence) ? 'je' : 'nije'} u tekstu`,
     ),
     claim(
       'L-6',
@@ -112,15 +135,17 @@ export function claims(o: Observed): Claim[] {
 /**
  * The preloader SHA of the report: always the checked-out HEAD (`git rev-parse
  * HEAD` output). A SHA the caller names (LAB_PRELOADER_SHA) is only checked
- * against it, so the report never names code other than what ran.
+ * against it, so the report never names code other than what ran. Once set it
+ * has to be that HEAD exactly, untrimmed: empty or blank is a FAIL, not unset.
  */
 export function preloaderSha(head: string | null, claimed: string | undefined): { sha: string | null; error: string | null } {
   const sha = head !== null && /^[0-9a-f]{40}\n$/.test(head) ? head.slice(0, 40) : null;
   if (sha === null) return { sha: null, error: 'HEAD preloadera nije čitljiv' };
-  if (claimed !== undefined && claimed !== '' && claimed !== sha) {
-    return { sha, error: `LAB_PRELOADER_SHA ${claimed} nije izvršeni HEAD ${sha}` };
-  }
-  return { sha, error: null };
+  if (claimed === undefined || claimed === sha) return { sha, error: null };
+  if (!filled(claimed)) return { sha, error: 'LAB_PRELOADER_SHA je zadan, a prazan' };
+  // Quoted and with every character outside printable ASCII escaped, so a stray NBSP or DEL shows.
+  const shown = JSON.stringify(claimed).replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  return { sha, error: `LAB_PRELOADER_SHA ${shown} nije izvršeni HEAD ${sha}` };
 }
 
 export type Meta = {
@@ -141,7 +166,8 @@ export function report(o: Observed, meta: Meta) {
     schema: 'ductura.lab.oporavak/1',
     ticket: 'DAN-1096',
     covers: 'VS-1.13, samo API dio (bez preglednika)',
-    result: meta.error === null && list.every((c) => c.pass) ? 'PASS' : 'FAIL',
+    // A PASS names the code that ran: both SHAs, or it proves nothing.
+    result: meta.error === null && isSha(meta.preloaderSha) && isSha(meta.serverSha) && list.every((c) => c.pass) ? 'PASS' : 'FAIL',
     preloaderSha: meta.preloaderSha,
     webSha: null,
     serverSha: meta.serverSha,
@@ -172,9 +198,15 @@ export function reportText(o: Observed, meta: Meta): string {
   try {
     return `${JSON.stringify(report(o, meta), null, 2)}\n`;
   } catch (e) {
-    const why = `izvještaj: ${e instanceof Error ? text(e.message) : text(e)}`;
+    const why = `izvještaj: ${thrown(e)}`;
+    let sentence = '-';
+    try {
+      sentence = text(o.sentence);
+    } catch {
+      // A sentence that cannot be read is not reported.
+    }
     const empty: Observed = {
-      sentence: text(o.sentence), sent: null, firstOpen: null, commit: null, receipt: null,
+      sentence, sent: null, firstOpen: null, commit: null, receipt: null,
       healthBetween: null, pidBefore: null, pidAfter: null, secondOpen: null,
     };
     return `${JSON.stringify(report(empty, { ...meta, error: meta.error === null ? why : `${meta.error}; ${why}` }), null, 2)}\n`;
