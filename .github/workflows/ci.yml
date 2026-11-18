@@ -24,6 +24,7 @@ jobs:
       # (runner image and Playwright version in the key), the install script
       # caps every attempt and its budget and moves apt to a fallback mirror,
       # and the cache is saved right after a good install, even if e2e fails.
+      # A slow cache step is cut off and skipped, never the job.
       - name: Browser cache key
         id: pw-key
         run: |
@@ -32,6 +33,8 @@ jobs:
           echo "key=${prefix}${ImageVersion}-$(jq -r '.devDependencies["@playwright/test"]' package.json)" >> "$GITHUB_OUTPUT"
       - name: Restore browsers and apt packages
         id: pw-cache
+        timeout-minutes: 2
+        continue-on-error: true
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -41,7 +44,7 @@ jobs:
           restore-keys: ${{ steps.pw-key.outputs.prefix }}
       - name: Install browsers
         id: browsers
-        timeout-minutes: 14
+        timeout-minutes: 13
         env:
           PLAYWRIGHT_INSTALL_BUDGET: "660"
           PLAYWRIGHT_INSTALL_TIMEOUT: "240"
@@ -49,6 +52,8 @@ jobs:
         run: bash scripts/playwright-install.sh chromium firefox webkit
       - name: Save browsers and apt packages
         if: steps.browsers.outcome == 'success' && steps.pw-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 2
+        continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |

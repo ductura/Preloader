@@ -5,8 +5,8 @@
 # In run 44244472136 the runner's mirror us-east-2.ec2.archive.ubuntu.com
 # served the 125 MB of packages at ~100 kB/s and the job was cancelled at 20 min.
 # - Every attempt is capped by PLAYWRIGHT_INSTALL_TIMEOUT and the whole script
-#   by PLAYWRIGHT_INSTALL_BUDGET (whole seconds); the last of the 3 attempts gets
-#   what is left of the budget. When it is spent: ::error:: and exit 1.
+#   by PLAYWRIGHT_INSTALL_BUDGET (whole seconds); no attempt of the 3 gets more
+#   than what is left of the budget. When it is spent: ::error:: and exit 1.
 # - After a failed attempt the leftover apt is stopped and the Ubuntu archive
 #   URLs in the apt sources move to the next fallback mirror (security.ubuntu.com
 #   and other repositories stay as they are).
@@ -80,8 +80,10 @@ save_apt_cache() {
   echo "::warning::could not save the apt package cache to ${apt_cache}"
 }
 
-# use_mirror <host>: points every Ubuntu archive URL (scheme://host/ubuntu[/]
-# followed by a space or the line end) at <host>, except security.ubuntu.com.
+# use_mirror <host>: points every Ubuntu archive URL (http[s]://host/ubuntu[/]
+# at the line start or after a space, and followed by a space or the line end)
+# at <host>. Lines naming security.ubuntu.com (any case, any port) and
+# mirror+http lists stay as they are.
 fallbacks=(archive.ubuntu.com mirrors.edge.kernel.org)
 use_mirror() {
   local f t etc="${PLAYWRIGHT_APT_ROOT:-}/etc/apt" files=()
@@ -89,9 +91,10 @@ use_mirror() {
     [ -f "$f" ] && files+=("$f")
   done
   [ "${#files[@]}" -gt 0 ] || return 0
+  # perl for the lookahead: the space after one URL may start the next one.
+  local edit="next if m{//security\.ubuntu\.com[:/]}i; s{(^|\s)(https?://)[^/\s]+/ubuntu(/?)(?=\s|\$)}{\$1\$2$1/ubuntu\$3}g"
   t=$(window 20)
-  if [ "$t" -gt 0 ] && cap "$t" sudo sed -E -i \
-    "/\/\/security\.ubuntu\.com\//!s#(https?://)[^/[:space:]]+/ubuntu(/?)([[:space:]]|\$)#\1$1/ubuntu\2\3#g" "${files[@]}"; then
+  if [ "$t" -gt 0 ] && cap "$t" sudo perl -i -pe "$edit" "${files[@]}"; then
     echo "::warning::the apt sources now use $1 for the Ubuntu archive"
   else
     echo "::warning::the apt sources could not be switched to $1"
@@ -102,7 +105,7 @@ restore_apt_cache
 tried=0
 status=0
 for attempt in $(seq 1 "$attempts"); do
-  if [ "$attempt" -lt "$attempts" ]; then t=$(window "$limit"); else t=$(window "$budget"); fi
+  t=$(window "$limit")
   [ "$t" -gt 0 ] || break
   tried=$attempt
   cap "$t" pnpm exec playwright install --with-deps "$@"
