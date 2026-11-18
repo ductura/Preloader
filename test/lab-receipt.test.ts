@@ -4,6 +4,8 @@
 // test 1.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
+import fc from 'fast-check';
+import { canonicalJson } from '@ductura/contracts';
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
@@ -38,7 +40,30 @@ test('publicKeyFromSeed takes a 32-byte Uint8Array from another realm (review on
   assert.equal(publicKeyFromSeed(foreign), publicKeyFromSeed(SEED));
 });
 
-test.each([new Uint8Array(0), SEED.subarray(1), Buffer.concat([SEED, Buffer.from([0])]), new Uint16Array(16), runInNewContext('new Uint16Array(16)')])(
+test('publicKeyFromSeed takes a Buffer view at an offset as the 32 bytes it shows', () => {
+  assert.equal(publicKeyFromSeed(Buffer.concat([Buffer.from([7]), SEED]).subarray(1)), publicKeyFromSeed(SEED));
+});
+
+test('publicKeyFromSeed reads the view itself, not a length its prototype claims', () => {
+  const proto = Object.create(Uint8Array.prototype, { length: { get: () => 31 }, byteLength: { get: () => 31 } }) as object;
+  assert.equal(publicKeyFromSeed(Object.setPrototypeOf(Uint8Array.from(SEED), proto) as Uint8Array), publicKeyFromSeed(SEED));
+});
+
+// Round 3 (c.6986519308): the length is the view's own, never an own property that shadows it.
+const shadow = (n: number, key: 'byteLength' | 'length', claim: number) => Object.defineProperty(new Uint8Array(n), key, { value: claim });
+const shared = new Uint8Array(new SharedArrayBuffer(32));
+shared.set(SEED);
+// QA self-check: a detached buffer and a view out of bounds of its shrunk buffer give our error, not a TypeError.
+const detached = Uint8Array.from(SEED);
+structuredClone(detached.buffer, { transfer: [detached.buffer] });
+// Resizable buffers are ES2024; the repo's TypeScript lib is ES2023.
+type Resizable = ArrayBuffer & { resize: (n: number) => void };
+const resizable = new (ArrayBuffer as unknown as new (n: number, o: { maxByteLength: number }) => Resizable)(64, { maxByteLength: 64 });
+const outside = new Uint8Array(resizable, 16, 32);
+resizable.resize(20);
+test.each([new Uint8Array(0), SEED.subarray(1), Buffer.concat([SEED, Buffer.from([0])]), new Uint16Array(16), runInNewContext('new Uint16Array(16)'),
+  shadow(32, 'byteLength', 31), shadow(31, 'byteLength', 32), shadow(32, 'length', 31), shadow(31, 'length', 32), { length: 32, byteLength: 32 },
+  new DataView(new ArrayBuffer(32)), shared, detached, outside])(
   'publicKeyFromSeed refuses a seed that is not 32 bytes of Uint8Array (%#)',
   (seed) => {
     assert.throws(() => publicKeyFromSeed(seed as Uint8Array), /^Error: sjeme ključa nema 32 bajta$/);
@@ -60,7 +85,10 @@ const writes: [string, unknown, string][] = [
   ['-0 in an object and an array', { a: -0, b: [-0] }, '{"a":0,"b":[0]}'],
   ['an own __proto__ key', JSON.parse('{"a":2,"__proto__":1}'), '{"__proto__":1,"a":2}'],
   ['a nested own __proto__ key', JSON.parse('{"x":{"__proto__":{"y":1}}}'), '{"x":{"__proto__":{"y":1}}}'],
-  ['an object without a prototype', Object.assign(Object.create(null) as object, { b: 1, a: [] }), '{"a":[],"b":1}'],
+  ['finite numbers as JSON.stringify writes them', [1.5, 2 ** 53, 1e21, 5e-324, -1e-7], '[1.5,9007199254740992,1e+21,5e-324,-1e-7]'],
+  ['JSON text, parsed first', ' {"b":1,"a":[2]} ', '{"a":[2],"b":1}'],
+  ['JSON text of a string', '"x"', '"x"'],
+  ['a surrogate pair in a key and a value', { '\u{1F600}k': '\u{1F600}' }, '{"\u{1F600}k":"\u{1F600}"}'],
   ['an own toJSON key, never called', { toJSON: 'x', a: 1 }, '{"a":1,"toJSON":"x"}'],
   ['a shared, not cyclic, value', (() => { const x = { y: 1 }; return { p: x, q: [x] }; })(), '{"p":{"y":1},"q":[{"y":1}]}'],
   ['64 levels of nesting', nest(64), `${'['.repeat(63)}{"a":0}${']'.repeat(63)}`],
@@ -84,6 +112,8 @@ cycle['self'] = cycle;
 const revoked = Proxy.revocable({}, {});
 revoked.revoke();
 const getterObject = Object.defineProperty({}, 'a', { get: () => 1, enumerable: true });
+// Round 3 (c.6986519308): jcs takes a JSON value. A built-in or a class with private fields given Object.prototype
+// cannot be told from {} in JavaScript; it is outside that domain, and the real caller passes JSON.parse output.
 const refused: [string, unknown][] = [
   ['a sparse array', sparse],
   ['an array with trailing holes', trailing],
@@ -105,10 +135,8 @@ const refused: [string, unknown][] = [
   ['new Number', new Number(1)],
   ['a Date', new Date(0)],
   ['a Map', new Map()],
-  ['1.5', 1.5],
   ['NaN', NaN],
   ['Infinity', Infinity],
-  ['2 ** 53', 2 ** 53],
   ['a bigint', 1n],
   ['undefined', undefined],
   ['a function', () => 1],
@@ -116,16 +144,15 @@ const refused: [string, unknown][] = [
   ['undefined in an object', { a: undefined }],
   // QA self-check on ce6a78b.
   ['65 levels of nesting', nest(65)],
-  ['an array iterator nested in an object', { a: [Object.setPrototypeOf([1][Symbol.iterator](), Object.prototype) as unknown] }],
+  ['an object without a prototype', Object.assign(Object.create(null) as object, { a: 1 })],
+  ['a lone high surrogate in a value', { a: 'x\ud800' }],
+  ['a lone low surrogate in a key', { '\udc00': 1 }],
+  ['text that is not JSON', 'abc'],
+  ['cut JSON text', '{"a":'],
+  ['JSON text with a lone surrogate', '"\\ud800"'],
   ['a symbol key', { a: 1, [Symbol('x')]: 2 }],
   ['a hidden key', Object.defineProperty({ a: 1 }, 'b', { value: 2 })],
   ['a hidden array element', Object.defineProperty([1, 2], 1, { value: 2, enumerable: false })],
-  ...[new Map([['a', 1]]), new Set([1]), new WeakMap(), new Date(5), new Number(7), new Boolean(true), new String('x'),
-    new ArrayBuffer(2), new DataView(new ArrayBuffer(2)), new Uint8Array([1, 2]), /x/, new Error('x'), Promise.resolve(),
-    (function* g() {})(), new Map().entries(),
-    // Review on f9c1458: the class is any built-in, so iterators no list names are refused too.
-    [1][Symbol.iterator](), 'ab'[Symbol.iterator](), 'a'.matchAll(/a/g), new WeakRef({}), new FinalizationRegistry(() => {})].map((v): [string, unknown] => [
-    `a ${Object.prototype.toString.call(v)} with a plain prototype`, Object.setPrototypeOf(v, Object.prototype) as unknown]),
 ];
 test.each(refused)('jcs refuses %s', (_name, value) => {
   assert.throws(() => jcs(value), /^Error: jcs: /);
@@ -174,7 +201,8 @@ const lab = (field: string) => `laboratorij nema ispravan ključ stoga ili commi
 const { documentId: _d, ...noDocument } = expected;
 const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
   ["the server's receipt", vector(), trust, expected, null],
-  ['a payload without a prototype', at((r) => { r.signedReceipt.payload = Object.assign(Object.create(null) as object, r.signedReceipt.payload); }), trust, expected, null],
+  // a1-1 round 3: a JSON value has Object.prototype, so a payload without a prototype is not one.
+  ['a payload without a prototype', at((r) => { r.signedReceipt.payload = Object.assign(Object.create(null) as object, r.signedReceipt.payload); }), trust, expected, SHAPE],
   ['no receipt', undefined, trust, expected, NOT_SIGNED],
   ['a receipt as text', JSON.stringify(vector()), trust, expected, NOT_SIGNED],
   ['a pending receipt', at((r) => { r.status = 'pending_signature'; }), trust, expected, NOT_SIGNED],
@@ -194,7 +222,7 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
   ['a key id that is a number', label('keyId', 5 as unknown as string), trust, expected, SHAPE],
   ['an algorithm in an array', at((r) => { r.signedReceipt.signature['algorithm'] = ['Ed25519']; }), trust, expected, SHAPE],
   ['a digest that is a number', at((r) => { (r.signedReceipt as Record<string, unknown>)['payloadDigestSha256'] = 1; }), trust, expected, SHAPE],
-  ['a built-in envelope with the receipt fields', Object.assign(Object.setPrototypeOf(new Date(0), Object.prototype) as object, vector()), trust, expected, NOT_SIGNED],
+  ['a Date envelope with the receipt fields', Object.assign(new Date(0), vector()), trust, expected, NOT_SIGNED],
   ...Object.keys(p).map((k): [string, unknown, ReceiptTrust, unknown, string] => [`payload ${k} of the wrong type`, at((r) => { r.signedReceipt.payload[k] = false; }), trust, expected, `${SHAPE} (${k})`]),
   ['an extra payload field', signed({ extra: 1 }), trust, expected, SHAPE],
   ['a payload field missing', at((r) => { delete r.signedReceipt.payload['previousReceiptId']; }), trust, expected, SHAPE],
@@ -249,4 +277,39 @@ test('checkReceipt does not call a getter that returns the right value', () => {
   const r = at((x) => { Object.defineProperty(x.signedReceipt.payload, 'revision', { get: () => { calls += 1; return 7; }, enumerable: true }); });
   assert.equal(checkReceipt(r, trust, expected), SHAPE);
   assert.equal(calls, 0);
+});
+
+// Round 3 (c.6986519308): any JSON value, written as the server's reference canonicalJson writes it.
+const lone = fc.constantFrom('\ud800', 'a\udc00', '\udbff\ud800');
+// Any UTF-16 code units, so lone surrogates come anywhere in a string, not only from the constants.
+const units = fc.array(fc.integer({ min: 0, max: 0xffff }), { maxLength: 6 }).map((a) => String.fromCharCode(...a));
+const text = fc.oneof(fc.string({ unit: 'binary' }), units, fc.constantFrom('__proto__', 'toString', '\u{1F600}', '\u2028'), lone);
+const leaf = fc.oneof(fc.constant(null), fc.boolean(), fc.constant(-0), fc.integer(), fc.double({ noNaN: true, noDefaultInfinity: true }),
+  fc.constantFrom(2 ** 53, Number.MAX_VALUE, Number.MIN_VALUE, 1e21), text);
+// Objects are built from JSON text, as JSON.parse builds them, so __proto__ is an own key.
+const json = fc.letrec((tie) => ({
+  value: fc.oneof({ depthSize: 'small' }, leaf, tie('array'), tie('object')),
+  array: fc.array(tie('value'), { maxLength: 4 }),
+  object: fc.array(fc.tuple(text, tie('value')), { maxLength: 4 }).map((entries) => {
+    const o = JSON.parse('{}') as Record<string, unknown>;
+    for (const [k, v] of entries) Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
+    return o;
+  }),
+})).value;
+
+test('jcs writes every JSON value as canonicalJson does, and the same for its JSON text', () => {
+  fc.assert(fc.property(json, (v) => {
+    let reference: string | null = null;
+    try {
+      reference = canonicalJson(v);
+    } catch {
+      // A lone surrogate: canonicalJson throws, and so must jcs.
+    }
+    // A string input is JSON text, so a top-level string value goes in as its JSON text only.
+    const direct = typeof v === 'string' ? [] : [v, JSON.parse(JSON.stringify(v)) as unknown];
+    for (const input of [...direct, JSON.stringify(v)]) {
+      if (reference === null) assert.throws(() => jcs(input), /^Error: jcs: /);
+      else assert.equal(jcs(input), reference);
+    }
+  }), { numRuns: 500 });
 });
