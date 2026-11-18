@@ -76,6 +76,11 @@ export function routeFor(rawPath) {
   return 'static';
 }
 
+/** Ime hosta za spajanje: IPv6 iz URL-a (`[::1]`) bez uglatih zagrada. */
+function connectHost(/** @type {URL} */ url) {
+  return url.hostname.replace(/^\[(.*)\]$/, '$1');
+}
+
 /** Putanja iz cilja zahtjeva (`/a/b?x`); apsolutni oblik `http://host/a` daje `/a`. */
 function pathOf(/** @type {string} */ target) {
   const path = target.split('?', 1)[0] ?? '';
@@ -124,6 +129,11 @@ function upstreamHeaders(req, upgrade) {
     if (!drop.has((headers[i] ?? '').toLowerCase())) kept.push(headers[i] ?? '', headers[i + 1] ?? '');
   }
   kept.push('X-Forwarded-For', forwardedFor, 'X-Forwarded-Host', host, 'X-Forwarded-Proto', 'http');
+  // Tijelo bez duljine (chunked) mora i prema uzvodnom imati okvir: Node ga sam ne
+  // dodaje za svaku metodu (npr. DELETE), pa bi bajtovi tijela prošli bez okvira.
+  if (!upgrade && req.headers['transfer-encoding'] !== undefined && req.headers['content-length'] === undefined) {
+    kept.push('Transfer-Encoding', 'chunked');
+  }
   return kept;
 }
 
@@ -222,7 +232,7 @@ export async function createEdge({ dist, targets = targetsFromEnv({}), log = () 
 
     const upstream = targets[route];
     const outgoing = httpRequest({
-      hostname: upstream.hostname,
+      hostname: connectHost(upstream),
       port: upstream.port || 80,
       method: req.method,
       path: target,
@@ -253,7 +263,7 @@ export async function createEdge({ dist, targets = targetsFromEnv({}), log = () 
     }
     const upstream = targets[route];
     let connected = false;
-    const remote = connect({ host: upstream.hostname, port: Number(upstream.port || 80) }, () => {
+    const remote = connect({ host: connectHost(upstream), port: Number(upstream.port || 80) }, () => {
       connected = true;
       const headers = upstreamHeaders(req, true);
       let lines = `${req.method} ${target} HTTP/${req.httpVersion}\r\n`;

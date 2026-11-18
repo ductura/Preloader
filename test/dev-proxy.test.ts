@@ -241,6 +241,19 @@ describe('prosljeđivanje', () => {
     expect(seen[0]).toMatchObject({ upstream: 'admin', method: 'POST', body: 'korisnik=k&lozinka=l' });
   });
 
+  test.each(['DELETE', 'POST', 'PATCH'])('chunked tijelo za %s stiže uzvodnom s okvirom', async (method) => {
+    seen.length = 0;
+    const reply = await rawRequestWith(
+      '/api/v1/x',
+      'Transfer-Encoding: chunked\r\nConnection: close\r\n',
+      method,
+      '5\r\nabcde\r\n3\r\nfgh\r\n0\r\n\r\n',
+    );
+    expect(reply).toMatch(/^HTTP\/1\.1 303/);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ method, body: 'abcdefgh' });
+  });
+
   test('zaglavlja jednog skoka se ne prosljeđuju', async () => {
     seen.length = 0;
     await rawRequestWith('/api/v1/me', 'Connection: close, X-Tajno\r\nX-Tajno: 1\r\nKeep-Alive: timeout=5\r\nX-Ostaje: da\r\n');
@@ -277,15 +290,42 @@ describe('uzvodni nije pokrenut', () => {
     expect(ws).toMatch(/^HTTP\/1\.1 502/);
   });
 
+  test('IPv6 cilj [::1] spaja se bez uglatih zagrada', async () => {
+    const v6 = fakeUpstream('v6');
+    servers.push(v6);
+    v6.on('connection', (socket) => {
+      sockets.add(socket);
+      socket.on('close', () => sockets.delete(socket));
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        v6.once('error', reject);
+        v6.listen(0, '::1', resolve);
+      });
+    } catch {
+      // Bez IPv6 sučelja na računalu provjerava se samo da URL ostaje prihvaćen.
+      expect(targetsFromEnv({ DUCTURA_EDGE_API: 'http://[::1]:4000' }).api.hostname).toBe('[::1]');
+      return;
+    }
+    const address = v6.address();
+    const v6port = typeof address === 'object' && address ? address.port : 0;
+    const edge = await createEdge({ dist: join(root, 'dist'), targets: targetsFromEnv({ DUCTURA_EDGE_API: `http://[::1]:${v6port}` }) });
+    const port = await listen(edge);
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/me`, { redirect: 'manual' });
+    expect(res.headers.get('x-upstream')).toBe('v6');
+    const ws = await rawUpgrade('/api/v1/ws', 'ping', port);
+    expect(ws).toContain('v6:ping');
+  });
+
   test('bez dist-a createEdge baca', async () => {
     await expect(createEdge({ dist: join(root, 'nema') })).rejects.toThrow();
   });
 });
 
-function rawRequestWith(path: string, extra: string): Promise<string> {
+function rawRequestWith(path: string, extra: string, method = 'GET', body = '', port = edgePort): Promise<string> {
   return new Promise((resolve, reject) => {
-    const socket = connect(edgePort, '127.0.0.1', () => {
-      socket.write(`GET ${path} HTTP/1.1\r\nHost: localhost:8000\r\n${extra}\r\n`);
+    const socket = connect(port, '127.0.0.1', () => {
+      socket.write(`${method} ${path} HTTP/1.1\r\nHost: localhost:8000\r\n${extra}\r\n${body}`);
     });
     let data = '';
     socket.on('data', (chunk) => (data += chunk.toString()));
