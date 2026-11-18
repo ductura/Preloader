@@ -42,6 +42,8 @@ function jsStrings(code: string): string[] {
   return out;
 }
 
+const TAG = /<!--[\s\S]*?-->|<(?:[^>"']|"[^"]*"|'[^']*')*>/g;
+
 /** Područja datoteke u kojima tekst sučelja može završiti, svako kao zaseban niz za traženje riječi. */
 function regions(name: string, content: string): string[] {
   if (name.endsWith('.js') || name.endsWith('.mjs')) return jsStrings(content);
@@ -51,9 +53,11 @@ function regions(name: string, content: string): string[] {
     scripts.push(...jsStrings(body));
     return `${open} ${close}`;
   });
-  const decoded = decodeJsEscapes(decodeEntities(markup));
-  // Atributi ostaju u `decoded`; tekst rastavljen oznakama spaja se s razmakom i bez njega.
-  return [...scripts, decoded, decoded.replace(/<[^>]*>/g, ' '), decoded.replace(/<[^>]*>/g, '')];
+  const decode = (s: string): string => decodeJsEscapes(decodeEntities(s));
+  // Oznake se uklanjaju prije dekodiranja i uz navodnike (`>` u vrijednosti atributa ne završava oznaku);
+  // atributi i komentari ostaju u cijelom dekodiranom markupu, a prikazani tekst spaja se s razmakom i bez njega.
+  const shown = (sep: string): string => decode(markup.replace(TAG, sep));
+  return [...scripts, decode(markup), shown(' '), shown('')];
 }
 
 const leaksIn = (name: string, content: string, candidates: readonly string[]): string[] => {
@@ -77,6 +81,11 @@ test('detektor curenja: pogađa list u tekstu, atributu, entitetima, JS nizu, pr
     ['a.html', '<p data-t="&quot;Drugi&#39;"></p>', 'Drugi'],
     ['a.html', '<p data-t="Tekst u\\u017Eivo"></p>', 'Tekst uživo'],
     ['a.html', '<!-- Vi -->', 'Vi'],
+    ['a.html', '<p>Tekst <b title="1 &gt; 0">uživo</b></p>', 'Tekst uživo'],
+    ['a.html', '<p>Tekst <b title="1 > 0">uživo</b></p>', 'Tekst uživo'],
+    ['a.html', "<p>Tekst <b data-x='a>b'>uživo</b></p>", 'Tekst uživo'],
+    ['a.html', '<p>Tekst <!-- a > b -->uživo</p>', 'Tekst uživo'],
+    ['a.html', '<p>Tekst u<b title="&gt;">živo</b></p>', 'Tekst uživo'],
     ['a.html', '<script>var Ne=1;f("Tekst u\\u017Eivo")</script>', 'Tekst uživo'],
     ['a.html', '<script>f(`x ${Ne} Ne`)</script>', 'Ne'],
     ['a.html', '<script>f(/["\']/.test(a)?"Da":0)</script>', 'Da'],
