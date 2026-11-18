@@ -4,8 +4,9 @@
 //   node scripts/lab/vendored.ts <server checkout> <fixture>
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual, types } from 'node:util';
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** The one source the copy may come from. */
 export const SOURCE_PATH = 'server/domain/forensics/golden-vectors/evidence-v2.json';
@@ -24,6 +25,42 @@ function exact(value: unknown, keys: readonly string[]): value is Obj {
     const field = Object.getOwnPropertyDescriptor(value, k);
     return field !== undefined && field.enumerable === true && Object.hasOwn(field, 'value');
   });
+}
+
+/**
+ * A value JSON.parse could have made, at every depth: null, a boolean, a
+ * string, a finite number, or a plain array or object of such values held in
+ * own enumerable data properties. No getter, Proxy, cycle or other prototype,
+ * so comparing it later reads only plain data.
+ */
+function jsonTree(value: unknown, path: Set<object> = new Set()): boolean {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'object' || types.isProxy(value) || path.has(value)) return false;
+  const array = Array.isArray(value);
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (array ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) return false;
+  const keys = Reflect.ownKeys(value).filter((k) => !(array && k === 'length'));
+  if (array && (keys.length !== value.length || keys.some((k, i) => k !== String(i)))) return false;
+  path.add(value);
+  const ok = keys.every((k) => {
+    const field = Object.getOwnPropertyDescriptor(value, k);
+    return typeof k === 'string' && field?.enumerable === true && Object.hasOwn(field, 'value') && jsonTree(field.value, path);
+  });
+  path.delete(value);
+  return ok;
+}
+
+/** One line: control and line-separator characters of any input become '?'. */
+const oneLine = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu, '?');
+
+/** True when the script at `url` is the one node was started with, also through a link; on every Node 24. */
+export function isEntry(argv1: string | undefined, url: string): boolean {
+  try {
+    return argv1 !== undefined && realpathSync(argv1) === realpathSync(fileURLToPath(url));
+  } catch {
+    return false;
+  }
 }
 
 /** An own property of a JSON object, or undefined; nothing inherited. */
@@ -45,13 +82,14 @@ export function vendoredProblem(source: Buffer, fixture: unknown, serverSha: unk
 
 function problem(source: Buffer, fixture: unknown, serverSha: unknown): string | null {
   if (typeof serverSha !== 'string' || !SHA.test(serverSha)) return 'SERVER_SHA nije puni SHA commita';
+  if (!jsonTree(fixture)) return 'kopija nije čisti JSON';
   if (!exact(fixture, FIXTURE) || !exact(fixture['source'], SOURCE)) return 'kopija nema oblik';
   const from = fixture['source'] as Obj;
   if (from['repository'] !== 'ductura/server') return 'kopija nije iz ductura/server';
   if (from['path'] !== SOURCE_PATH) return `kopija nije iz ${SOURCE_PATH}`;
   if (!isDeepStrictEqual(from['take'], TAKE)) return 'kopija ne navodi što je preuzeto';
   const blob = createHash('sha1').update(`blob ${source.byteLength}\0`).update(source).digest('hex');
-  if (from['blob'] !== blob) return `izvor nije blob ${String(from['blob'])}`;
+  if (from['blob'] !== blob) return `izvor nije blob ${JSON.stringify(from['blob'])}`;
   if (typeof from['commit'] !== 'string' || !SHA.test(from['commit'])) return 'kopija ne navodi puni SHA commita';
   if (from['commit'] !== serverSha) return `kopija je iz ${from['commit']}, a CI veže ${serverSha}`;
   let d: unknown;
@@ -77,8 +115,8 @@ function main(args: string[], serverSha: unknown): string | null {
   return vendoredProblem(readFileSync(join(server, SOURCE_PATH)), JSON.parse(readFileSync(file, 'utf8')), serverSha);
 }
 
-// import.meta.main also holds when the script is run through a link (argv[1] is the link, the URL the real path).
-if (import.meta.main) {
+// By real path, not the main flag of import.meta: that flag only exists from Node 24.2, and the repo allows any Node 24.
+if (isEntry(process.argv[1], import.meta.url)) {
   let problem: string | null;
   try {
     problem = main(process.argv.slice(2), process.env['SERVER_SHA']);
@@ -86,7 +124,7 @@ if (import.meta.main) {
     problem = error instanceof Error ? error.message : 'nepoznata greška';
   }
   if (problem !== null) {
-    console.error(`Vendorirani vektor: ${problem}`);
+    console.error(`Vendorirani vektor: ${oneLine(problem)}`);
     process.exitCode = 1;
   }
 }

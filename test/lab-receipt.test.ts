@@ -15,7 +15,7 @@ import openapi from '@ductura/contracts/openapi/v1.json' with { type: 'json' };
 import { Ajv } from 'ajv';
 
 import { type ReceiptExpectation, type ReceiptTrust, checkReceipt, jcs, publicKeyFromSeed, registryRow } from '../scripts/lab/receipt.ts';
-import { SOURCE_PATH, vendoredProblem } from '../scripts/lab/vendored.ts';
+import { SOURCE_PATH, isEntry, vendoredProblem } from '../scripts/lab/vendored.ts';
 
 type Golden = {
   verificationKey: { keyId: string; keyVersion: string; spkiDerHex: string; signingSeedSha256: string };
@@ -355,6 +355,94 @@ test('the vendored CLI checks SHA and arguments first and fails with one line, a
       else assert.match(run.stderr, message, name);
       assert.doesNotMatch(run.stderr, /^\s+at /m, name);
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Review FAIL on 34058fd. 1: a getter or proxy anywhere inside the fixture,
+// not only at its top, is refused before any value is read. 2: the CLI prints
+// one line whatever the input holds. 3: the CLI finds its own entry on every
+// Node 24 (import.meta.main only exists from 24.2).
+test('a fixture that is not a plain JSON tree at any depth is refused without reading it', () => {
+  const g = counted('chain.verificationKey');
+  const take = ['x', 'receiptV2.accepted[0]'];
+  Object.defineProperty(take, 0, { get: g.get, enumerable: true });
+  const cyclic = clone(vOwn);
+  (cyclic['accepted'] as Record<string, unknown>)['self'] = cyclic['accepted'];
+  const withExtra = Object.assign([...(vOwn.source['take'] as string[])], { extra: 1 });
+  const sparse = ['chain.verificationKey', , 'receiptV2.accepted[0]'];
+  const nested = (path: string[], value: unknown) => {
+    const f = clone(vOwn);
+    let at = f as Record<string, unknown>;
+    for (const k of path.slice(0, -1)) at = at[k] as Record<string, unknown>;
+    at[path.at(-1)!] = value;
+    return f;
+  };
+  const vkey = vOwn['verificationKey'] as Record<string, unknown>;
+  const fixtures: [string, unknown][] = [
+    ['a getter in source.take[0]', { ...vOwn, source: { ...vOwn.source, take } }],
+    ['a proxy in source.take', { ...vOwn, source: { ...vOwn.source, take: new Proxy([...(vOwn.source['take'] as string[])], {}) } }],
+    ['a getter in verificationKey', { ...vOwn, verificationKey: Object.defineProperty({ ...vkey }, 'keyId', { get: () => vkey['keyId'], enumerable: true }) }],
+    ['a proxy in accepted.payload', nested(['accepted', 'payload'], new Proxy(clone(golden.accepted.payload), {}))],
+    ['a revoked proxy in accepted.signature', nested(['accepted', 'signature'], revoked.proxy)],
+    ['a cycle in accepted', cyclic],
+    ['an array with an extra property', { ...vOwn, source: { ...vOwn.source, take: withExtra } }],
+    ['a sparse array', { ...vOwn, source: { ...vOwn.source, take: sparse } }],
+    ['NaN in accepted', nested(['accepted', 'payload', 'revision'], NaN)],
+    ['a bigint in accepted', nested(['accepted', 'payload', 'revision'], 7n)],
+    ['a function in accepted', nested(['accepted', 'note'], () => 1)],
+    ['a Date in accepted', nested(['accepted', 'note'], new Date(0))],
+    ['a symbol key in verificationKey', { ...vOwn, verificationKey: { ...vkey, [Symbol('x')]: 1 } }],
+    ['an inherited object in accepted', nested(['accepted', 'payload'], Object.create(golden.accepted.payload) as unknown)],
+  ];
+  for (const [name, f] of fixtures) {
+    let reason: string | null = null;
+    assert.doesNotThrow(() => { reason = vendoredProblem(vSource, f, SHA); }, name);
+    assert.equal(typeof reason, 'string', name);
+  }
+  assert.equal(g.calls.n, 0, 'the getter was read');
+  assert.equal(vendoredProblem(vSource, clone(vOwn), SHA), null, 'a plain clone still passes');
+});
+
+test('the CLI prints exactly one line whatever the fixture or path holds', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lab-vendored-line-'));
+  try {
+    const server = join(dir, 'server');
+    mkdirSync(join(server, dirname(SOURCE_PATH)), { recursive: true });
+    writeFileSync(join(server, SOURCE_PATH), vSource);
+    const cli = fileURLToPath(new URL('../scripts/lab/vendored.ts', import.meta.url));
+    const { SERVER_SHA: _s, ...env } = process.env;
+    const files = ['a\nb', 'a\r\nb', 'a\rb', 'a\u2028b', 'a\u2029b', 'a\u0085b', 'a\u001bb'].map((blob, i) => {
+      const file = join(dir, `f${i}.json`);
+      writeFileSync(file, JSON.stringify({ ...vOwn, source: { ...vOwn.source, blob } }));
+      return file;
+    });
+    for (const file of [...files, join(dir, 'nema\nnovi\u2028red.json')]) {
+      const run = spawnSync(process.execPath, [cli, server, file], { cwd: dir, env: { ...env, SERVER_SHA: SHA }, encoding: 'utf8', timeout: 20_000 });
+      assert.equal(run.status, 1, file);
+      assert.match(run.stderr, /^Vendorirani vektor: [^\r\n\u2028\u2029\u0085\u001b]*\n$/u, JSON.stringify(run.stderr));
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI finds its own entry by real path, without import.meta.main', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lab-vendored-entry-'));
+  try {
+    const real = fileURLToPath(new URL('../scripts/lab/vendored.ts', import.meta.url));
+    const url = new URL('../scripts/lab/vendored.ts', import.meta.url).href;
+    const link = join(dir, 'vendored.ts');
+    symlinkSync(real, link);
+    assert.equal(isEntry(real, url), true);
+    assert.equal(isEntry(link, url), true);
+    assert.equal(isEntry(fileURLToPath(import.meta.url), url), false);
+    assert.equal(isEntry(join(dir, 'nema.ts'), url), false);
+    assert.equal(isEntry(undefined, url), false);
+    const text = readFileSync(real, 'utf8');
+    assert.doesNotMatch(text, /import\.meta\.main/);
+    assert.match(text, /^if \(isEntry\(process\.argv\[1\], import\.meta\.url\)\) \{$/m);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
