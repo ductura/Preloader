@@ -1,6 +1,6 @@
 // Vizualni test (DAN-1076, docs/PLAN.md §6, red „Vizualni”): prvi ekran i dvije stranice greške iz kataloga
 // na 1440, 768 i 400 px u Chromiumu. Stranice poslužuje lažni server iz `page.route`; mreže nema.
-// Osnovne snimke nastaju u CI-ju (`ubuntu-24.04`): fontovi su sistemski, pa drugi OS daje druge piksele.
+// Osnovne snimke nastaju u CI-ju (slika iz `e2e-matrix`, fontovi iz `e2e/fonts/`): drugi OS daje druge piksele.
 import { existsSync, readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 

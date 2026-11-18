@@ -3,7 +3,7 @@ import { defineConfig, devices } from '@playwright/test';
 import { MATRIX } from './devices.ts';
 
 const VISUAL = 'visual.spec.ts';
-// Osnovne snimke vrijede samo za Linux iz CI-ja (sistemski fontovi): projekt `visual` je u CI-ju
+// Osnovne snimke vrijede samo za Linux iz CI-ja (slika iz `e2e-matrix`, fontovi iz `e2e/fonts/`): projekt `visual` je u CI-ju
 // (GitHub Actions postavlja CI) ili uz izričit E2E_VISUAL=1, inače bi `pnpm e2e` na Windowsu i macOS-u pao.
 const WITH_VISUAL = !!process.env['CI'] || process.env['E2E_VISUAL'] === '1';
 
