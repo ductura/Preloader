@@ -10,16 +10,16 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import { parseDocument, visit } from 'yaml';
+import { isScalar, parseDocument, visit } from 'yaml';
 
 type Obj = Record<string, unknown>;
 const isMap = (v: unknown): v is Obj =>
   typeof v === 'object' && v !== null && !Array.isArray(v) && Object.getPrototypeOf(v) === Object.prototype;
 const own = (o: unknown, k: string): unknown => (isMap(o) && Object.hasOwn(o, k) ? o[k] : undefined);
 
-// Strict reader: any YAML error or warning (an unknown tag), a %YAML
-// directive, a duplicate key or a second document fails. A merge key `<<`
-// stays a plain key, so it is refused as an extra key. A number or boolean
+// Strict reader: any YAML error or warning, a %YAML directive, an explicit
+// tag (`!env`, `!!int "5"`), a merge key `<<` (pnpm's reader would merge it),
+// a duplicate key or a second document fails. A number or boolean
 // must be written as decimal digits without a leading zero, true or false:
 // 0x14, 020, +20 or FALSE fail.
 function parse(text: string): Obj {
@@ -27,7 +27,15 @@ function parse(text: string): Obj {
   const issues = [...doc.errors, ...doc.warnings].map((e) => e.message);
   if (doc.directives?.yaml.explicit) issues.push(`%YAML ${doc.directives.yaml.version} directive`);
   visit(doc, {
+    // Maps and lists: the Scalar visitor below takes scalars from Node.
+    Node(_, node) {
+      if (node.tag !== undefined) issues.push(`explicit tag ${node.tag}`);
+    },
+    Pair(_, pair) {
+      if (isScalar(pair.key) && pair.key.value === '<<') issues.push('merge key <<');
+    },
     Scalar(_, node) {
+      if (node.tag !== undefined) issues.push(`explicit tag ${node.tag}`);
       const plain = typeof node.value === 'number' || typeof node.value === 'boolean';
       if (plain && !/^(?:0|[1-9]\d*|true|false)$/.test(node.source ?? '')) issues.push(`scalar ${node.source} is not plain`);
     },
@@ -117,19 +125,41 @@ const allowed = (version: string): Obj => ({
 const SCRIPT_NAMES = ['budget', 'build', 'e2e', 'test', 'typecheck'];
 const E2E_SCRIPT = 'node scripts/build.ts && playwright test -c e2e/matrix/playwright.config.ts';
 
-// The one version of @playwright/test, playwright and playwright-core in the lockfile.
+// The one version of @playwright/test, playwright and playwright-core in the
+// lockfile. Every name@version anywhere in it (a package or snapshot key, a
+// peer suffix, an npm alias value) and every resolved dependency of these
+// names must be that version, so no second copy or alias can hide.
+const PW = ['@playwright/test', 'playwright', 'playwright-core'];
+const PW_REF = /(?:^|[(\s])(@playwright\/test|playwright-core|playwright)@([^()\s]*)/g;
+const DEP_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies'];
 function lockVersion(lock: unknown): string {
   const v = own(own(own(own(own(lock, 'importers'), '.'), 'devDependencies'), '@playwright/test'), 'version');
   if (typeof v !== 'string' || !/^\d+\.\d+\.\d+$/.test(v)) throw new Error('lockfile has no @playwright/test version');
   const packages = isMap(own(lock, 'packages')) ? Object.keys(own(lock, 'packages') as Obj) : [];
-  for (const name of ['@playwright/test', 'playwright', 'playwright-core']) {
+  for (const name of PW) {
     const found = packages.filter((k) => k.startsWith(`${name}@`)).map((k) => k.slice(name.length + 1));
     if (!isDeepStrictEqual(found, [v])) throw new Error(`lockfile ${name} versions ${found.join(',')} are not [${v}]`);
   }
+  const walk = (node: unknown, field: string): void => {
+    if (typeof node === 'string') {
+      for (const m of node.matchAll(PW_REF)) if (m[2] !== v) throw new Error(`lockfile refers to ${m[1]}@${m[2]}`);
+    } else if (Array.isArray(node)) node.forEach((x) => walk(x, ''));
+    else if (isMap(node)) {
+      for (const [key, value] of Object.entries(node)) {
+        walk(key, '');
+        const resolved = typeof value === 'string' ? value : own(value, 'version');
+        if (DEP_FIELDS.includes(field) && PW.includes(key) && resolved !== v) {
+          throw new Error(`lockfile resolves ${key} to ${JSON.stringify(resolved)}`);
+        }
+        walk(value, key);
+      }
+    }
+  };
+  walk(lock, '');
   return v;
 }
 
-const keysOf = (o: Obj): string => Object.keys(o).sort().join(',');
+const keysOf = (o: Obj): string[] => Object.keys(o).sort();
 // Mappings are compared key set by key set, so a problem names its path; any
 // other value (a list of steps, a run text) must be deeply equal.
 function compare(path: string, actual: unknown, expected: unknown, out: string[]): void {
@@ -138,7 +168,7 @@ function compare(path: string, actual: unknown, expected: unknown, out: string[]
     return;
   }
   if (!isMap(actual)) return void out.push(`${path} is not a mapping`);
-  if (keysOf(actual) !== keysOf(expected)) out.push(`${path} keys: ${keysOf(actual)}`);
+  if (!isDeepStrictEqual(keysOf(actual), keysOf(expected))) out.push(`${path} keys: ${keysOf(actual).join(',')}`);
   for (const key of Object.keys(expected)) if (Object.hasOwn(actual, key)) compare(`${path}.${key}`, actual[key], expected[key], out);
 }
 
@@ -155,7 +185,7 @@ function problems(wf: unknown, lock: unknown, pkg: unknown): string[] {
   compare('workflow', wf, allowed(version), out);
   const scripts = own(pkg, 'scripts');
   if (!isMap(scripts)) return [...out, 'package.json scripts is not a mapping'];
-  if (keysOf(scripts) !== SCRIPT_NAMES.join(',')) out.push(`package.json script names: ${keysOf(scripts)}`);
+  if (!isDeepStrictEqual(keysOf(scripts), SCRIPT_NAMES)) out.push(`package.json script names: ${keysOf(scripts).join(',')}`);
   if (own(scripts, 'e2e') !== E2E_SCRIPT) out.push('package.json e2e script is not the allowed text');
   return out;
 }
@@ -181,15 +211,9 @@ const job = (f: Files, name: string): Obj => at(f.wf, 'jobs', name);
 const steps = (f: Files, name: string): Obj[] => job(f, name)['steps'] as Obj[];
 const setImage = (f: Files, image: string): void => void (at(job(f, 'e2e-matrix'), 'container')['image'] = image);
 const IMAGE = imageOf('1.63.0');
-const bumpLock = (lock: Obj, to: string): void => {
-  at(lock, 'importers', '.', 'devDependencies', '@playwright/test')['version'] = to;
-  const packages = at(lock, 'packages');
-  for (const key of Object.keys(packages)) {
-    if (/^(?:@playwright\/test|playwright|playwright-core)@1\.63\.0$/.test(key)) {
-      packages[key.replace('1.63.0', to)] = packages[key];
-      delete packages[key];
-    }
-  }
+// Every 1.63.0 in the parsed lockfile (keys, snapshots, peer suffixes) moves to `to`.
+const bumpLock = (f: Files, to: string): void => {
+  f.lock = JSON.parse(JSON.stringify(f.lock).replaceAll('1.63.0', to)) as Obj;
 };
 
 const JOBS = ['node', 'e2e-matrix', 'ci-ok'];
@@ -283,11 +307,27 @@ const cases: [string, (f: Files) => void, RegExp][] = [
   ['e2e script removed', (f) => void delete at(f.pkg, 'scripts')['e2e'], /script names: budget,build,test,typecheck\n.*e2e script is not/],
   ['typecheck script removed', (f) => void delete at(f.pkg, 'scripts')['typecheck'], /script names: budget,build,e2e,test$/],
   ['scripts missing', (f) => void delete f.pkg['scripts'], /scripts is not a mapping/],
-  ['lockfile on 1.64.0, image on 1.63.0', (f) => bumpLock(f.lock, '1.64.0'), /no pinned image digest for Playwright 1\.64\.0\n.*container\.image is not/],
-  ['tag and lockfile on 1.64.0 with the 1.63.0 digest', (f) => (bumpLock(f.lock, '1.64.0'), setImage(f, IMAGE.replace('1.63.0', '1.64.0'))), /no pinned image digest for Playwright 1\.64\.0/],
+  ['lockfile on 1.64.0, image on 1.63.0', (f) => bumpLock(f, '1.64.0'), /no pinned image digest for Playwright 1\.64\.0\n.*container\.image is not/],
+  ['tag and lockfile on 1.64.0 with the 1.63.0 digest', (f) => (bumpLock(f, '1.64.0'), setImage(f, IMAGE.replace('1.63.0', '1.64.0'))), /no pinned image digest for Playwright 1\.64\.0/],
   ['lockfile without @playwright/test', (f) => void delete at(f.lock, 'importers', '.', 'devDependencies')['@playwright/test'], /no @playwright\/test version/],
   ['two playwright-core versions', (f) => void (at(f.lock, 'packages')['playwright-core@1.62.0'] = {}), /playwright-core versions/],
   ['second @playwright/test', (f) => void (at(f.lock, 'packages')['@playwright/test@1.62.0'] = {}), /@playwright\/test versions/],
+  ['snapshot of another playwright-core', (f) => void (at(f.lock, 'snapshots')['playwright-core@1.64.0'] = {}), /refers to playwright-core@1\.64\.0/],
+  ['snapshot dependency on another version', (f) => void (at(f.lock, 'snapshots', 'playwright@1.63.0', 'dependencies')['playwright-core'] = '1.64.0'), /resolves playwright-core to "1\.64\.0"/],
+  ['npm alias for playwright-core', (f) => void (at(f.lock, 'snapshots', 'playwright@1.63.0', 'dependencies')['playwright-core'] = 'patchright-core@1.57.0'), /resolves playwright-core to "patchright-core@1\.57\.0"/],
+  ['alias to another playwright-core under another name', (f) => void (at(f.lock, 'snapshots', 'playwright@1.63.0', 'dependencies')['x'] = 'playwright-core@1.64.0'), /refers to playwright-core@1\.64\.0/],
+  ['peer suffix with another version', (f) => {
+    const snaps = at(f.lock, 'snapshots');
+    snaps['@axe-core/playwright@4.14.0(playwright-core@1.64.0)'] = snaps['@axe-core/playwright@4.14.0(playwright-core@1.63.0)'];
+    delete snaps['@axe-core/playwright@4.14.0(playwright-core@1.63.0)'];
+  }, /refers to playwright-core@1\.64\.0/],
+  ['importer resolves playwright-core elsewhere', (f) => void (at(f.lock, 'importers', '.', 'devDependencies')['playwright-core'] = { specifier: 'x', version: 'link:../x' }), /resolves playwright-core to "link:\.\.\/x"/],
+  ['key that joins two keys with a comma', (f) => {
+    const ok = job(f, 'ci-ok');
+    delete ok['name'];
+    delete ok['if'];
+    ok['if,name'] = 'x';
+  }, /^workflow\.jobs\.ci-ok keys: /m],
 ];
 for (const [name, edit, reason] of cases) {
   test(`e2e allowlist refuses: ${name}`, () => {
@@ -319,6 +359,8 @@ const IMAGE_LINE = `      image: ${IMAGE}\n`;
 test.each([
   ['duplicate container key', swap(IMAGE_LINE, `${IMAGE_LINE}    container: { image: x }\n`), /Map keys must be unique/],
   ['unknown tag', swap('    timeout-minutes: 20\n', '    timeout-minutes: !env 20\n'), /Unresolved tag/],
+  ['tagged quoted number', swap('    timeout-minutes: 5\n', '    timeout-minutes: !!int "5"\n'), /explicit tag tag:yaml\.org,2002:int/],
+  ['merge key with the allowed value', swap(IMAGE_LINE, `      <<: *img\n`).replace('permissions:\n', `x-img: &img { image: ${IMAGE} }\npermissions:\n`), /merge key <</],
   ['YAML 1.1 directive', `%YAML 1.1\n---\n${CI_LF}`, /%YAML 1\.1 directive/],
   ['YAML 1.2 directive', `%YAML 1.2\n---\n${CI_LF}`, /%YAML 1\.2 directive/],
   ['timeout as 020', swap('    timeout-minutes: 20\n', '    timeout-minutes: 020\n'), /scalar 020 is not plain/],
@@ -329,11 +371,10 @@ test.each([
   assert.throws(() => parse(text), reason);
 });
 
-test('reader keeps a merge key, so the allowlist refuses it', () => {
-  const text = swap(IMAGE_LINE, `      <<: *img\n`).replace('permissions:\n', `x-img: &img { image: ${IMAGE} }\npermissions:\n`);
-  const out = problems(parse(text), LOCK, PKG).join('\n');
-  assert.match(out, /^workflow keys: /m);
-  assert.match(out, /container keys: <<$/m);
+test('reader refuses a merge key in the lockfile', () => {
+  const lock = LOCK_TEXT.replaceAll('\r\n', '\n');
+  assert.ok(lock.includes('\npackages:\n'));
+  assert.throws(() => parse(lock.replace('\npackages:\n', "\npackages:\n  <<: { 'playwright-core@1.64.0': {} }\n")), /merge key <</);
 });
 
 const fontDir = new URL('../e2e/fonts/', import.meta.url);
