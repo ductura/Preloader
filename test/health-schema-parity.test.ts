@@ -13,9 +13,10 @@ type Schema = {
   pattern?: string; minimum?: number; maximum?: number; format?: string;
 };
 type Op = { operationId?: string; responses?: Record<string, { content?: Record<string, { schema: Schema }> }> };
-const SCHEMA = Object.values(openapi.paths as unknown as Record<string, Record<string, Op>>)
-  .flatMap((ops) => Object.values(ops)).find((op) => op.operationId === 'platform.health.get')!
-  .responses!['200']!.content!['application/json']!.schema;
+const [PATH, METHOD, OP] = Object.entries(openapi.paths as unknown as Record<string, Record<string, Op>>)
+  .flatMap(([path, ops]) => Object.entries(ops).map(([m, op]) => [path, m.toUpperCase(), op] as const))
+  .find(([, , op]) => op.operationId === 'platform.health.get')!;
+const SCHEMA = OP.responses!['200']!.content!['application/json']!.schema;
 
 const KNOWN = new Set(['type', 'const', 'enum', 'anyOf', 'required', 'properties', 'additionalProperties', 'minLength',
   'maxLength', 'pattern', 'minimum', 'maximum', 'format', 'description', 'title']);
@@ -100,7 +101,15 @@ function values(s: Schema): unknown[] {
   if ((s.anyOf ?? []).some((b) => b.type === 'object' || b.properties || b.required || b.anyOf)) {
     throw new Error('generator ne zna anyOf nad objektima ili ugniježđen anyOf');
   }
-  const out = [...WRONG_TYPES, ...(s.anyOf ?? []).flatMap(values)];
+  // Grana anyOf vrijedi uz ograničenja izvan nje (npr. pattern), pa se vektori grane grade iz njihova spoja.
+  const { anyOf, ...rest } = s;
+  const branches = (anyOf ?? []).map((b) => {
+    const r = rest as Record<string, unknown>, br = b as Record<string, unknown>;
+    const clash = Object.keys(br).filter((k) => k in r && JSON.stringify(br[k]) !== JSON.stringify(r[k]));
+    if (clash.length > 0) throw new Error(`generator ne zna anyOf s ključnom riječi i u grani i izvan nje: ${clash.join(', ')}`);
+    return { ...rest, ...b };
+  });
+  const out = [...WRONG_TYPES, ...branches.flatMap(values)];
   if ('const' in s) out.push(s.const);
   out.push(...(s.enum ?? []));
   if (s.type === 'object') out.push(...objects(s));
@@ -160,6 +169,15 @@ describe('platform.health.get 200: paritet sheme i checkHealth', () => {
     expect(got).toEqual(name === 'application/json; charset' ? { state: 'ok', minClientVersion: null } : null);
   });
 
+  test('šalje točno jedan zahtjev na put i metodu iz ugovora, bez kolačića', async () => {
+    const calls: [string, RequestInit][] = [];
+    await checkHealth((path, init) => {
+      calls.push([path, init]);
+      return Promise.resolve(new Response('{"status":"ok"}', { status: 200, headers: { 'content-type': 'application/json' } }));
+    });
+    expect(calls.map(([path, init]) => [path, init.method ?? 'GET', init.credentials, init.body])).toEqual([[PATH, METHOD, 'omit', undefined]]);
+  });
+
   test('mreža ili tijelo koje nije JSON daje null', async () => {
     expect(await checkHealth(() => Promise.reject(new TypeError('mreža')))).toBeNull();
     const bad = new Response('{"status":"ok"', { status: 200, headers: { 'content-type': 'application/json' } });
@@ -174,6 +192,7 @@ describe('platform.health.get 200: paritet sheme i checkHealth', () => {
     ['uži enum stanja', edit((s) => { s.properties.state!.anyOf = s.properties.state!.anyOf!.filter((b) => b.const !== 'degraded'); })],
     ['uži enum stanja kao enum', edit((s) => { delete s.properties.state!.anyOf; s.properties.state!.enum = ['ok']; })],
     ['additionalProperties: false uklonjen', edit((s) => { delete s.additionalProperties; })],
+    ['anyOf duljina uz pattern (rupa na 20)', edit((s) => { s.properties.minClientVersion!.anyOf = [{ type: 'string', maxLength: 19 }, { type: 'string', minLength: 21 }]; })],
     ['uklonjeno polje serverVersion', edit((s) => { delete s.properties.serverVersion; })],
     ['uklonjeno polje state', edit((s) => { delete s.properties.state; })],
     ['drugi const statusa', edit((s) => { s.properties.status!.const = 'up'; })],
@@ -187,6 +206,7 @@ describe('platform.health.get 200: paritet sheme i checkHealth', () => {
     ['nepoznat format', edit((s) => { s.properties.version!.format = 'email'; })],
     ['drugi pattern verzije', edit((s) => { s.properties.version!.pattern = '^\\d+\\.\\d+\\.\\d+$'; })],
     ['pattern umjesto const statusa', edit((s) => { s.properties.status = { type: 'string', pattern: '^(ok|up)$' }; })],
+    ['anyOf s istom ključnom riječi u grani', edit((s) => { s.properties.version!.anyOf = [{ type: 'string', pattern: '^1$' }]; })],
     ['anyOf nad objektima', edit((s) => { s.anyOf = [{ type: 'object', required: ['version'] }]; })],
     ['tip boolean', edit((s) => { s.properties.flag = { type: 'boolean' }; })],
   ])('ključna riječ koju generator ne zna ruši test: %s', (_name, schema) => {
