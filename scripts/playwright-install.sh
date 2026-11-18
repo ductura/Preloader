@@ -34,8 +34,10 @@ for value in "$budget" "$limit"; do
       ;;
   esac
 done
-if ! timeout --version 2>/dev/null | grep -q 'GNU coreutils'; then
-  echo "::error::Playwright browsers (${browsers}) were not installed: GNU timeout is missing"
+# Checked by use, not by name: GNU coreutils (ubuntu-24.04) and uutils
+# (ubuntu-26.04, where the reusable node job runs the tests) both take it.
+if ! timeout --kill-after=1 5 true >/dev/null 2>&1; then
+  echo "::error::Playwright browsers (${browsers}) were not installed: no timeout command with --kill-after"
   exit 1
 fi
 cap() { timeout --kill-after=10 "$@"; }

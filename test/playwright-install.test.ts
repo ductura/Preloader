@@ -35,7 +35,6 @@ beforeEach(() => {
   stub('bin', 'sudo', ['echo "sudo $*" >> "$LOG"', 'case "$1" in pkill | dpkg | apt-get) exit 0 ;; esac', 'exec "$@"']);
   stub('fake', 'date', ['cat "$CLOCK"']);
   stub('fake', 'timeout', [
-    '[ "$1" = --version ] && { echo "timeout (GNU coreutils) 9.4"; exit 0; }',
     'shift; secs=$1; shift; echo "cap $secs $1" >> "$LOG"; "$@"; s=$?',
     '[ "$s" -eq 124 ] && echo $(($(cat "$CLOCK") + secs)) > "$CLOCK"; exit "$s"',
   ]);
