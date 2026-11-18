@@ -75,8 +75,22 @@ describe('platform.health.get: vektori kroz checkHealth', () => {
     for (const k of ['version', 'apiVersion', 'serverVersion', 'minClientVersion']) expect([k, props[k]?.pattern]).toEqual([k, VERSION_RE.source]);
   });
 
+  test.each([
+    ['text/plain', 'text/plain'], ['bez zaglavlja', null], ['application/jsonx', 'application/jsonx'],
+    ['application/problem+json', 'application/problem+json'], ['text/html', 'text/html; charset=utf-8'],
+  ])('200 s tijelom vektora alive, ali medijski tip %s: null', async (_name, type) => {
+    const body = new Blob([JSON.stringify({ status: 'ok' })]);
+    const get = () => Promise.resolve(new Response(body, { status: 200, headers: type === null ? {} : { 'content-type': type } }));
+    expect(await checkHealth(get)).toBeNull();
+  });
+
+  test('application/json s parametrom i velikim slovima prolazi', async () => {
+    const get = () => Promise.resolve(new Response('{"status":"ok"}', { status: 200, headers: { 'content-type': 'Application/JSON; charset=utf-8' } }));
+    expect(await checkHealth(get)).toEqual({ state: 'ok', minClientVersion: null });
+  });
+
   test('nije JSON ili mreža pada: null, bez bacanja', async () => {
-    expect(await checkHealth(() => Promise.resolve(new Response('<html>', { status: 200 })))).toBeNull();
+    expect(await checkHealth(() => Promise.resolve(new Response('<html>', { status: 200, headers: { 'content-type': 'application/json' } })))).toBeNull();
     expect(await checkHealth(() => Promise.reject(new TypeError('offline')))).toBeNull();
     expect(await checkHealth(() => { throw new TypeError('no fetch'); })).toBeNull();
   });

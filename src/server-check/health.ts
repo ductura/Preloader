@@ -16,7 +16,9 @@ const VERSION_KEYS = ['version', 'apiVersion', 'serverVersion', 'minClientVersio
 export async function checkHealth(get: Get): Promise<Health> {
   try {
     const r = await get(HEALTH_PATH, { credentials: 'omit', cache: 'no-store' });
-    if (r.status !== 200) return null;
+    // Ugovor za 200 propisuje application/json; drugi medijski tip nije oblik iz ugovora.
+    const type = r.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
+    if (r.status !== 200 || type !== 'application/json') return null;
     const b: unknown = await r.json();
     if (typeof b !== 'object' || b === null || Array.isArray(b)) return null;
     // Zatvoren oblik kao u ugovoru (additionalProperties: false): nepoznat ključ ili kriva vrijednost je null.
