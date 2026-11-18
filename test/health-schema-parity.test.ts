@@ -25,8 +25,10 @@ const FORMATS: Record<string, { re: RegExp; samples: string[] }> = {
   'date-time': { re: /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)$/, samples: ['2026-01-02T03:04:05Z', '2026-01-02 03:04:05Z'] },
 };
 const SEMVER = '^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$';
-/** Oblici jedne komponente verzije: 1, 2, 3 i 9 znamenki, nula, vodeća nula, Unicode znamenka i prazno. */
-const PARTS = ['0', '7', '10', '42', '100', '999', '123456789', '00', '01', '007', '\u0663', '1\u0663', '', 'a', '-1', '+1'];
+/** Oblici jedne komponente verzije: svaka znamenka na prvom i drugom mjestu, duljine 1–3, 9, 10, 20 i 40, vodeća
+ *  nula, Unicode znamenka i neznamenke. Tako sužen skup znamenki, duljina komponente ili ukupna duljina ruši paritet. */
+const PARTS = [...'0123456789', ...[...'0123456789'].map((d) => `1${d}`), ...[...'123456789'].map((d) => d + d), '100', '999',
+  '123456789', '1234567890', '98765432109876543210', '9'.repeat(40), '00', '01', '007', '\u0663', '1\u0663', '', 'a', '-1', '+1'];
 /** Vektori po komponentama: svaka komponenta dobiva svaki oblik, ostale ostaju valjane (DAN-934-3). */
 const SEMVER_VECTORS = [0, 1, 2].flatMap((i) => PARTS.map((p) => ['1', '2', '3'].map((c, j) => (j === i ? p : c)).join('.')));
 /** Uzorci koje generator zna, s vektorima uz svaku granicu uzorka. Drugi uzorak ruši test. */
@@ -163,13 +165,14 @@ describe('platform.health.get 200: paritet sheme i checkHealth', () => {
   test.each([
     ['text/plain', 200, 'text/plain'], ['application/jsonx', 200, 'application/jsonx'], ['bez zaglavlja', 200, null],
     ['status 500', 500, 'application/json'], ['status 203', 203, 'application/json'],
-    ['application/json; charset', 200, 'Application/JSON; charset=utf-8'],
+    ['text/json', 200, 'text/json'], ['application/problem+json', 200, 'application/problem+json'],
+    ['application/json; charset', 200, 'Application/JSON; charset=utf-8'], ['application/json ; charset', 200, 'application/json ; charset=utf-8'],
   ])('ugovor odgovora 200 traži application/json: %s', async (name, status, type) => {
     const headers: Record<string, string> = type === null ? {} : { 'content-type': type };
     const res = new Response(JSON.stringify({ status: 'ok' }), { status, headers });
     if (type === null) res.headers.delete('content-type');
     const got = await checkHealth(() => Promise.resolve(res));
-    expect(got).toEqual(name === 'application/json; charset' ? { state: 'ok', minClientVersion: null } : null);
+    expect(got).toEqual(name.includes('charset') ? { state: 'ok', minClientVersion: null } : null);
   });
 
   test('šalje točno jedan zahtjev na put i metodu iz ugovora, bez kolačića i bez praćenja preusmjerenja', async () => {
@@ -178,8 +181,8 @@ describe('platform.health.get 200: paritet sheme i checkHealth', () => {
       calls.push([path, init]);
       return Promise.resolve(new Response('{"status":"ok"}', { status: 200, headers: { 'content-type': 'application/json' } }));
     });
-    expect(calls.map(([path, init]) => [path, init.method ?? 'GET', init.credentials, init.redirect, init.body]))
-      .toEqual([[PATH, METHOD, 'omit', 'manual', undefined]]);
+    expect(calls.map(([path, init]) => [path, init.method ?? 'GET', init.credentials, init.redirect, init.cache, init.body]))
+      .toEqual([[PATH, METHOD, 'omit', 'manual', 'no-store', undefined]]);
   });
 
   const OK_JSON = { 'content-type': 'application/json' };
