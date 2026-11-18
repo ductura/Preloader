@@ -16,7 +16,15 @@ const SAFE_PATH = /^\/[A-Za-z0-9._/-]+$/u;
 const SOCKET_MAX = 107 - '/.s.PGSQL.65535'.length;
 
 const fail = (message: string): never => { throw new Error(message); };
-const reason = (e: unknown): string => (e instanceof Error ? e.message : typeof e === 'string' ? e : 'nepoznata greška');
+/** Never throws, whatever was thrown (a getter, a Symbol message, a Proxy). */
+const reason = (e: unknown): string => {
+  try {
+    return e instanceof Error ? String(e.message) : typeof e === 'string' ? e : 'nepoznata greška';
+  } catch {
+    return 'nepoznata greška';
+  }
+};
+type Tell = (message: () => string) => void;
 const code = (e: unknown): unknown => (typeof e === 'object' && e !== null ? Reflect.get(e, 'code') : undefined);
 
 /**
@@ -59,7 +67,7 @@ function checkRun(dir: RunDir, root: string, tmp: string, real: Real): void {
   if (real(dir.path) !== dir.path) fail(`putanja stoga ${dir.path} vodi izvan .stack/ servera`);
 }
 
-function newRunDir(root: string, tmp: string, real: Real, warn: (message: string) => void): RunDir {
+function newRunDir(root: string, tmp: string, real: Real, tell: Tell): RunDir {
   const stack = `${root}/.stack`;
   checkStackPath(`${stack}/lab-XXXXXX`, root, tmp, real);
   if (`${stack}/lab-XXXXXX`.length > SOCKET_MAX) fail(`putanja servera ${root} je predug za utičnicu PostgreSQL-a`);
@@ -67,7 +75,7 @@ function newRunDir(root: string, tmp: string, real: Real, warn: (message: string
   const mine = (path: string): void => {
     const st = lstatSync(path);
     if (!st.isDirectory() || st.uid !== process.getuid?.() || (st.mode & 0o022) !== 0) {
-      fail(`${path === root ? `server ${path}` : path} mora biti direktorij ovog korisnika u koji drugi ne pišu, ne poveznica`);
+      fail(`${path === root ? `server ${path}` : path} mora biti direktorij ovog korisnika u koji drugi ne pišu, ne poveznica (za mod: chmod go-w ${path})`);
     }
   };
   mine(root);
@@ -81,7 +89,7 @@ function newRunDir(root: string, tmp: string, real: Real, warn: (message: string
     // Only the very directory mkdtemp made, and the reason of the refusal stands.
     const now = lstatSync(path, { throwIfNoEntry: false });
     if (now?.dev === dev && now.ino === ino) {
-      try { rmdirSync(path); } catch (r) { warn(`rmdir ${path}: ${reason(r)}`); }
+      try { rmdirSync(path); } catch (r) { tell(() => `rmdir ${path}: ${reason(r)}`); }
     }
     throw e;
   }
@@ -100,7 +108,14 @@ function newRunDir(root: string, tmp: string, real: Real, warn: (message: string
 export async function withStack<T>(serverDir: string, command: StackCommand, body: (stack: Stack) => Promise<T>, options: Options = {}): Promise<T> {
   const { tmp = '/tmp', real = realpathSync, warn = console.error } = options;
   // A warning never replaces the error it accompanies.
-  const tell = (message: string): void => { try { warn(message); } catch { /* the error stands */ } };
+  const tell: Tell = (message) => {
+    try {
+      const done: unknown = warn(message());
+      if (typeof (done as { then?: unknown } | null)?.then === 'function') (done as Promise<unknown>).then(undefined, () => undefined);
+    } catch {
+      // the error stands
+    }
+  };
   const root = real(serverDir);
   const dir = newRunDir(root, tmp, real, tell);
   let owned = false;
@@ -136,7 +151,7 @@ export async function withStack<T>(serverDir: string, command: StackCommand, bod
       await exec('down');
     } catch (e) {
       if (failure === null) failure = { error: new Error(`down: ${reason(e)}`) };
-      else tell(`down: ${reason(e)}`);
+      else tell(() => `down: ${reason(e)}`);
     }
   }
   if (failure !== null) throw failure.error;

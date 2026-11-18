@@ -197,6 +197,18 @@ test('commands run one at a time; once the body settles new commands are refused
   await assert.rejects(kept.down(), /pokretanje se zatvara/);
 });
 
+test('a down called while up still runs waits for it and then downs our stack', async () => {
+  const f = fixture();
+  let release!: () => void;
+  const slow: StackCommand = async (cmd) => { f.calls.push(`start ${cmd}`); if (cmd === 'up') await new Promise<void>((r) => (release = r)); f.calls.push(`end ${cmd}`); };
+  const run = f.run(async (s) => { void s.up(); void s.down(); }, slow);
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(f.calls, ['start up']);
+  release();
+  await run;
+  assert.deepEqual(f.calls, ['start up', 'end up', 'start down', 'end down']);
+});
+
 test('a failed up never leads to down, and its error stands', async () => {
   const f = fixture();
   const failing: StackCommand = (cmd, dir) => { f.calls.push(`${cmd} ${dir}`); throw new Error('port 54360 (postgres) is in use'); };
@@ -216,6 +228,12 @@ test('the error of the run wins over a failed down, which is reported; down alon
   assert.equal(f.calls.at(-1), 'warn down: port still answers');
   const angry = (m: string) => { throw new Error(`warn ${m}`); };
   await assert.rejects(withStack(f.root, downFails, async (s) => { await s.up(); throw thrown; }, { tmp: f.tmp, warn: angry }), (e) => e === thrown);
+  const later = async (m: string) => { throw new Error(`warn ${m}`); }; // rejects after tell returns: never unhandled
+  await assert.rejects(withStack(f.root, downFails, async (s) => { await s.up(); throw thrown; }, { tmp: f.tmp, warn: later }), (e) => e === thrown);
+  const odd = Object.defineProperty(new Error(), 'message', { get: () => { throw new Error('getter'); } });
+  const downOdd: StackCommand = (cmd) => { if (cmd === 'down') throw odd; };
+  await assert.rejects(f.run(async (s) => { await s.up(); throw thrown; }, downOdd), (e) => e === thrown);
+  await assert.rejects(f.run(async (s) => s.up(), downOdd), /^Error: down: nepoznata greška$/);
   await assert.rejects(f.run(async (s) => s.up(), downFails), /^Error: down: port still answers$/);
 });
 
