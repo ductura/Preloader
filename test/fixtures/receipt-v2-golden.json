@@ -1,0 +1,59 @@
+{
+  "source": {
+    "repository": "ductura/server",
+    "commit": "f2d5178f136551eb2ec1d51eac9ea9815c1ff1ba",
+    "path": "server/domain/forensics/golden-vectors/evidence-v2.json",
+    "blob": "a402820b1e5c52c7d1d648b2415dc246932b5150",
+    "take": [
+      "chain.verificationKey",
+      "receiptV2.accepted[0]"
+    ]
+  },
+  "verificationKey": {
+    "algorithm": "Ed25519",
+    "keyId": "ductus-golden-rfc8032-test-1",
+    "keyVersion": "1",
+    "encoding": "spki-der",
+    "spkiDerHex": "302a300506032b6570032100d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "signingSeedSha256": "644d50ab64864c20a12b3c4656d46b4a48f69ef7c47ecdc8415cd28316b22ef5"
+  },
+  "accepted": {
+    "name": "contract",
+    "note": "The first receipt of a package. One Croatian letter in the transaction id shows that the bytes are UTF-8.",
+    "payload": {
+      "receiptSchema": "ductus-evidence-receipt-v2",
+      "receiptId": "receipt-1",
+      "evidenceDomainId": "d21fe0a3-103c-42e5-a29e-c102f9030af5",
+      "evidencePackageId": "evidence-1",
+      "documentId": "doc-1",
+      "revision": 7,
+      "clientTransactionId": "tx-š-1",
+      "principalId": "72cd1705-85fc-4754-a382-c2500d038368",
+      "sessionId": "session-1",
+      "segmentId": "segment-1",
+      "segmentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "predecessorSegmentHash": null,
+      "previousReceiptId": null,
+      "evidenceSchema": "ductus-evidence-segment-v2",
+      "evidenceProfileId": "standard-v1",
+      "sequenceFrom": 1,
+      "sequenceTo": 1,
+      "eventCount": 1,
+      "payloadBytes": 123,
+      "acceptedAt": "2026-10-03T06:05:00.000Z"
+    },
+    "canonical": "{\"acceptedAt\":\"2026-10-03T06:05:00.000Z\",\"clientTransactionId\":\"tx-š-1\",\"documentId\":\"doc-1\",\"eventCount\":1,\"evidenceDomainId\":\"d21fe0a3-103c-42e5-a29e-c102f9030af5\",\"evidencePackageId\":\"evidence-1\",\"evidenceProfileId\":\"standard-v1\",\"evidenceSchema\":\"ductus-evidence-segment-v2\",\"payloadBytes\":123,\"predecessorSegmentHash\":null,\"previousReceiptId\":null,\"principalId\":\"72cd1705-85fc-4754-a382-c2500d038368\",\"receiptId\":\"receipt-1\",\"receiptSchema\":\"ductus-evidence-receipt-v2\",\"revision\":7,\"segmentHash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"segmentId\":\"segment-1\",\"sequenceFrom\":1,\"sequenceTo\":1,\"sessionId\":\"session-1\"}",
+    "canonicalUtf8Hex": "7b2261636365707465644174223a22323032362d31302d30335430363a30353a30302e3030305a222c22636c69656e745472616e73616374696f6e4964223a2274782dc5a12d31222c22646f63756d656e744964223a22646f632d31222c226576656e74436f756e74223a312c2265766964656e6365446f6d61696e4964223a2264323166653061332d313033632d343265352d613239652d633130326639303330616635222c2265766964656e63655061636b6167654964223a2265766964656e63652d31222c2265766964656e636550726f66696c654964223a227374616e646172642d7631222c2265766964656e6365536368656d61223a226475637475732d65766964656e63652d7365676d656e742d7632222c227061796c6f61644279746573223a3132332c227072656465636573736f725365676d656e7448617368223a6e756c6c2c2270726576696f7573526563656970744964223a6e756c6c2c227072696e636970616c4964223a2237326364313730352d383566632d343735342d613338322d633235303064303338333638222c22726563656970744964223a22726563656970742d31222c2272656365697074536368656d61223a226475637475732d65766964656e63652d726563656970742d7632222c227265766973696f6e223a372c227365676d656e7448617368223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161222c227365676d656e744964223a227365676d656e742d31222c2273657175656e636546726f6d223a312c2273657175656e6365546f223a312c2273657373696f6e4964223a2273657373696f6e2d31227d",
+    "byteLength": 650,
+    "payloadDigestSha256": "017cf1f3c88b10c1c39ea5d21eade560b838f1bdea4603c79a06886d90d2d706",
+    "signingInputHex": "6475637475732d65766964656e63652d726563656970742d76320a017cf1f3c88b10c1c39ea5d21eade560b838f1bdea4603c79a06886d90d2d706",
+    "signatureHex": "0d5276f2d2167892fb5ce379189b85b6fc1616417941bb899726d53ab78e9d43f5ca72fe4a4dcf94770c695550022f4ce1fea38cae6fcf5b74fc5eb44448fb0b",
+    "signature": {
+      "algorithm": "Ed25519",
+      "keyId": "ductus-golden-rfc8032-test-1",
+      "keyVersion": "1",
+      "signatureEncoding": "raw",
+      "signatureBase64Url": "DVJ28tIWeJL7XON5GJuFtvwWFkF5QbuJlybVOreOnUP1ynL-Sk3PlHcMaVVQAi9M4f6jjK5vz1t0_F60REj7Cw"
+    }
+  }
+}
