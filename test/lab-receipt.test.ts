@@ -4,14 +4,14 @@
 // test 1.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { createHash, createPublicKey, verify } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import { jcs, publicKeyFromSeed } from '../scripts/lab/receipt.ts';
+import { type ReceiptExpectation, type ReceiptTrust, checkReceipt, jcs, publicKeyFromSeed } from '../scripts/lab/receipt.ts';
 
 type Golden = {
   verificationKey: { spkiDerHex: string; signingSeedSha256: string };
-  accepted: { payload: Record<string, unknown>; canonical: string; payloadDigestSha256: string; signature: { signatureBase64Url: string } };
+  accepted: { payload: Record<string, unknown>; canonical: string; payloadDigestSha256: string; signature: Record<string, unknown> & { signatureBase64Url: string } };
 };
 const golden = JSON.parse(readFileSync(new URL('fixtures/receipt-v2-golden.json', import.meta.url), 'utf8')) as Golden;
 const SEED = Buffer.from('9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60', 'hex');
@@ -119,4 +119,108 @@ const refused: [string, unknown][] = [
 ];
 test.each(refused)('jcs refuses %s', (_name, value) => {
   assert.throws(() => jcs(value), /^Error: jcs: /);
+});
+
+// DAN-1096-a1-2 L-1: checkReceipt. Each row changes one field of the server's
+// receipt, trust or expectation and names the exact reason (QA c.6983718141 t. 2);
+// key-label rows change trust and the unsigned label in the signature together.
+type Rec = { status: string; signedReceipt: { payload: Record<string, unknown>; payloadDigestSha256: string; signature: Record<string, unknown> } };
+const p = golden.accepted.payload;
+const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+const vector = (): Rec => clone({ status: 'signed', signedReceipt: { payload: p, payloadDigestSha256: golden.accepted.payloadDigestSha256, signature: golden.accepted.signature } });
+const trust: ReceiptTrust = {
+  keyBase64Url: Buffer.from(golden.verificationKey.spkiDerHex, 'hex').toString('base64url'),
+  keyId: golden.accepted.signature['keyId'] as string, keyVersion: golden.accepted.signature['keyVersion'] as string,
+  evidenceDomainId: p['evidenceDomainId'] as string,
+};
+const expected: ReceiptExpectation = {
+  documentId: p['documentId'] as string, clientTransactionId: p['clientTransactionId'] as string, revision: p['revision'] as number,
+  principalId: p['principalId'] as string, segmentHash: p['segmentHash'] as string,
+};
+const testKey = createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), SEED]), format: 'der', type: 'pkcs8' });
+/** The vector with `change` applied to the payload, signed again as the server signs (D-92). */
+function signed(change: Record<string, unknown>, key = testKey): Rec {
+  const r = vector();
+  Object.assign(r.signedReceipt.payload, change);
+  const digest = createHash('sha256').update(jcs(r.signedReceipt.payload), 'utf8').digest();
+  r.signedReceipt.payloadDigestSha256 = digest.toString('hex');
+  r.signedReceipt.signature['signatureBase64Url'] = sign(null, Buffer.concat([Buffer.from('ductus-evidence-receipt-v2\n'), digest]), key).toString('base64url');
+  return r;
+}
+const at = (f: (r: Rec) => void): Rec => { const r = vector(); f(r); return r; };
+const sigAs = (s: Buffer | string) => at((r) => { r.signedReceipt.signature['signatureBase64Url'] = typeof s === 'string' ? s : s.toString('base64url'); });
+const label = (field: 'keyId' | 'keyVersion', value: string) => at((r) => { r.signedReceipt.signature[field] = value; });
+const sig = Buffer.from(golden.accepted.signature.signatureBase64Url, 'base64url');
+const L = 2n ** 252n + 27742317777372353535851937790883648493n;
+const bigS = Buffer.from(sig);
+bigS.set(Buffer.from((BigInt(`0x${Buffer.from(sig.subarray(32)).reverse().toString('hex')}`) + L).toString(16).padStart(64, '0'), 'hex').reverse(), 32);
+const CTRL: [string, string][] = [['CRLF', '\r\n'], ['a tab', '\t'], ['NBSP', '\u00a0'], ['DEL', '\u007f']];
+const NOT_SIGNED = 'potvrda nije potpisana';
+const SHAPE = 'potpisana potvrda nema oblik v2';
+const lab = (field: string) => `laboratorij nema ispravan ključ stoga ili commit (${field})`;
+const { documentId: _d, ...noDocument } = expected;
+const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
+  ["the server's receipt", vector(), trust, expected, null],
+  ['a payload without a prototype', at((r) => { r.signedReceipt.payload = Object.assign(Object.create(null) as object, r.signedReceipt.payload); }), trust, expected, null],
+  ['no receipt', undefined, trust, expected, NOT_SIGNED],
+  ['a receipt as text', JSON.stringify(vector()), trust, expected, NOT_SIGNED],
+  ['a pending receipt', at((r) => { r.status = 'pending_signature'; }), trust, expected, NOT_SIGNED],
+  ['an extra envelope field', { ...vector(), note: 1 }, trust, expected, NOT_SIGNED],
+  ['a proxy envelope', new Proxy(vector(), {}), trust, expected, NOT_SIGNED],
+  ['a revoked proxy', revoked.proxy, trust, expected, NOT_SIGNED],
+  ['an extra signedReceipt field', at((r) => { Object.assign(r.signedReceipt, { x: 1 }); }), trust, expected, SHAPE],
+  ['no signature', at((r) => { delete (r.signedReceipt as Partial<Rec['signedReceipt']>).signature; }), trust, expected, SHAPE],
+  ['an inherited signedReceipt field', at((r) => { const { signature, ...rest } = r.signedReceipt; r.signedReceipt = Object.assign(Object.create({ signature }) as Rec['signedReceipt'], rest); }), trust, expected, SHAPE],
+  ['a getter on signedReceipt', at((r) => { Object.defineProperty(r.signedReceipt, 'payloadDigestSha256', { get: () => { throw new Error('x'); }, enumerable: true }); }), trust, expected, SHAPE],
+  ['a proxy signedReceipt', at((r) => { r.signedReceipt = new Proxy(r.signedReceipt, {}); }), trust, expected, SHAPE],
+  ['a proxy signature', at((r) => { r.signedReceipt.signature = new Proxy(r.signedReceipt.signature, {}); }), trust, expected, SHAPE],
+  ...Object.keys(p).map((k): [string, unknown, ReceiptTrust, unknown, string] => [`payload ${k} of the wrong type`, at((r) => { r.signedReceipt.payload[k] = false; }), trust, expected, `${SHAPE} (${k})`]),
+  ['an extra payload field', signed({ extra: 1 }), trust, expected, SHAPE],
+  ['a payload field missing', at((r) => { delete r.signedReceipt.payload['previousReceiptId']; }), trust, expected, SHAPE],
+  ['an own __proto__ in the payload', at((r) => { r.signedReceipt.payload = JSON.parse(JSON.stringify(p).replace('{', '{"__proto__":1,')) as Record<string, unknown>; }), trust, expected, SHAPE],
+  ['an own toString in the payload', signed({ toString: 'x' }), trust, expected, SHAPE],
+  ['a hidden payload field', at((r) => { Object.defineProperty(r.signedReceipt.payload, 'receiptId', { enumerable: false }); }), trust, expected, SHAPE],
+  ['a proxy payload', at((r) => { r.signedReceipt.payload = new Proxy(r.signedReceipt.payload, {}); }), trust, expected, SHAPE],
+  ['another algorithm', at((r) => { r.signedReceipt.signature['algorithm'] = 'ECDSA_P256_SHA256'; }), trust, expected, 'potpis nije Ed25519'],
+  ['another encoding', at((r) => { r.signedReceipt.signature['signatureEncoding'] = 'der'; }), trust, expected, 'potpis nije Ed25519'],
+  ['another key id', label('keyId', 'drugi'), trust, expected, 'potpis nije ključem stoga'],
+  ['another key version', label('keyVersion', '2'), trust, expected, 'potpis nije ključem stoga'],
+  ...CTRL.map(([n, c]): [string, unknown, ReceiptTrust, unknown, string] => [`${n} after the key id of the signature only`, label('keyId', `${trust.keyId}${c}`), trust, expected, 'potpis nije ključem stoga']),
+  ['a short signature', sigAs(sig.subarray(1)), trust, expected, 'potpis nije ispravno zapisan'],
+  ['a padded signature', sigAs(`${sig.toString('base64url')}==`), trust, expected, 'potpis nije ispravno zapisan'],
+  ['a standard base64 signature', sigAs(sig.toString('base64')), trust, expected, 'potpis nije ispravno zapisan'],
+  ['S at or above the group order', sigAs(bigS), trust, expected, 'potpis nije ispravno zapisan'],
+  ['another key under the same label', signed({}, generateKeyPairSync('ed25519').privateKey), trust, expected, 'potpis ne vrijedi'],
+  ['the canonical text signed instead of D-92', sigAs(sign(null, Buffer.from(golden.accepted.canonical), testKey)), trust, expected, 'potpis ne vrijedi'],
+  ['a wrong digest field', at((r) => { r.signedReceipt.payloadDigestSha256 = 'f'.repeat(64); }), trust, expected, 'sažetak potvrde ne odgovara'],
+  ['a payload changed after signing', at((r) => { r.signedReceipt.payload['payloadBytes'] = 124; }), trust, expected, 'sažetak potvrde ne odgovara'],
+  ...([['documentId', 'doc-2'], ['clientTransactionId', 'tx-2'], ['revision', 6], ['principalId', '6f1c2b7e-0d4a-4c3b-9a8e-1b2c3d4e5f60'], ['segmentHash', 'b'.repeat(64)],
+    ['evidenceDomainId', '0b5e6c1a-7d2f-4e3a-8b9c-0d1e2f3a4b5c'], ['clientTransactionId', `${expected.clientTransactionId}\u00a0`]] as const)
+    .map(([k, v]): [string, unknown, ReceiptTrust, unknown, string] => [`another ${k} (${JSON.stringify(v)})`, signed({ [k]: v }), trust, expected, `potvrda ne imenuje ovaj commit (${k})`]),
+  ...CTRL.filter(([n]) => n !== 'NBSP').map(([n, c]): [string, unknown, ReceiptTrust, unknown, string] => [`${n} after the transaction`, signed({ clientTransactionId: `${expected.clientTransactionId}${c}` }), trust, expected, `${SHAPE} (clientTransactionId)`]),
+  ['a blank key id in trust and signature', label('keyId', ''), { ...trust, keyId: '' }, expected, lab('trust.keyId')],
+  ['a blank key version in trust and signature', label('keyVersion', ' '), { ...trust, keyVersion: ' ' }, expected, lab('trust.keyVersion')],
+  ...(['keyId', 'keyVersion'] as const).flatMap((f) => CTRL.map(([n, c]): [string, unknown, ReceiptTrust, unknown, string] =>
+    [`${n} in the ${f} of trust and signature`, label(f, `${trust[f]}${c}`), { ...trust, [f]: `${trust[f]}${c}` }, expected, lab(`trust.${f}`)])),
+  ['a trusted key that is not Ed25519', vector(), { ...trust, keyBase64Url: Buffer.from(`ff${golden.verificationKey.spkiDerHex.slice(2)}`, 'hex').toString('base64url') }, expected, lab('trust.keyBase64Url')],
+  ['a trusted domain that is no UUID', vector(), { ...trust, evidenceDomainId: 'domena' }, expected, lab('trust.evidenceDomainId')],
+  ['a null trust', vector(), null as unknown as ReceiptTrust, expected, lab('trust')],
+  ['a proxy trust', vector(), new Proxy(trust, {}), expected, lab('trust')],
+  ['an empty expectation', vector(), trust, {}, lab('expected')],
+  ['an expectation without the document', vector(), trust, noDocument, lab('expected')],
+  ['a hidden wrong document in the expectation', vector(), trust, Object.defineProperty({ ...expected }, 'documentId', { value: 'doc-2', enumerable: false }), lab('expected')],
+  ['a revision as text', vector(), trust, { ...expected, revision: '7' }, lab('expected.revision')],
+  ['an extra expectation field', vector(), trust, { ...expected, extra: 1 }, lab('expected')],
+];
+test.each(rows)('checkReceipt: %s', (_name, receipt, t, e, reason) => {
+  let got: string | null = 'not run';
+  assert.doesNotThrow(() => { got = checkReceipt(receipt, t, e as ReceiptExpectation); });
+  assert.equal(got, reason);
+});
+
+test('checkReceipt does not call a getter that returns the right value', () => {
+  let calls = 0;
+  const r = at((x) => { Object.defineProperty(x.signedReceipt.payload, 'revision', { get: () => { calls += 1; return 7; }, enumerable: true }); });
+  assert.equal(checkReceipt(r, trust, expected), SHAPE);
+  assert.equal(calls, 0);
 });
