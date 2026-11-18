@@ -155,7 +155,27 @@ const E2E_SCRIPT = 'node scripts/build.ts && playwright test -c e2e/matrix/playw
 // entries, and any other snapshot that depends on one of them names v.
 const PW = ['@playwright/test', 'playwright', 'playwright-core'];
 const DEP_FIELDS = ['dependencies', 'optionalDependencies'];
+// Top-level keys and settings of the lockfile: patchedDependencies, overrides,
+// catalogs, a pnpmfile checksum and the like are refused, because each can
+// change what is installed without touching the named fields below.
+const LOCK_TOP = ['importers', 'lockfileVersion', 'packages', 'settings', 'snapshots'];
+const LOCK_SETTINGS = { autoInstallPeers: true, excludeLinksFromLockfile: false };
+// Every packages entry comes from the registry (resolution is exactly
+// { integrity }) except these, pinned whole: a tarball, git or directory
+// entry under another name could carry a `playwright` bin.
+const CONTRACTS = 'https://github.com/ductura/server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz';
+const NON_REGISTRY: Obj = {
+  [`@ductura/contracts@${CONTRACTS}`]: {
+    resolution: {
+      integrity: 'sha512-s7Jp9VSwai9K/7azDNruikV0rIjLzb1c2CuJlb8wQtKPVjA5iZFqrd6bGUkHAEFDXFxge2uM+Tm2VPUR4Lsz0Q==',
+      tarball: CONTRACTS,
+    },
+    version: '2.6.0',
+  },
+};
 function lockVersion(lock: unknown): string {
+  if (!isMap(lock) || !isDeepStrictEqual(keysOf(lock), LOCK_TOP)) throw new Error(`lockfile top-level keys: ${isMap(lock) ? keysOf(lock).join(',') : typeof lock}`);
+  if (lock['lockfileVersion'] !== '9.0' || !isDeepStrictEqual(lock['settings'], LOCK_SETTINGS)) throw new Error('lockfile version or settings changed');
   const importers = own(lock, 'importers');
   if (!isMap(importers) || !isDeepStrictEqual(keysOf(importers), ['.'])) throw new Error('lockfile importers are not [.]');
   const entry = own(own(own(importers, '.'), 'devDependencies'), '@playwright/test');
@@ -187,6 +207,14 @@ function lockVersion(lock: unknown): string {
         const dep = own(own(snapshot, field), name);
         if (dep !== undefined && dep !== v) throw new Error(`lockfile snapshot ${key} resolves ${name} to ${JSON.stringify(dep)}`);
       }
+    }
+  }
+  const packages = own(lock, 'packages');
+  if (!isMap(packages)) throw new Error('lockfile packages is not a mapping');
+  for (const [key, entry] of Object.entries(packages)) {
+    const registry = isDeepStrictEqual(keysOf(isMap(own(entry, 'resolution')) ? (own(entry, 'resolution') as Obj) : {}), ['integrity']) && !Object.hasOwn(entry as Obj, 'version');
+    if (!registry && !(Object.hasOwn(NON_REGISTRY, key) && isDeepStrictEqual(entry, NON_REGISTRY[key]))) {
+      throw new Error(`lockfile packages ${key} is not from the registry nor pinned`);
     }
   }
   return v;
@@ -368,6 +396,23 @@ const cases: [string, (f: Files) => void, RegExp][] = [
   }, /no @playwright\/test version/], // not a plain mapping, so no own version is read
   ['second importer', (f) => void (at(f.lock, 'importers')['packages/x'] = {}), /importers are not \[\.\]/],
   ['importer gets playwright-core', (f) => void (at(f.lock, 'importers', '.', 'devDependencies')['playwright-core'] = { specifier: 'link:../x', version: 'link:../x' }), /importer has playwright-core in devDependencies/],
+  ...['patchedDependencies', 'overrides', 'catalogs', 'pnpmfileChecksum', '__proto__'].map((key): [string, (f: Files) => void, RegExp] => [
+    `lockfile gets top-level ${key}`,
+    (f) => put(f.lock, key, { 'playwright-core@1.63.0': { hash: 'x', path: 'patches/x.patch' } }),
+    /lockfile top-level keys: /,
+  ]),
+  ['playwright tarball under another name', (f) => void (at(f.lock, 'packages')['pwx@https://registry.yarnpkg.com/playwright/-/playwright-1.64.0.tgz'] = {
+    resolution: { integrity: 'sha512-AAAA', tarball: 'https://registry.yarnpkg.com/playwright/-/playwright-1.64.0.tgz' },
+    version: '1.64.0',
+  }), /packages pwx@https:\/\/registry\.yarnpkg\.com\/playwright\/-\/playwright-1\.64\.0\.tgz is not from the registry nor pinned/],
+  ['git entry under another name', (f) => void (at(f.lock, 'packages')['pwx@git+https://github.com/x/y.git#abc'] = {
+    resolution: { commit: 'abc', repo: 'https://github.com/x/y.git', type: 'git' },
+    version: '1.64.0',
+  }), /packages pwx@git\+https.* is not from the registry nor pinned/],
+  ['contracts tarball replaced', (f) => void (at(f.lock, 'packages', `@ductura/contracts@${CONTRACTS}`, 'resolution')['integrity'] = 'sha512-AAAA'), /packages @ductura\/contracts@.* is not from the registry nor pinned/],
+  ['registry entry gets a version field', (f) => void (at(f.lock, 'packages', 'ajv@8.20.0')['version'] = '8.20.0'), /packages ajv@8\.20\.0 is not from the registry nor pinned/],
+  ['lockfile settings changed', (f) => void (at(f.lock, 'settings')['excludeLinksFromLockfile'] = true), /lockfile version or settings changed/],
+  ['lockfileVersion 6.0', (f) => void (f.lock['lockfileVersion'] = '6.0'), /lockfile version or settings changed/],
   ['lockfile without @playwright/test', (f) => void delete at(f.lock, 'importers', '.', 'devDependencies')['@playwright/test'], /no @playwright\/test version/],
   ['playwright-core resolved from a tarball', (f) => void (at(f.lock, 'packages', 'playwright-core@1.63.0')['resolution'] = {
     tarball: 'https://registry.npmjs.org/playwright-core/-/playwright-core-1.64.0.tgz',
