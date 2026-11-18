@@ -58,13 +58,15 @@ const cases: [string, (o: Observed) => Observed, string[]][] = [
   ['first open has no documentId', (o) => ({ ...o, firstOpen: open({ currentRevision: 0 }) }), ['L-3']],
   ['neither open has a documentId', (o) => ({ ...o, firstOpen: open({ currentRevision: 0 }), secondOpen: open({ ...o.secondOpen!.body, documentId: undefined }) }), ['L-3']],
   ['other document', (o) => ({ ...o, secondOpen: open({ ...o.secondOpen!.body, documentId: 'd-2' }) }), ['L-3']],
+  ['first open is 201 with the same documentId', (o) => ({ ...o, firstOpen: { ...o.firstOpen!, status: 201 } }), ['L-3']],
   ['revision 0', (o) => ({ ...o, secondOpen: open({ ...o.secondOpen!.body, currentRevision: 0 }) }), ['L-4']],
   ['server hash differs', (o) => ({ ...o, secondOpen: open({ ...o.secondOpen!.body, documentHash: '0'.repeat(64) }) }), ['L-6']],
   // L-5 one condition at a time: same bytes without the sentence, then the sentence in other bytes.
   ['the sentence is not in the same bytes', (o) => ({ ...o, sentence: 'Rečenica koje nema.' }), ['L-5']],
   ['the sentence is in other bytes', (o) => ({ ...o, secondOpen: open({ ...o.secondOpen!.body, document: padded.toString('base64'), documentHash: sha256Hex(padded) }) }), ['L-5', 'L-6']],
   ['other text back', (o) => ({ ...o, secondOpen: open({ ...o.secondOpen!.body, document: other.toString('base64'), documentHash: sha256Hex(other) }) }), ['L-5', 'L-6']],
-  ['the document has junk after its padding', (o) => ({ ...o, secondOpen: open({ ...o.secondOpen!.body, document: `${bytes.toString('base64')}@@ ne` }) }), ['L-5', 'L-6']],
+  // QA on 7eb1648: urlish has padding ('='), so the junk really comes after it.
+  ['the document has junk after its padding', (o) => ({ ...o, sent: urlish, secondOpen: open({ ...o.secondOpen!.body, documentHash: sha256Hex(urlish), document: `${urlish.toString('base64')}@@ ne` }) }), ['L-5', 'L-6']],
   ['the document has line breaks', (o) => ({ ...o, secondOpen: open({ ...o.secondOpen!.body, document: bytes.toString('base64').replace(/(.{8})/g, '$1\r\n') }) }), ['L-5', 'L-6']],
   // A document whose standard base64 has '+', '/' or padding, so the url spelling differs.
   ['the document is base64url', (o) => ({ ...o, sent: urlish, secondOpen: open({ ...o.secondOpen!.body, documentHash: sha256Hex(urlish), document: urlish.toString('base64url') }) }), ['L-5', 'L-6']],
@@ -75,6 +77,9 @@ const cases: [string, (o: Observed) => Observed, string[]][] = [
 
 test('a good run passes every claim', () => {
   assert.deepEqual(failing(good()), []);
+  // SHA-256 of the good bytes, worked out apart from sha256Hex (review/QA on 7eb1648).
+  assert.equal(hash, '0e7bf765ae0b6c8e7ceb535e87ffe5f0dadfad122b6f127ecf8510e8df39885a');
+  assert.match(urlish.toString('base64'), /=$/);
   assert.deepEqual(claims(good()).map((c) => c.id), ['L-1', 'L-2', 'L-3', 'L-4', 'L-5', 'L-6']);
 });
 
@@ -87,6 +92,8 @@ for (const [name, change, want] of cases) {
 test('text calls nothing on the value', () => {
   assert.equal(text(JSON.parse('{"toString":null,"valueOf":null}')), '[objekt]');
   assert.equal(text(Object.create(null)), '[objekt]');
+  let calls = 0;
+  assert.deepEqual([text({ toJSON: () => (calls++, 'x') }), calls], ['[objekt]', 0]);
   assert.equal(text([1]), '[niz]');
   assert.deepEqual([text(null), text(undefined), text(NaN), text(-0), text('x')], ['-', '-', 'NaN', '0', 'x']);
 });
