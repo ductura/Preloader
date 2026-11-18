@@ -174,6 +174,13 @@ const twin = (c: string) => B64[B64.indexOf(c) ^ 1]!;
 const CTRL: [string, string][] = [['CRLF', '\r\n'], ['a tab', '\t'], ['NBSP', '\u00a0'], ['DEL', '\u007f']];
 const NOT_SIGNED = 'potvrda nije potpisana';
 const SHAPE = 'potpisana potvrda nema oblik v2';
+// For every payload field, a value of the right type the server refuses (Review c.6988462264): one per rule.
+const REFUSED: Record<string, unknown> = {
+  receiptSchema: 'ductus-evidence-receipt-v1', receiptId: ' ', evidencePackageId: '', documentId: '\u00a0', sessionId: 's'.repeat(257), segmentId: '\t',
+  segmentHash: 'A'.repeat(64), predecessorSegmentHash: 'c'.repeat(63), previousReceiptId: '', evidenceSchema: 'ductus-evidence-segment-v1',
+  evidenceProfileId: 'x'.repeat(121), sequenceFrom: 0, sequenceTo: -1, eventCount: 0, payloadBytes: 1.5, acceptedAt: '2026-10-03T06:05:01.000Z',
+  revision: 2 ** 53, clientTransactionId: 'tx\n', evidenceDomainId: String(p['evidenceDomainId']).toUpperCase(), principalId: String(p['principalId']).replace('-4', '-5'),
+};
 const lab = (field: string) => `laboratorij nema ispravan ključ stoga ili commit (${field})`;
 const { documentId: _d, ...noDocument } = expected;
 const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
@@ -207,6 +214,7 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
   ['a digest that is a number', at((r) => { (r.signedReceipt as Record<string, unknown>)['payloadDigestSha256'] = 1; }), trust, expected, SHAPE],
   ['a Date envelope with the receipt fields', Object.assign(new Date(0), vector()), trust, expected, NOT_SIGNED],
   ...Object.keys(p).map((k): [string, unknown, ReceiptTrust, unknown, string] => [`payload ${k} of the wrong type`, at((r) => { r.signedReceipt.payload[k] = false; }), trust, expected, `${SHAPE} (${k})`]),
+  ...Object.keys(p).map((k): [string, unknown, ReceiptTrust, unknown, string] => [`payload ${k} of the right type, refused`, signed({ [k]: REFUSED[k] }), trust, expected, `${SHAPE} (${k})`]),
   ['an extra payload field', signed({ extra: 1 }), trust, expected, SHAPE],
   ['a payload field missing', at((r) => { delete r.signedReceipt.payload['previousReceiptId']; }), trust, expected, SHAPE],
   ['an own __proto__ in the payload', at((r) => { r.signedReceipt.payload = JSON.parse(JSON.stringify(p).replace('{', '{"__proto__":1,')) as Record<string, unknown>; }), trust, expected, SHAPE],
@@ -241,6 +249,9 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
   ['a key id longer than the server allows', label('keyId', 'k'.repeat(2049)), { ...trust, keyId: 'k'.repeat(2049) }, expected, lab('trust.keyId')],
   ['a key version longer than the server allows', label('keyVersion', 'v'.repeat(257)), { ...trust, keyVersion: 'v'.repeat(257) }, expected, lab('trust.keyVersion')],
   ['a trusted domain that is no UUID', vector(), { ...trust, evidenceDomainId: 'domena' }, expected, lab('trust.evidenceDomainId')],
+  ['a trusted X25519 key of 44 bytes (QA c.6988462360)', vector(), { ...trust, keyBase64Url: generateKeyPairSync('x25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64url') }, expected, lab('trust.keyBase64Url')],
+  ['a key id of 2048 in trust and signature', label('keyId', 'k'.repeat(2048)), { ...trust, keyId: 'k'.repeat(2048) }, expected, null],
+  ['a key version of 256 in trust and signature', label('keyVersion', 'v'.repeat(256)), { ...trust, keyVersion: 'v'.repeat(256) }, expected, null],
   ['a null trust', vector(), null as unknown as ReceiptTrust, expected, lab('trust')],
   ['a proxy trust', vector(), new Proxy(trust, {}), expected, lab('trust')],
   ['an empty expectation', vector(), trust, {}, lab('expected')],
