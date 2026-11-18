@@ -44,13 +44,26 @@ test('publicKeyFromSeed takes a Buffer view at an offset as the 32 bytes it show
   assert.equal(publicKeyFromSeed(Buffer.concat([Buffer.from([7]), SEED]).subarray(1)), publicKeyFromSeed(SEED));
 });
 
+test('publicKeyFromSeed reads the view itself, not a length its prototype claims', () => {
+  const proto = Object.create(Uint8Array.prototype, { length: { get: () => 31 }, byteLength: { get: () => 31 } }) as object;
+  assert.equal(publicKeyFromSeed(Object.setPrototypeOf(Uint8Array.from(SEED), proto) as Uint8Array), publicKeyFromSeed(SEED));
+});
+
 // Round 3 (c.6986519308): the length is the view's own, never an own property that shadows it.
 const shadow = (n: number, key: 'byteLength' | 'length', claim: number) => Object.defineProperty(new Uint8Array(n), key, { value: claim });
 const shared = new Uint8Array(new SharedArrayBuffer(32));
 shared.set(SEED);
+// QA self-check: a detached buffer and a view out of bounds of its shrunk buffer give our error, not a TypeError.
+const detached = Uint8Array.from(SEED);
+structuredClone(detached.buffer, { transfer: [detached.buffer] });
+// Resizable buffers are ES2024; the repo's TypeScript lib is ES2023.
+type Resizable = ArrayBuffer & { resize: (n: number) => void };
+const resizable = new (ArrayBuffer as unknown as new (n: number, o: { maxByteLength: number }) => Resizable)(64, { maxByteLength: 64 });
+const outside = new Uint8Array(resizable, 16, 32);
+resizable.resize(20);
 test.each([new Uint8Array(0), SEED.subarray(1), Buffer.concat([SEED, Buffer.from([0])]), new Uint16Array(16), runInNewContext('new Uint16Array(16)'),
   shadow(32, 'byteLength', 31), shadow(31, 'byteLength', 32), shadow(32, 'length', 31), shadow(31, 'length', 32), { length: 32, byteLength: 32 },
-  new DataView(new ArrayBuffer(32)), shared])(
+  new DataView(new ArrayBuffer(32)), shared, detached, outside])(
   'publicKeyFromSeed refuses a seed that is not 32 bytes of Uint8Array (%#)',
   (seed) => {
     assert.throws(() => publicKeyFromSeed(seed as Uint8Array), /^Error: sjeme ključa nema 32 bajta$/);
@@ -147,7 +160,9 @@ test.each(refused)('jcs refuses %s', (_name, value) => {
 
 // Round 3 (c.6986519308): any JSON value, written as the server's reference canonicalJson writes it.
 const lone = fc.constantFrom('\ud800', 'a\udc00', '\udbff\ud800');
-const text = fc.oneof(fc.string({ unit: 'binary' }), fc.constantFrom('__proto__', 'toString', '\u{1F600}', '\u2028'), lone);
+// Any UTF-16 code units, so lone surrogates come anywhere in a string, not only from the constants.
+const units = fc.array(fc.integer({ min: 0, max: 0xffff }), { maxLength: 6 }).map((a) => String.fromCharCode(...a));
+const text = fc.oneof(fc.string({ unit: 'binary' }), units, fc.constantFrom('__proto__', 'toString', '\u{1F600}', '\u2028'), lone);
 const leaf = fc.oneof(fc.constant(null), fc.boolean(), fc.constant(-0), fc.integer(), fc.double({ noNaN: true, noDefaultInfinity: true }),
   fc.constantFrom(2 ** 53, Number.MAX_VALUE, Number.MIN_VALUE, 1e21), text);
 // Objects are built from JSON text, as JSON.parse builds them, so __proto__ is an own key.

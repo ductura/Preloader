@@ -93,8 +93,10 @@ function write(value: unknown, path: Set<object>): string {
  */
 export function publicKeyFromSeed(seed: Uint8Array): string {
   if (!types.isUint8Array(seed) || types.isSharedArrayBuffer(viewBuffer.call(seed))) throw new Error('sjeme ključa nema 32 bajta');
+  // Own keys first: a detached or out-of-bounds view has none, so it never reaches the copy, which would throw.
+  if (Reflect.ownKeys(seed).length !== 32) throw new Error('sjeme ključa nema 32 bajta');
   const bytes = new Uint8Array(seed);
-  if (bytes.length !== 32 || Reflect.ownKeys(seed).length !== 32) throw new Error('sjeme ključa nema 32 bajta');
+  if (bytes.length !== 32) throw new Error('sjeme ključa nema 32 bajta');
   const key = createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, bytes]), format: 'der', type: 'pkcs8' });
   return createPublicKey(key).export({ type: 'spki', format: 'der' }).toString('base64url');
 }
