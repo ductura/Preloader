@@ -3,7 +3,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { REDIRECT_DELAY_MS } from '../../src/client.ts';
 import { defaultConfig } from '../../src/config.ts';
-import { clientText } from '../../src/text.ts';
+import { clientText, text } from '../../src/text.ts';
 import { matrixDevice, type MatrixDevice } from './devices.ts';
 import { openFirstScreen } from './open.ts';
 
@@ -76,4 +76,28 @@ test('the web is always offered; without a package it is the way on', async ({ p
   await page.locator('#open-app').click();
   await page.waitForURL(`**${target}`);
   await expect(page.locator('p')).toHaveText('odredište');
+});
+
+// Ugovor #2028 §3.1: s preloadera na AAI@EduHr (povratak na /app/web/) ili na administraciju platforme.
+test('signs in through AAI@EduHr with the return path /app/web/', async ({ page }) => {
+  const aai = page.locator('#sign-in-aai');
+  await expect(aai).toBeVisible();
+  await expect(aai).toHaveText(text.signInAai);
+  await aai.click();
+  await page.waitForURL((url) => url.pathname === '/api/v1/auth/login');
+  expect(new URL(page.url()).searchParams.get('returnTo')).toBe('/app/web/');
+  await expect(page.locator('p')).toHaveText('odredište');
+});
+
+test('opens platform administration at /admin/prijava', async ({ page }) => {
+  const admin = page.locator('#sign-in-admin');
+  await expect(admin).toBeVisible();
+  await expect(admin).toHaveText(text.signInAdmin);
+  // Dodir na prijavi otkazuje automatsko preusmjeravanje prije klika.
+  await admin.hover();
+  await page.mouse.down();
+  await page.clock.runFor(REDIRECT_DELAY_MS * 2);
+  expect(new URL(page.url()).pathname).toBe('/');
+  await page.mouse.up();
+  await page.waitForURL((url) => url.pathname === '/admin/prijava');
 });

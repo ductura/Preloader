@@ -2,6 +2,7 @@
 // i ručni izbor samo tipkovnicom. Kontrast prstena fokusa (D-188) axe ne provjerava.
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
+import { REDIRECT_DELAY_MS } from '../../src/client.ts';
 import { clientText } from '../../src/text.ts';
 import { matrixDevice, type MatrixDevice } from './devices.ts';
 import { openFirstScreen } from './open.ts';
@@ -32,10 +33,21 @@ test('axe reports button-name and link-name when a label is removed', async ({ p
   await page.evaluate(() => {
     document.querySelector('#choice button[data-package="windows"]')!.textContent = '';
     document.getElementById('open-app')!.textContent = '';
+    document.getElementById('sign-in-admin')!.textContent = '';
   });
   const found = await seriousViolations(page);
   expect(found.some((v) => v.startsWith('button-name ') && v.includes('data-package="windows"'))).toBe(true);
   expect(found.some((v) => v.startsWith('link-name ') && v.includes('#open-app'))).toBe(true);
+  expect(found.some((v) => v.startsWith('link-name ') && v.includes('#sign-in-admin'))).toBe(true);
+});
+
+test('sign-in links are reached first with the keyboard and stop the redirect', async ({ page }) => {
+  await tabTo(page, '#sign-in-aai', 1);
+  await tabTo(page, '#sign-in-admin', 1);
+  await page.clock.runFor(REDIRECT_DELAY_MS * 2);
+  expect(new URL(page.url()).pathname).toBe('/');
+  await page.keyboard.press('Enter');
+  await page.waitForURL('**/admin/prijava');
 });
 
 test('first screen has no serious or critical axe violations', async ({ page }) => {
@@ -57,8 +69,8 @@ async function tabTo(page: Page, selector: string, presses: number): Promise<voi
 }
 
 test('manual choice works with the keyboard alone, focus visible', async ({ page }) => {
-  // Redom: „Otvori”, poveznica za preuzimanje (samo kad je paket ponuđen), prikazi, paketi.
-  const before = d.pkg ? 2 : 1;
+  // Redom: dvije poveznice prijave, „Otvori”, poveznica za preuzimanje (samo kad je paket ponuđen), prikazi, paketi.
+  const before = 2 + (d.pkg ? 2 : 1);
   const view = d.view === 'desktop' ? 'mobile' : 'desktop';
   const pkg = d.pkg === 'windows' ? 'macos' : 'windows';
   const viewAt = view === 'desktop' ? 0 : 1;

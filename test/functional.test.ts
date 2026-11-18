@@ -57,8 +57,61 @@ describe('stranica preloadera', () => {
     const html = renderPage({ script: '', css: '' }, {
       frontends: { chrome: '/a"><x>', mobile: '/m', other: '/o' },
       downloads: { windows: '/w', macos: '/m' },
+      signIn: { returnTo: '/app/web/', admin: '/adm"><y>' },
     });
     expect(html).not.toContain('"><x>');
     expect(html).toContain('/a&quot;&gt;&lt;x&gt;');
+    expect(html).not.toContain('"><y>');
+    expect(html).toContain('/adm&quot;&gt;&lt;y&gt;');
+  });
+});
+
+// Ugovor #2028 §3.1: dva ulaza u prijavu, bez skripte i prije preusmjeravanja.
+describe('prijava s preloadera', () => {
+  const signIn = (doc: Document) => [...doc.querySelectorAll<HTMLAnchorElement>('#sign-in a')];
+
+  test('AAI@EduHr vodi na prijavu s povratkom na /app/web/, administracija na /admin/prijava', () => {
+    const { doc } = visit(UA.chromeMac);
+    expect(signIn(doc).map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
+      ['Prijava preko AAI@EduHr', '/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F'],
+      ['Administracija platforme', '/admin/prijava'],
+    ]);
+    const login = new URL(href(doc, 'sign-in-aai') ?? '', 'http://localhost:8000');
+    expect(login.pathname).toBe('/api/v1/auth/login');
+    expect(login.searchParams.get('returnTo')).toBe('/app/web/');
+    expect(doc.getElementById('sign-in')?.getAttribute('aria-label')).toBe('Prijava');
+  });
+
+  test('jedini ulaz za studente je AAI@EduHr (D-09): nema obrasca ni drugog pružatelja', () => {
+    const html = renderPage({ script: '', css: '' });
+    expect(html).not.toMatch(/<form|<input|type="password"/i);
+    const logins = html.match(/\/api\/v1\/auth\/[a-z-]+/g) ?? [];
+    expect(new Set(logins)).toEqual(new Set(['/api/v1/auth/login']));
+  });
+
+  test('nesigurna povratna adresa iz konfiguracije pada na početnu stranicu', () => {
+    const html = renderPage({ script: '', css: '' }, { ...defaultConfig, signIn: { returnTo: '//evil.example/', admin: '/admin/prijava' } });
+    expect(html).toContain('href="/api/v1/auth/login?returnTo=%2F"');
+  });
+
+  for (const type of ['focusin', 'pointerdown'] as const) {
+    test(`${type} na prijavi otkazuje automatsko preusmjeravanje`, () => {
+      const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
+      const cancel = vi.fn();
+      applyRoute(doc, { userAgent: UA.chromeMac }, defaultConfig, () => cancel);
+      expect(cancel).not.toHaveBeenCalled();
+      doc.getElementById('sign-in-admin')?.dispatchEvent(new Event(type, { bubbles: true }));
+      expect(cancel).toHaveBeenCalledTimes(1);
+      doc.getElementById('sign-in-aai')?.dispatchEvent(new Event(type, { bubbles: true }));
+      expect(cancel).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  test('bez interakcije s prijavom preusmjeravanje ostaje zakazano', () => {
+    const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
+    const cancel = vi.fn();
+    applyRoute(doc, { userAgent: UA.chromeMac }, defaultConfig, () => cancel);
+    doc.getElementById('open-app')?.dispatchEvent(new Event('focusin', { bubbles: true }));
+    expect(cancel).not.toHaveBeenCalled();
   });
 });

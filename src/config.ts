@@ -2,6 +2,8 @@
 export interface Config {
   frontends: { chrome: string; mobile: string; other: string };
   downloads: { windows: string; macos: string };
+  /** Prijava (ugovor #2028 §3.1): povratak nakon AAI@EduHr i ulaz administracije platforme. */
+  signIn: { returnTo: string; admin: string };
 }
 
 export const defaultConfig: Config = {
@@ -13,6 +15,10 @@ export const defaultConfig: Config = {
   downloads: {
     windows: '/download/Ductura-Setup-x64.exe',
     macos: '/download/Ductura-macOS.dmg',
+  },
+  signIn: {
+    returnTo: '/app/web/',
+    admin: '/admin/prijava',
   },
 };
 
