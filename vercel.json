@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "pnpm build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/admin", "destination": "https://ZAMIJENI-aplication-front.invalid/admin" },
+    { "source": "/admin/:path*", "destination": "https://ZAMIJENI-aplication-front.invalid/admin/:path*" },
+    { "source": "/api/v1/:path*", "destination": "https://ZAMIJENI-institution-server.invalid/api/v1/:path*" },
+    { "source": "/app/web", "destination": "https://ZAMIJENI-institution-front.invalid/app/web/" },
+    { "source": "/app/web/:path*", "destination": "https://ZAMIJENI-institution-front.invalid/app/web/:path*" },
+    { "source": "/app/chrome", "destination": "https://ZAMIJENI-institution-front.invalid/app/chrome/" },
+    { "source": "/app/chrome/:path*", "destination": "https://ZAMIJENI-institution-front.invalid/app/chrome/:path*" }
+  ]
+}
