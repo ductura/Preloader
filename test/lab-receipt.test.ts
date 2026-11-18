@@ -73,6 +73,9 @@ const refused: [string, unknown][] = [
   ['an array with trailing holes', trailing],
   ['new Array(3)', new Array(3)],
   ['an array with an extra property', extra],
+  // Codex on ab90df4: an extra key must not make up for a hole.
+  ['a hole made up for by an extra key', Object.assign([1, , 2], { x: 3 })],
+  ['a hole made up for by a symbol key', Object.assign([1, , 2], { [Symbol('x')]: 3 })],
   ['a proxy of an array', new Proxy([1, 2], {})],
   ['a getter on an array element', gotten],
   ['an Array subclass', Sub.from([1])],

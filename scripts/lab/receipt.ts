@@ -28,8 +28,10 @@ function exact(value: unknown, keys: readonly string[]): value is Obj {
 function dense(value: unknown[]): boolean {
   if (types.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) return false;
   const own = Reflect.ownKeys(value);
-  // A hole or an extra key changes the count; every key but length must be an index-held data value.
-  return own.length === value.length + 1 && own.every((k) => k === 'length' || data(value, k));
+  // Exactly the keys 0..length-1 and length: no hole, and no extra key to make up for one.
+  if (own.length !== value.length + 1 || !own.includes('length')) return false;
+  for (let i = 0; i < value.length; i += 1) if (!data(value, String(i))) return false;
+  return true;
 }
 
 /** RFC 8785 for the plain JSON values a receipt payload holds; anything else throws `jcs: …`. */
