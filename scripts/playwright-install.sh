@@ -42,6 +42,25 @@ if ! timeout --kill-after=1 5 true >/dev/null 2>&1; then
 fi
 cap() { timeout --kill-after=10 "$@"; }
 start=$(date +%s)
+# PLAYWRIGHT_INSTALL_DEADLINE (optional, Unix seconds) is the job's own end. The
+# budget shrinks so that the last cap, --kill-after (10 s) and 5 s more end
+# before it: the ::error:: comes before the job is cancelled.
+deadline="${PLAYWRIGHT_INSTALL_DEADLINE-}"
+if [ -n "$deadline" ]; then
+  case "$deadline" in
+    [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] | [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *)
+      echo "::error::PLAYWRIGHT_INSTALL_DEADLINE must be a Unix time in whole seconds"
+      exit 1
+      ;;
+  esac
+  room=$((deadline - start - 15))
+  [ "$room" -lt "$budget" ] && budget=$room
+  if [ "$budget" -le 0 ]; then
+    echo "::error::Playwright browsers (${browsers}) were not installed: the job deadline leaves no time"
+    exit 1
+  fi
+fi
 # window <seconds>: the smaller of the given time and what is left of the budget.
 window() {
   local left=$((budget - ($(date +%s) - start)))

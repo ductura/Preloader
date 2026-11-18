@@ -25,7 +25,7 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'pw-install-'));
   for (const d of ['bin', 'fake', 'archives', 'cache', 'etc/apt/sources.list.d']) mkdirSync(at(d), { recursive: true });
   writeFileSync(at('log'), '');
-  writeFileSync(at('clock'), '1000');
+  writeFileSync(at('clock'), '1700000000');
   // One plan line per pnpm call: ok, fail, capped (124), hang (ignores TERM), or ok+deb (apt downloaded new.deb).
   stub('bin', 'pnpm', [
     'echo "pnpm $* | archives: $(ls "$PLAYWRIGHT_APT_ARCHIVES" | tr "\\n" " ")" >> "$LOG"',
@@ -89,11 +89,11 @@ test('no attempt gets more than what is left of the budget (fake clock)', () => 
   const full = run(['capped', 'capped', 'capped'], { PLAYWRIGHT_INSTALL_BUDGET: '600', PLAYWRIGHT_INSTALL_TIMEOUT: '240' });
   assert.deepEqual(attemptCaps(full.log), [240, 240, 120]);
   writeFileSync(at('log'), '');
-  writeFileSync(at('clock'), '1000');
+  writeFileSync(at('clock'), '1700000000');
   assert.equal(run(['fail', 'fail', 'capped']).code, 1);
   assert.deepEqual(attemptCaps(readFileSync(at('log'), 'utf8')), [240, 240, 240], 'the last attempt is capped too');
   writeFileSync(at('log'), '');
-  writeFileSync(at('clock'), '1000');
+  writeFileSync(at('clock'), '1700000000');
   const short = run(['capped', 'capped', 'capped'], { PLAYWRIGHT_INSTALL_BUDGET: '300', PLAYWRIGHT_INSTALL_TIMEOUT: '240' });
   assert.deepEqual(attemptCaps(short.log), [240, 60]);
   assert.equal(short.code, 1, short.out);
@@ -110,6 +110,29 @@ for (const bad of BAD) {
       assert.doesNotMatch(r.log, /pnpm/);
     });
   }
+}
+
+test('the job deadline shrinks the budget so the error comes before the job is cancelled', () => {
+  const r = run(['capped', 'capped', 'capped'], { PLAYWRIGHT_INSTALL_DEADLINE: '1700000300' });
+  assert.deepEqual(attemptCaps(r.log), [240, 45]);
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /::error::.*within 285s \(2 of 3 attempts, last exit 124\)/);
+});
+
+test('a deadline that leaves no time stops before any install', () => {
+  const r = run(['ok'], { PLAYWRIGHT_INSTALL_DEADLINE: '1700000015' });
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /::error::.*the job deadline leaves no time/);
+  assert.doesNotMatch(r.log, /pnpm/);
+});
+
+for (const bad of ['abc', '0', '1e9', '01700000300', ' 1700000300', '1700000300\r', '1700000300\n', '1700000300\u00a0', '17000003000', '-1700000300']) {
+  test(`refuses PLAYWRIGHT_INSTALL_DEADLINE=${JSON.stringify(bad)} before any install`, () => {
+    const r = run(['ok'], { PLAYWRIGHT_INSTALL_DEADLINE: bad });
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /::error::PLAYWRIGHT_INSTALL_DEADLINE must be a Unix time/);
+    assert.doesNotMatch(r.log, /pnpm/);
+  });
 }
 
 test('a timeout without --kill-after is refused before any install', () => {
@@ -223,6 +246,19 @@ test('e2e-matrix restores and saves both caches and installs browsers only throu
   assert.equal(field(install, 'run'), 'bash scripts/playwright-install.sh chromium firefox webkit');
   const env = field(install, 'env');
   const budget = Number(field(env, 'PLAYWRIGHT_INSTALL_BUDGET'));
+  // A slow first mirror must leave time for the fallback.
+  const limit = Number(field(env, 'PLAYWRIGHT_INSTALL_TIMEOUT'));
+  assert.ok(limit > 0 && 2 * limit < budget, `limit ${limit}s, budget ${budget}s`);
+  // The deadline is set first and reaches the script: at most a minute short of the job timeout.
+  assert.equal(field(env, 'PLAYWRIGHT_INSTALL_DEADLINE'), '${{ env.JOB_DEADLINE }}');
+  writeFileSync(at('genv'), '');
+  const before = Math.floor(Date.now() / 1000);
+  const d = spawnSync('bash', ['-e', '-c', String(field(steps[0], 'run'))], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', GITHUB_ENV: at('genv') } });
+  assert.equal(d.status, 0, d.stderr);
+  const m = /^JOB_DEADLINE=(\d+)\n$/.exec(readFileSync(at('genv'), 'utf8'));
+  const ahead = Number(m?.[1]) - before;
+  const jobSeconds = Number(field(job, 'timeout-minutes')) * 60;
+  assert.ok(ahead >= jobSeconds - 62 && ahead <= jobSeconds - 58, `deadline ${ahead}s ahead, job ${jobSeconds}s`);
   const minutes = Number(field(install, 'timeout-minutes'));
   assert.ok(budget > 0 && minutes * 60 >= budget + 120 && minutes < Number(field(job, 'timeout-minutes')), `${budget}s in ${minutes} min`);
   const uses = (s: unknown, a: string): boolean => new RegExp(`^actions/cache/${a}@[0-9a-f]{40}$`).test(String(field(s, 'uses')));
