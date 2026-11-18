@@ -232,6 +232,9 @@ const neverThrows: [string, unknown, ReceiptTrust, unknown][] = [
   ['an empty trusted key id', vector(), { ...trust, keyId: '' }, expected],
   ['an empty trusted domain', vector(), { ...trust, evidenceDomainId: '' }, expected],
   ['a trust that is null', vector(), null as unknown as ReceiptTrust, expected],
+  // Codex on f1401f9: a non-enumerable expectation was checked but never compared.
+  ['a hidden wrong document in the expectation', vector(), trust, Object.defineProperty({ ...expected }, 'documentId', { value: 'wrong-document', enumerable: false })],
+  ['a hidden field in the payload', (() => { const r = vector(); Object.defineProperty(r.signedReceipt.payload, 'receiptId', { enumerable: false }); return r; })(), trust, expected],
 ];
 
 for (const [name, receipt, t, e] of neverThrows) {
@@ -291,10 +294,14 @@ test('a malformed fixture or source gives a reason, never an exception', () => {
     null, [], {}, 'x', { verificationKey: vOwn['verificationKey'], accepted: vOwn['accepted'] }, { ...vOwn, source: null },
     { ...vOwn, source: Object.create(vOwn.source) as unknown }, JSON.parse(`{"__proto__":${JSON.stringify(vOwn)}}`),
     JSON.parse('{"toString":null}'), { ...vOwn, extra: 1 }, noAccepted, { ...vOwn, source: { ...vOwn.source, repository: 'x/y' } },
+    // Codex on f1401f9: the exported check must not throw on getters or proxies either.
+    Object.defineProperty({ verificationKey: vOwn['verificationKey'], accepted: vOwn['accepted'] }, 'source', { get: throwing, enumerable: true }),
+    revoked.proxy, new Proxy(vOwn, {}), { ...vOwn, source: new Proxy(vOwn.source, {}) },
+    Object.defineProperty({ ...vOwn }, 'accepted', { enumerable: false }),
   ];
-  for (const f of fixtures) {
-    assert.doesNotThrow(() => vendoredProblem(vSource, f, SHA));
-    assert.notEqual(vendoredProblem(vSource, f, SHA), null, String(JSON.stringify(f)).slice(0, 80));
+  for (const [i, f] of fixtures.entries()) {
+    assert.doesNotThrow(() => vendoredProblem(vSource, f, SHA), `fixture ${i}`);
+    assert.notEqual(vendoredProblem(vSource, f, SHA), null, `fixture ${i}`);
   }
   for (const doc of ['nije json', '{}', JSON.stringify({ chain: vendoredDoc.chain, receiptV2: { accepted: [] } })]) {
     const src = Buffer.from(doc);

@@ -53,15 +53,18 @@ const PAYLOAD = Object.keys(PAYLOAD_TYPES);
 type Obj = Record<string, unknown>;
 
 /**
- * A plain object holding exactly `keys` as its own data properties: nothing
- * inherited, nothing extra, no getter and no Proxy, whose reads could differ.
+ * A plain object holding exactly `keys` as its own enumerable data properties:
+ * nothing inherited, hidden or extra, no getter and no Proxy, whose reads could differ.
  */
 function exact(value: unknown, keys: readonly string[]): value is Obj {
   if (typeof value !== 'object' || value === null || types.isProxy(value) || Array.isArray(value)) return false;
   const proto: unknown = Object.getPrototypeOf(value);
   if (proto !== Object.prototype && proto !== null) return false;
   const own = Reflect.ownKeys(value);
-  return own.length === keys.length && keys.every((k) => Object.hasOwn(Object.getOwnPropertyDescriptor(value, k) ?? {}, 'value'));
+  return own.length === keys.length && keys.every((k) => {
+    const field = Object.getOwnPropertyDescriptor(value, k);
+    return field !== undefined && field.enumerable === true && Object.hasOwn(field, 'value');
+  });
 }
 
 /** RFC 8785 for the values a receipt payload holds; anything else throws. */
@@ -157,7 +160,7 @@ function check(receipt: unknown, trust: ReceiptTrust, expected: ReceiptExpectati
   const names: [string, unknown][] = [
     ['receiptSchema', 'ductus-evidence-receipt-v2'],
     ['evidenceDomainId', trust.evidenceDomainId],
-    ...Object.entries(expected),
+    ...Object.keys(EXPECTED).map((k): [string, unknown] => [k, (expected as Obj)[k]]),
   ];
   const wrong = names.find(([k, v]) => payload[k] !== v);
   return wrong === undefined ? null : `potvrda ne imenuje ovaj commit (${wrong[0]})`;

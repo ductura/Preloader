@@ -3,7 +3,7 @@
 // server checkout at SERVER_SHA, so the copy never drifts from its source.
 //   node scripts/lab/vendored.ts <server checkout> <fixture>
 import { createHash } from 'node:crypto';
-import { isDeepStrictEqual } from 'node:util';
+import { isDeepStrictEqual, types } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -16,11 +16,14 @@ const SHA = /^[0-9a-f]{40}$/;
 const FIXTURE = ['source', 'verificationKey', 'accepted'];
 const SOURCE = ['repository', 'commit', 'path', 'blob', 'take'];
 
-/** A plain JSON object holding exactly `keys` as its own properties. */
+/** A plain JSON object holding exactly `keys` as its own enumerable data properties; no getter, no Proxy. */
 function exact(value: unknown, keys: readonly string[]): value is Obj {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const own = Object.keys(value);
-  return own.length === keys.length && keys.every((k) => Object.hasOwn(value, k));
+  if (typeof value !== 'object' || value === null || types.isProxy(value) || Array.isArray(value)) return false;
+  const own = Reflect.ownKeys(value);
+  return own.length === keys.length && keys.every((k) => {
+    const field = Object.getOwnPropertyDescriptor(value, k);
+    return field !== undefined && field.enumerable === true && Object.hasOwn(field, 'value');
+  });
 }
 
 /** An own property of a JSON object, or undefined; nothing inherited. */
@@ -33,6 +36,14 @@ const own = (value: unknown, key: string): unknown =>
  * characters, so an empty or padded one never matches. Never throws.
  */
 export function vendoredProblem(source: Buffer, fixture: unknown, serverSha: unknown): string | null {
+  try {
+    return problem(source, fixture, serverSha);
+  } catch {
+    return 'kopija ili izvor se ne mogu pročitati';
+  }
+}
+
+function problem(source: Buffer, fixture: unknown, serverSha: unknown): string | null {
   if (typeof serverSha !== 'string' || !SHA.test(serverSha)) return 'SERVER_SHA nije puni SHA commita';
   if (!exact(fixture, FIXTURE) || !exact(fixture['source'], SOURCE)) return 'kopija nema oblik';
   const from = fixture['source'] as Obj;
