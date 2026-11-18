@@ -1,16 +1,15 @@
 // DAN-1096 L-1: the RFC 8785 text a receipt v2 is signed over, and the key the lab derives from the stack's seed.
 // The contract vector is the server's own (test/fixtures/receipt-v2-golden.json); its key is RFC 8032 test 1.
-import { test } from 'vitest';
+import { onTestFinished, test } from 'vitest';
 import assert from 'node:assert/strict';
 import fc from 'fast-check';
 import { canonicalJson } from '@ductura/contracts';
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import openapi from '@ductura/contracts/openapi/v1.json' with { type: 'json' };
 import { Ajv } from 'ajv';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 import { type ReceiptExpectation, type ReceiptTrust, checkReceipt, jcs, jcsText, publicKeyFromSeed, registryRow } from '../scripts/lab/receipt.ts';
@@ -132,9 +131,9 @@ test('jcs writes every JSON value as canonicalJson does, and jcsText its JSON te
 });
 test('jcs gives jcs: even where reading the value throws, as a module namespace in its TDZ does (review on c1403730)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'jcs-ns-'));
-  const receipt = pathToFileURL(fileURLToPath(new URL('../scripts/lab/receipt.ts', import.meta.url))).href;
+  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(join(dir, 'a.mjs'), "import './b.mjs';\nexport const x = 1;\n");
-  writeFileSync(join(dir, 'b.mjs'), `import * as a from './a.mjs';\nimport { jcs } from '${receipt}';\ntry { jcs(a); console.log('written'); } catch (e) { console.log(String(e)); }\n`);
+  writeFileSync(join(dir, 'b.mjs'), `import * as a from './a.mjs';\nimport { jcs } from ${JSON.stringify(new URL('../scripts/lab/receipt.ts', import.meta.url).href)};\ntry { jcs(a); console.log('written'); } catch (e) { console.log(String(e)); }\n`);
   const run = spawnSync(process.execPath, [join(dir, 'a.mjs')], { encoding: 'utf8', timeout: 20_000 });
   assert.match(run.stdout, /^Error: jcs: /, run.stdout + run.stderr);
 });
@@ -177,6 +176,13 @@ const twin = (c: string) => B64[B64.indexOf(c) ^ 1]!;
 const CTRL: [string, string][] = [['CRLF', '\r\n'], ['a tab', '\t'], ['NBSP', '\u00a0'], ['DEL', '\u007f']];
 const NOT_SIGNED = 'potvrda nije potpisana';
 const SHAPE = 'potpisana potvrda nema oblik v2';
+// For every payload field, a value of the right type the server refuses (Review c.6988462264): one per rule.
+const REFUSED: Record<string, unknown> = {
+  receiptSchema: 'ductus-evidence-receipt-v1', receiptId: ' ', evidencePackageId: '', documentId: '\u00a0', sessionId: 's'.repeat(257), segmentId: '\t',
+  segmentHash: 'A'.repeat(64), predecessorSegmentHash: 'c'.repeat(63), previousReceiptId: '', evidenceSchema: 'ductus-evidence-segment-v1',
+  evidenceProfileId: 'x'.repeat(121), sequenceFrom: 0, sequenceTo: -1, eventCount: 0, payloadBytes: 1.5, acceptedAt: '2026-10-03T06:05:01.000Z',
+  revision: 2 ** 53, clientTransactionId: 'tx\n', evidenceDomainId: String(p['evidenceDomainId']).toUpperCase(), principalId: String(p['principalId']).replace('-4', '-5'),
+};
 const lab = (field: string) => `laboratorij nema ispravan ključ stoga ili commit (${field})`;
 const { documentId: _d, ...noDocument } = expected;
 const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
@@ -210,6 +216,7 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
   ['a digest that is a number', at((r) => { (r.signedReceipt as Record<string, unknown>)['payloadDigestSha256'] = 1; }), trust, expected, SHAPE],
   ['a Date envelope with the receipt fields', Object.assign(new Date(0), vector()), trust, expected, NOT_SIGNED],
   ...Object.keys(p).map((k): [string, unknown, ReceiptTrust, unknown, string] => [`payload ${k} of the wrong type`, at((r) => { r.signedReceipt.payload[k] = false; }), trust, expected, `${SHAPE} (${k})`]),
+  ...Object.keys(p).map((k): [string, unknown, ReceiptTrust, unknown, string] => [`payload ${k} of the right type, refused`, signed({ [k]: REFUSED[k] }), trust, expected, `${SHAPE} (${k})`]),
   ['an extra payload field', signed({ extra: 1 }), trust, expected, SHAPE],
   ['a payload field missing', at((r) => { delete r.signedReceipt.payload['previousReceiptId']; }), trust, expected, SHAPE],
   ['an own __proto__ in the payload', at((r) => { r.signedReceipt.payload = JSON.parse(JSON.stringify(p).replace('{', '{"__proto__":1,')) as Record<string, unknown>; }), trust, expected, SHAPE],
@@ -244,6 +251,9 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
   ['a key id longer than the server allows', label('keyId', 'k'.repeat(2049)), { ...trust, keyId: 'k'.repeat(2049) }, expected, lab('trust.keyId')],
   ['a key version longer than the server allows', label('keyVersion', 'v'.repeat(257)), { ...trust, keyVersion: 'v'.repeat(257) }, expected, lab('trust.keyVersion')],
   ['a trusted domain that is no UUID', vector(), { ...trust, evidenceDomainId: 'domena' }, expected, lab('trust.evidenceDomainId')],
+  ['a trusted X25519 key of 44 bytes (QA c.6988462360)', vector(), { ...trust, keyBase64Url: generateKeyPairSync('x25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64url') }, expected, lab('trust.keyBase64Url')],
+  ['a key id of 2048 in trust and signature', label('keyId', 'k'.repeat(2048)), { ...trust, keyId: 'k'.repeat(2048) }, expected, null],
+  ['a key version of 256 in trust and signature', label('keyVersion', 'v'.repeat(256)), { ...trust, keyVersion: 'v'.repeat(256) }, expected, null],
   ['a null trust', vector(), null as unknown as ReceiptTrust, expected, lab('trust')],
   ['a proxy trust', vector(), new Proxy(trust, {}), expected, lab('trust')],
   ['an empty expectation', vector(), trust, {}, lab('expected')],
