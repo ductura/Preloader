@@ -5,7 +5,11 @@ import assert from 'node:assert/strict';
 import fc from 'fast-check';
 import { canonicalJson } from '@ductura/contracts';
 import { createHash, createPublicKey, verify } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 import { jcs, jcsText, publicKeyFromSeed } from '../scripts/lab/receipt.ts';
 type Golden = {
@@ -51,7 +55,6 @@ test.each([new Uint8Array(0), SEED.subarray(1), Buffer.concat([SEED, Buffer.from
   new Uint8Array(2 ** 25)])('publicKeyFromSeed refuses a seed that is not 32 bytes of Uint8Array (%#)', (seed) => {
   assert.throws(() => publicKeyFromSeed(seed as Uint8Array), /^Error: sjeme ključa nema 32 bajta$/);
 });
-/** `depth` levels: arrays around one innermost object. */
 const nest = (depth: number): unknown => (depth <= 1 ? { a: 0 } : [nest(depth - 1)]);
 // RFC 8785: keys in UTF-16 code unit order, -0 as 0, numbers and escapes as JSON.stringify writes them.
 test.each([
@@ -124,4 +127,12 @@ test('jcs writes every JSON value as canonicalJson does, and jcsText its JSON te
       else assert.equal(write(), reference);
     }
   }), { numRuns: 500 });
+});
+test('jcs gives jcs: even where reading the value throws, as a module namespace in its TDZ does (review on c1403730)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jcs-ns-'));
+  const receipt = pathToFileURL(fileURLToPath(new URL('../scripts/lab/receipt.ts', import.meta.url))).href;
+  writeFileSync(join(dir, 'a.mjs'), "import './b.mjs';\nexport const x = 1;\n");
+  writeFileSync(join(dir, 'b.mjs'), `import * as a from './a.mjs';\nimport { jcs } from '${receipt}';\ntry { jcs(a); console.log('written'); } catch (e) { console.log(String(e)); }\n`);
+  const run = spawnSync(process.execPath, [join(dir, 'a.mjs')], { encoding: 'utf8', timeout: 20_000 });
+  assert.match(run.stdout, /^Error: jcs: /, run.stdout + run.stderr);
 });
