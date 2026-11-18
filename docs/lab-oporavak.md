@@ -10,14 +10,14 @@ Ulaz: `SERVER_DIR`, kopija `ductura/server` s instaliranim paketima i `pnpm buil
 
 Tijek:
 
-1. Zaključavanje laboratorija: direktorij `<stog>.lab-lock` uz direktorij stoga, stvoren jednim nerekurzivnim `mkdir` (atomski). Ako postoji, drugo pokretanje odmah završava s FAIL i ne dira stog; zaostalo zaključavanje prekinutog pokretanja briše se ručno nakon `pnpm stack:vs1 down`. Paralelna pokretanja trebaju zasebne `LAB_REPORT`.
+1. Zaključavanje laboratorija: direktorij `<stog>.lab-lock` uz stvarnu putanju direktorija stoga (poveznica na stog dijeli isto zaključavanje), stvoren jednim nerekurzivnim `mkdir` (atomski). Ako postoji, drugo pokretanje odmah završava s FAIL i ne dira stog; zaostalo zaključavanje prekinutog pokretanja briše se ručno nakon `pnpm stack:vs1 down`. Paralelna pokretanja trebaju zasebne `LAB_REPORT`.
 2. `pnpm stack:vs1 up` u `SERVER_DIR`, s `--env ci` u CI-ju (`CI=true`), inače `--env local`. Ako stog već radi, `up` servera odbija, a laboratorij taj stog ne gasi.
 3. Izmišljeni student, kolegij i zadatak upisuju se `psql`-om kroz socket stoga (samo priprema, kao `scripts/stack/vs1-commit-check.ts`); sesija je upisani red.
 4. Ključ potvrda kojem laboratorij vjeruje ne dolazi iz odgovora servera. Javni ključ izvodi se ovdje iz sjemena kojim pokrenuti server potpisuje (`DUCTUS_DEV_SIGNING_KEY_FILE` iz okruženja tog procesa, `stackServerEnv` stoga). Oznaka, verzija i domena tog ključa čitaju se iz registra `evidence.signing_key`. U domeni tog ključa mora biti točno jedan aktivan ključ potvrda (nije opozvan, `valid_to` nije prošao), i to upravo ključ sjemena.
 5. Kao student kroz API: `evidence/open` sa `start: true`, zatim `evidence/commit` s jednim segmentom čiji dokument nosi jedinstvenu izmišljenu rečenicu.
 6. `pnpm stack:vs1 down`, provjera da je veza na port servera odbijena, pa `pnpm stack:vs1 up` nad istim direktorijem stoga.
 7. Kao student kroz API: `evidence/open` bez `start` (otvara samo postojeći rad).
-8. `pnpm stack:vs1 down` uvijek, i nakon pada, ali samo za stog koji je podiglo ovo pokretanje: nakon uspjelog `up` i dok je oznaka stoga u `state.json` (`startedAt`) ona koju je ostavio taj `up`. Isto vrijedi za `down` u koraku 6.
+8. `pnpm stack:vs1 down` uvijek, i nakon pada, ali samo za stog koji je podiglo ovo pokretanje: nakon uspjelog `up` i dok je oznaka stoga u `state.json` (`startedAt`) ona koju je ostavio taj `up`; stog bez oznake ne gasi. Isto vrijedi za `down` u koraku 6.
 
 ## Tvrdnje
 
@@ -25,7 +25,7 @@ Svaka ima PASS ili FAIL u izvještaju. Ijedan FAIL ili prekid daje izlazni kod r
 
 | ID | Tvrdnja |
 | --- | --- |
-| L-1 | `evidence/commit` odgovara 200 sa statusom `committed`, revizijom 1 i potvrdom v2 u istom odgovoru (DAN-887; odgođena potvrda je VS-1b). Ed25519 potpis potvrde (D-92) provjerava se ovdje (`node:crypto`) ključem iz koraka 3. Potvrda mora imenovati upravo ovaj commit: dokument, transakciju, reviziju 1, studenta, SHA-256 poslanog segmenta i domenu ključa. Status `signed` bez provjerenog potpisa je FAIL. Svako polje potvrde mora imati vrijednost i tip iz ugovora servera (`SignedReceipt`, `server/contracts/routes/evidence.ts`); duljina teksta broji se u UTF-16 jedinicama. |
+| L-1 | `evidence/commit` odgovara 200 sa statusom `committed`, revizijom 1 i potvrdom v2 u istom odgovoru (DAN-887; odgođena potvrda je VS-1b). Ed25519 potpis potvrde (D-92) provjerava se ovdje (`node:crypto`) ključem iz koraka 4. Potvrda mora imenovati upravo ovaj commit: dokument, transakciju, reviziju 1, studenta, SHA-256 poslanog segmenta i domenu ključa. Status `signed` bez provjerenog potpisa je FAIL. Svako polje potvrde mora imati vrijednost i tip iz ugovora servera (`SignedReceipt`, `server/contracts/routes/evidence.ts`); duljina teksta broji se u UTF-16 jedinicama. |
 | L-2 | Restart je stvaran: između `down` i `up` veza na port servera je odbijena, a PID servera nakon `up` razlikuje se od PID-a prije. PID je siguran cijeli broj veći od 0. Svaki drugi ishod je FAIL: odgovor bilo kojeg statusa, preusmjerenje, prekid nakon spajanja ili isteklo vrijeme. |
 | L-3 | Drugi `open` vraća isti `documentId`. |
 | L-4 | Drugi `open` vraća `currentRevision` 1. |

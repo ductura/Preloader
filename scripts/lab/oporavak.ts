@@ -22,8 +22,6 @@ type State = {
 const SERVER = resolve(process.env['SERVER_DIR'] ?? '');
 const STACK = process.env['VS1_STACK_DIR'] ?? join(SERVER, '.stack', 'vs1');
 const OUT = process.env['LAB_REPORT'] ?? 'lab-oporavak.json';
-// Next to the stack directory, not in it: the stack's own files stay the stack's.
-const LOCK = `${STACK}.lab-lock`;
 const INSTITUTION = 'demo-fakultet'; // server scripts/stack/evidence.ts INSTITUTION_SLUG
 
 const fromServer = async <T>(path: string): Promise<T> => (await import(pathToFileURL(join(SERVER, path)).href)) as T;
@@ -190,7 +188,7 @@ async function main(): Promise<number> {
     };
     const { post, stackServerEnv } = await fromServer<CommitCheck>('scripts/stack/vs1-commit-check.ts');
     const { canonicalizeJcs } = await fromServer<{ canonicalizeJcs: (v: unknown) => string }>('server/domain/index.ts');
-    await withStack(LOCK, stack, stackMark, async (s) => {
+    await withStack(STACK, stack, stackMark, async (s) => {
       await s.up();
       state = readState();
       const token = randomBytes(32).toString('base64url');

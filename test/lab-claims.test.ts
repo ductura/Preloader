@@ -4,7 +4,7 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -217,7 +217,11 @@ test('pnpm lab:oporavak replaces an older report with FAIL before it starts', ()
   const run = spawnSync('pnpm', ['lab:oporavak'], { cwd, env, encoding: 'utf8', shell: process.platform === 'win32' });
   assert.equal(run.status, 1, run.stderr);
   const final = JSON.parse(readFileSync(out, 'utf8')) as { result: string; error: string };
-  if (final.error === 'HEAD preloadera nije čitljiv') return; // no git here: the run stops before SERVER_DIR
+  if (final.error === 'HEAD preloadera nije čitljiv') {
+    // No git here: the run stops before SERVER_DIR, and the older PASS is gone all the same.
+    assert.deepEqual([final.result, existsSync(join(dir, 'seen.json'))], ['FAIL', false]);
+    return;
+  }
   const seen = JSON.parse(readFileSync(join(dir, 'seen.json'), 'utf8')) as { result: string; error: string };
   assert.deepEqual([seen.result, seen.error], ['FAIL', 'izvođenje nije završilo']);
   assert.deepEqual([final.result, final.error], ['FAIL', 'lažni server']);
