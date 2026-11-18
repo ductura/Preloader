@@ -38,6 +38,13 @@ test.each([new Uint8Array(0), SEED.subarray(1), Buffer.concat([SEED, Buffer.from
   },
 );
 
+/** `depth` levels: arrays around one innermost object. */
+const nest = (depth: number): unknown => {
+  let v: unknown = { a: 0 };
+  for (let i = 1; i < depth; i += 1) v = [v];
+  return v;
+};
+
 // RFC 8785: keys in UTF-16 code unit order, -0 as 0, JSON.stringify escapes.
 const writes: [string, unknown, string][] = [
   ['keys by UTF-16 units, not code points', { '�': 1, '\u{1F600}': 2 }, '{"\u{1F600}":2,"�":1}'],
@@ -48,6 +55,8 @@ const writes: [string, unknown, string][] = [
   ['a nested own __proto__ key', JSON.parse('{"x":{"__proto__":{"y":1}}}'), '{"x":{"__proto__":{"y":1}}}'],
   ['an object without a prototype', Object.assign(Object.create(null) as object, { b: 1, a: [] }), '{"a":[],"b":1}'],
   ['an own toJSON key, never called', { toJSON: 'x', a: 1 }, '{"a":1,"toJSON":"x"}'],
+  ['a shared, not cyclic, value', (() => { const x = { y: 1 }; return { p: x, q: [x] }; })(), '{"p":{"y":1},"q":[{"y":1}]}'],
+  ['64 levels of nesting', nest(64), `${'['.repeat(63)}{"a":0}${']'.repeat(63)}`],
   ['control and blank characters', { 'k\r\n\t\u001f\u007f  ': 'v\r\n\t\u001f\u007f  ' },
     '{"k\\r\\n\\t\\u001f\u007f  ":"v\\r\\n\\t\\u001f\u007f  "}'],
 ];
@@ -98,6 +107,15 @@ const refused: [string, unknown][] = [
   ['a function', () => 1],
   ['a symbol', Symbol('x')],
   ['undefined in an object', { a: undefined }],
+  // QA self-check on ce6a78b.
+  ['65 levels of nesting', nest(65)],
+  ['a symbol key', { a: 1, [Symbol('x')]: 2 }],
+  ['a hidden key', Object.defineProperty({ a: 1 }, 'b', { value: 2 })],
+  ['a hidden array element', Object.defineProperty([1, 2], 1, { value: 2, enumerable: false })],
+  ...[new Map([['a', 1]]), new Set([1]), new WeakMap(), new Date(5), new Number(7), new Boolean(true), new String('x'),
+    new ArrayBuffer(2), new DataView(new ArrayBuffer(2)), new Uint8Array([1, 2]), /x/, new Error('x'), Promise.resolve(),
+    (function* g() {})(), new Map().entries()].map((v): [string, unknown] => [
+    `a ${Object.prototype.toString.call(v)} with a plain prototype`, Object.setPrototypeOf(v, Object.prototype) as unknown]),
 ];
 test.each(refused)('jcs refuses %s', (_name, value) => {
   assert.throws(() => jcs(value), /^Error: jcs: /);

@@ -1,11 +1,19 @@
 // DAN-1096 L-1: a signed receipt v2 (D-92) is signed over the RFC 8785 text of
 // its payload. jcs writes that text for plain JSON values and throws for
-// anything else; publicKeyFromSeed derives the key the lab trusts from the
-// stack's signing seed, never from a server response.
+// anything else; publicKeyFromSeed derives an Ed25519 public key from a
+// 32-byte signing seed.
 import { createPrivateKey, createPublicKey } from 'node:crypto';
 import { types } from 'node:util';
 
 const PKCS8_ED25519 = Buffer.from('302e020100300506032b657004220420', 'hex');
+// A receipt payload is two levels deep; anything near a stack overflow is not one.
+const MAX_DEPTH = 64;
+// Built-ins keep their internal slots under any prototype, so the prototype alone does not make an object plain.
+const BUILT_IN = [
+  types.isBoxedPrimitive, types.isDate, types.isMap, types.isSet, types.isWeakMap, types.isWeakSet, types.isPromise,
+  types.isAnyArrayBuffer, types.isArrayBufferView, types.isRegExp, types.isNativeError, types.isGeneratorObject,
+  types.isMapIterator, types.isSetIterator, types.isModuleNamespaceObject,
+];
 
 type Obj = Record<string, unknown>;
 
@@ -15,21 +23,19 @@ const data = (value: object, key: PropertyKey): boolean => {
   return field !== undefined && field.enumerable === true && Object.hasOwn(field, 'value');
 };
 
-/** A plain object holding exactly `keys` as its own data properties: nothing inherited, hidden or extra, no Proxy. */
-function exact(value: unknown, keys: readonly string[]): value is Obj {
-  if (typeof value !== 'object' || value === null || types.isProxy(value) || Array.isArray(value)) return false;
+/** A plain object (write rules out arrays, proxies and built-ins) holding exactly `keys` as its own data properties. */
+function exact(value: object, keys: readonly string[]): value is Obj {
   const proto: unknown = Object.getPrototypeOf(value);
   if (proto !== Object.prototype && proto !== null) return false;
   const own = Reflect.ownKeys(value);
   return own.length === keys.length && keys.every((k) => data(value, k));
 }
 
-/** A plain dense array: Array.prototype, no Proxy, own data elements 0..length-1 and nothing else. */
+/** A plain dense array (write rules out proxies): Array.prototype, own data elements 0..length-1 and nothing else. */
 function dense(value: unknown[]): boolean {
-  if (types.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) return false;
-  const own = Reflect.ownKeys(value);
+  if (Object.getPrototypeOf(value) !== Array.prototype) return false;
   // Exactly the keys 0..length-1 and length: no hole, and no extra key to make up for one.
-  if (own.length !== value.length + 1 || !own.includes('length')) return false;
+  if (Reflect.ownKeys(value).length !== value.length + 1) return false;
   for (let i = 0; i < value.length; i += 1) if (!data(value, String(i))) return false;
   return true;
 }
@@ -45,7 +51,9 @@ function write(value: unknown, path: Set<object>): string {
   }
   if (typeof value !== 'object') throw new Error('jcs: not a JSON value');
   if (types.isProxy(value)) throw new Error('jcs: a proxy');
+  if (BUILT_IN.some((is) => is(value))) throw new Error('jcs: not a JSON value');
   if (path.has(value)) throw new Error('jcs: a cycle');
+  if (path.size >= MAX_DEPTH) throw new Error('jcs: too deep');
   path.add(value);
   let text: string;
   if (Array.isArray(value)) {
