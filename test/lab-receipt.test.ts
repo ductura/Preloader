@@ -225,7 +225,7 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
   ['another encoding', at((r) => { r.signedReceipt.signature['signatureEncoding'] = 'der'; }), trust, expected, 'potpis nije Ed25519'],
   ['another key id', label('keyId', 'drugi'), trust, expected, 'potpis nije ključem stoga'],
   ['another key version', label('keyVersion', '2'), trust, expected, 'potpis nije ključem stoga'],
-  ...CTRL.map(([n, c]): [string, unknown, ReceiptTrust, unknown, string] => [`${n} after the key id of the signature only`, label('keyId', `${trust.keyId}${c}`), trust, expected, 'potpis nije ključem stoga']),
+  ...(['keyId', 'keyVersion'] as const).flatMap((f) => CTRL.map(([n, c]): [string, unknown, ReceiptTrust, unknown, string] => [`${n} after the ${f} of the signature only`, label(f, `${trust[f]}${c}`), trust, expected, 'potpis nije ključem stoga'])),
   ['a short signature', sigAs(sig.subarray(1)), trust, expected, 'potpis nije ispravno zapisan'],
   ['a padded signature', sigAs(`${sig.toString('base64url')}==`), trust, expected, 'potpis nije ispravno zapisan'],
   ['a standard base64 signature', sigAs(sig.toString('base64')), trust, expected, 'potpis nije ispravno zapisan'],
@@ -262,6 +262,9 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
   ['an expectation without the document', vector(), trust, noDocument, lab('expected')],
   ['a hidden wrong document in the expectation', vector(), trust, Object.defineProperty({ ...expected }, 'documentId', { value: 'doc-2', enumerable: false }), lab('expected')],
   ['a revision as text', vector(), trust, { ...expected, revision: '7' }, lab('expected.revision')],
+  // Every other expectation field with a value its payload rule refuses (pre-check on f7163833).
+  ...(Object.entries({ documentId: ' ', clientTransactionId: 'tx\t', principalId: expected.principalId.toUpperCase(), segmentHash: 'A'.repeat(64) }))
+    .map(([k, v]): [string, unknown, ReceiptTrust, unknown, string] => [`an expected ${k} the payload rule refuses`, vector(), trust, { ...expected, [k]: v }, lab(`expected.${k}`)]),
   ['an extra expectation field', vector(), trust, { ...expected, extra: 1 }, lab('expected')],
 ];
 test.each(rows)('checkReceipt: %s', (_name, receipt, t, e, reason) => {
