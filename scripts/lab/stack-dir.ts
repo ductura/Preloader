@@ -3,11 +3,12 @@
 // to the server as VS1_STACK_DIR, and every path is checked before it is
 // written to, with the roots of the server's own check (ductura/server
 // scripts/stack/config.ts stackDir, vs1.ts DIR).
-import { lstatSync, mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
+import { type Stats, lstatSync, mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 type Real = (path: string) => string;
-/** `tmp`, `real` and `uid` are injected in tests only. */
-export type RunDirOptions = { tmp?: string; real?: Real; uid?: number };
+/** `tmp`, `real` and `lstat` are injected in tests only (an owner other than the test's own). */
+export type RunDirOptions = { tmp?: string; real?: Real; lstat?: (path: string) => Stats };
 /** The directory of one run. */
 export type RunDir = { readonly path: string };
 
@@ -50,20 +51,30 @@ export function checkStackPath(path: string, root: string, tmp = '/tmp', real: R
 /**
  * Makes the directory of one lab run, `<server>/.stack/lab-XXXXXX` (0700),
  * with the checkout resolved first, as the server's ROOT is. Nothing is written
- * before the path, the checkout and `.stack` are checked: both must be
- * directories of this user that others may not write into, or they could swap
- * `.stack` between the check and mkdtemp.
+ * before the path, the checkout, its ancestors and `.stack` are checked: the
+ * checkout and `.stack` must be directories of this user that others may not
+ * write into, or they could swap `.stack` between the check and mkdtemp.
  */
 export function makeRunDir(serverDir: string, options: RunDirOptions = {}): RunDir {
-  const { tmp = '/tmp', real = realpathSync, uid = process.getuid?.() } = options;
+  const { tmp = '/tmp', real = realpathSync, lstat = lstatSync } = options;
+  const uid = process.getuid?.();
   const root = real(serverDir);
   const stack = `${root}/.stack`;
   const mine = (path: string): void => {
-    const st = lstatSync(path);
+    const st = lstat(path);
     if (!st.isDirectory() || st.uid !== uid || (st.mode & 0o022) !== 0) {
       fail(`${path === root ? `server ${path}` : path} mora biti direktorij ovog korisnika u koji drugi ne pišu, ne poveznica (za mod: chmod go-w ${path})`);
     }
   };
+  // Whoever may rename an ancestor could swap the checkout itself: each one is root's or ours, and
+  // others may not write into it unless it is sticky (as /tmp is).
+  for (let p = dirname(root); ; p = dirname(p)) {
+    const st = lstat(p);
+    if ((st.uid !== 0 && st.uid !== uid) || ((st.mode & 0o022) !== 0 && (st.mode & 0o1000) === 0)) {
+      fail(`predak ${p} servera mora biti direktorij roota ili ovog korisnika u koji drugi ne pišu (ili sticky)`);
+    }
+    if (p === '/') break;
+  }
   mine(root);
   checkStackPath(`${stack}/lab-XXXXXX`, root, tmp, real);
   if (`${stack}/lab-XXXXXX`.length > SOCKET_MAX) fail(`putanja servera ${root} je predug za utičnicu PostgreSQL-a`);

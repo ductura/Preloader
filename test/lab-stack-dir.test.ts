@@ -5,7 +5,7 @@ import { afterAll, test } from 'vitest';
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { checkStackPath, makeRunDir } from '../scripts/lab/stack-dir.ts';
 
@@ -18,7 +18,12 @@ function fixture(name = 'server') {
   const at = join(base, String((n += 1)));
   const [root, tmp, outside] = [join(at, name), join(at, 't'), join(at, 'outside')];
   for (const d of [root, tmp, outside]) (mkdirSync(d, { recursive: true }), chmodSync(d, 0o755));
-  const make = (dir = root, uid?: number) => makeRunDir(dir, { tmp, ...(uid === undefined ? {} : { uid }) });
+  chmodSync(at, 0o755);
+  /** `foreign` is seen as another user's (injected, as the tests may run as root). */
+  const make = (dir = root, foreign?: string) => makeRunDir(dir, { tmp, lstat: (p) => {
+    const st = lstatSync(p);
+    return p === foreign ? Object.assign(Object.create(Object.getPrototypeOf(st) as object) as typeof st, st, { uid: 54321 }) : st;
+  } });
   return { root, tmp, outside, make };
 }
 
@@ -73,6 +78,7 @@ test('an unsafe, too long, missing or non-directory server checkout is refused b
   const f = fixture();
   assert.throws(() => f.make(join(f.root, 'missing')), /ENOENT/);
   writeFileSync(join(f.root, 'file'), '');
+  chmodSync(join(f.root, 'file'), 0o644); // only isDirectory refuses it, whatever the umask
   assert.throws(() => f.make(join(f.root, 'file')), /server .* mora biti direktorij ovog korisnika/);
 });
 
@@ -83,8 +89,22 @@ test('a server checkout of another user or writable by others is refused before 
     assert.throws(() => f.make(), /server .* mora biti direktorij ovog korisnika u koji drugi ne pišu.*chmod go-w/);
     assert.equal(existsSync(join(f.root, '.stack')), false);
   }
-  const f = fixture(); // uid is injected: the tests may run as root
-  assert.throws(() => f.make(f.root, (process.getuid?.() ?? 0) + 12345), /server .* mora biti direktorij ovog korisnika/);
+  const f = fixture();
+  assert.throws(() => f.make(f.root, f.root), /server .* mora biti direktorij ovog korisnika/);
+  assert.equal(existsSync(join(f.root, '.stack')), false);
+});
+
+test('a checkout under an ancestor of another user, or one others may write into unless sticky, is refused', () => {
+  for (const [mode, ok] of [[0o777, false], [0o775, false], [0o757, false], [0o1777, true]] as const) {
+    const f = fixture('a/server'); // the grandparent is checked too
+    chmodSync(dirname(f.root), 0o755);
+    chmodSync(dirname(dirname(f.root)), mode);
+    if (ok) assert.match(f.make().path, /\/\.stack\/lab-\w{6}$/);
+    else assert.throws(() => f.make(), /predak .* mora biti direktorij roota ili ovog korisnika/, mode.toString(8));
+    assert.equal(existsSync(join(f.root, '.stack')), ok);
+  }
+  const f = fixture();
+  assert.throws(() => f.make(f.root, dirname(f.root)), /predak .* mora biti/);
   assert.equal(existsSync(join(f.root, '.stack')), false);
 });
 
@@ -95,12 +115,14 @@ test('.stack that is a file, a link or writable by others is refused before mkdt
     ['link into tmp', (s, r) => (mkdirSync(join(r, '..', 't', 'x')), symlinkSync(join(r, '..', 't', 'x'), s)), /\.stack mora biti direktorij/],
     ['mode 777', (s) => (mkdirSync(s), chmodSync(s, 0o777)), /\.stack mora biti direktorij ovog korisnika u koji drugi ne pišu/],
     ['mode 720', (s) => (mkdirSync(s), chmodSync(s, 0o720)), /\.stack mora biti direktorij ovog korisnika u koji drugi ne pišu/],
+    ['mode 702', (s) => (mkdirSync(s), chmodSync(s, 0o702)), /\.stack mora biti direktorij ovog korisnika u koji drugi ne pišu/],
+    ['another user, 755', (s) => (mkdirSync(s), chmodSync(s, 0o755)), /\.stack mora biti direktorij ovog korisnika/],
   ];
   for (const [what, make, expected] of cases) {
     const f = fixture();
     const stack = join(f.root, '.stack');
     make(stack, f.root);
-    assert.throws(() => f.make(), expected, what);
+    assert.throws(() => f.make(f.root, what === 'another user, 755' ? stack : undefined), expected, what);
     if (lstatSync(stack).isDirectory()) assert.deepEqual(readdirSync(stack), [], what);
     if (what === 'link into tmp') assert.deepEqual(readdirSync(join(f.tmp, 'x')), []);
   }
@@ -108,7 +130,8 @@ test('.stack that is a file, a link or writable by others is refused before mkdt
 
 test('each run gets its own 0700 directory under <server>/.stack/lab-, never in os.tmpdir()', () => {
   const f = fixture();
-  mkdirSync(join(f.root, '.stack'), { mode: 0o755 }); // the server's own .stack is taken as it is
+  mkdirSync(join(f.root, '.stack'));
+  chmodSync(join(f.root, '.stack'), 0o755); // the server's own .stack is taken as it is
   const old = process.env['TMPDIR'];
   process.env['TMPDIR'] = f.tmp;
   try {
@@ -121,6 +144,8 @@ test('each run gets its own 0700 directory under <server>/.stack/lab-, never in 
     assert.deepEqual(readdirSync(f.tmp), []);
     // The default temp root is the server's fixed /tmp, not TMPDIR (now elsewhere).
     assert.equal(checkStackPath('/tmp/lab-none/stack', f.root), '/tmp/lab-none/stack');
+    process.env['TMPDIR'] = 'rel dir'; // a TMPDIR the check would refuse: makeRunDir does not read it
+    assert.match(makeRunDir(f.root).path, /\/\.stack\/lab-\w{6}$/);
   } finally {
     if (old === undefined) delete process.env['TMPDIR'];
     else process.env['TMPDIR'] = old;
