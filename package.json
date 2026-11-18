@@ -13,7 +13,8 @@
     "test": "vitest run",
     "build": "node scripts/build.ts",
     "budget": "node scripts/budget.ts dist budget.json",
-    "e2e": "node scripts/build.ts && playwright test -c e2e/matrix/playwright.config.ts"
+    "e2e": "node scripts/build.ts && playwright test -c e2e/matrix/playwright.config.ts",
+    "lab:oporavak": "node scripts/lab/oporavak.ts"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
