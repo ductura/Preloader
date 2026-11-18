@@ -218,7 +218,7 @@ function check(receipt: unknown, trust: ReceiptTrust, expected: ReceiptExpectati
 export function registryRow(output: string): Omit<ReceiptTrust, 'keyBase64Url'> | null {
   if (typeof output !== 'string') return null;
   const line = output.endsWith('\n') ? output.slice(0, -1) : output;
-  const fields = line.split('|');
+  const fields = line.split('|', 5);
   // A second row (a second active key) adds fields or a newline the field rules refuse.
   if (fields.length !== 4 || fields[3] !== 't') return null;
   const row = { keyId: fields[0]!, keyVersion: fields[1]!, evidenceDomainId: fields[2]! };

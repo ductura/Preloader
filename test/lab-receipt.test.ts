@@ -286,11 +286,13 @@ const fields = payloadSchema.properties!;
 const COMPARED = new Set(['receiptSchema', 'evidenceDomainId', ...Object.keys(expected)]);
 const LONE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 const maxLength = (k: string) => (fields[k]!['maxLength'] ?? fields[k]!.anyOf?.find((a) => a['maxLength'])?.['maxLength']) as number | undefined;
+// A valid string for each field, also for the two the server's vector leaves null (QA attacker on f558da5).
+const sample = (k: string) => (typeof p[k] === 'string' ? p[k] : ({ predecessorSegmentHash: 'ab'.repeat(32), previousReceiptId: 'r-0' } as Record<string, string>)[k]);
 /** A valid value with one character inserted, replaced or deleted. */
 const oneChange = (v: string) => fc.tuple(fc.nat({ max: v.length }), fc.constantFrom('A', 'F', ':', '\n', '\u00a0', ' ', '0', '\u0301', '\u0085'), fc.nat({ max: 2 }))
   .map(([i, c, op]) => (op === 0 ? v.slice(0, i) + c + v.slice(i) : op === 1 ? v.slice(0, i) + c + v.slice(i + 1) : v.slice(0, i) + v.slice(i + 1)));
 const valueFor = (k: string) => {
-  const good = p[k];
+  const good = sample(k) ?? p[k];
   const m = maxLength(k);
   return fc.oneof(fc.constant(good), typeof good === 'string' ? oneChange(good) : fc.integer({ min: -2, max: 9 }), text.filter((t) => t.length <= 100),
     fc.integer(), fc.double({ noNaN: true, noDefaultInfinity: true }), fc.constantFrom(null, true, false, 0, -1, 2 ** 53, NaN, Infinity, -Infinity),
@@ -323,21 +325,24 @@ test('the payload rules refuse exactly what the contract refuses, field by field
 });
 
 // Every valid string field, changed at its edges: anchors, case and separators, not left to chance.
-test.each(Object.keys(p).filter((k) => typeof p[k] === 'string'))('the payload rule of %s agrees with the contract at its edges', (k) => {
-  const good = p[k] as string;
+test.each(Object.keys(p).filter((k) => sample(k) !== undefined))('the payload rule of %s agrees with the contract at its edges', (k) => {
+  const good = sample(k)!;
   for (const v of [`${good}0`, `0${good}`, `x${good}`, `${good}\n`, ` ${good}`, `${good}\u00a0`, good.slice(1), good.slice(0, -1),
-    good.toUpperCase(), good.replace(/[0-9]/u, ':'), good.replace(/-/u, '_')]) agrees(k, v);
-  // Every position with 0, 1 or f in its place: version and variant digits, seconds, hex case.
-  for (let i = 0; i < good.length; i += 1) for (const c of ['0', '1', 'f']) if (good[i] !== c) agrees(k, good.slice(0, i) + c + good.slice(i + 1));
+    good.toUpperCase(), good.replace(/[0-9]/u, ':'), good.replace(/-/u, '_'), `\n${good}`, `\u3000${good}`, `${good}\u1680`,
+    ...['\u0000', '\u0001', '\u001e', '\u001f', '\u009e', '\u009f'].map((c) => `${good}${c}`)]) agrees(k, v);
+  // Every position with each hex digit, A or : in its place: version and variant digits, seconds, hex case.
+  for (let i = 0; i < good.length; i += 1) for (const c of '0123456789abcdefA:') if (good[i] !== c) agrees(k, good.slice(0, i) + c + good.slice(i + 1));
 });
 
 // Verbatim from 20d0f0d: values the contract refuses are refused, and accepted ones not refused where not compared.
 const BAD: unknown[] = [null, 0, -1, -0, 1.5, 2 ** 53, true, '', ' ', '\u00a0', '\t', '\r\n', '\u2028', '\u007f', 'x'.repeat(257),
   '1', {}, [], ['r-1'], JSON.parse('{"toString":null}'), JSON.parse('{"__proto__":{"a":1}}'), 'tx\r\n', 'tx\t', 'tx\u007f', 'tx\u0085'];
+// Added: whitespace that /\S/u and the schema both refuse alone, and a line break before text.
+const SPACE: unknown[] = ['\u3000', '\u1680', '\u2029', '\ufeff', '\nx', '\u2028x', '\u2029x', '\u0000x'];
 const GOOD: unknown[] = ['r-0', 'a b', 'x'.repeat(120), 'a'.repeat(64), 1, 2, Number.MAX_SAFE_INTEGER, null,
   'ductus-evidence-segment-v3', '2026-10-03T06:05:00.000Z', '6f1c2b7e-0d4a-4c3b-9a8e-1b2c3d4e5f60'];
 test('every payload value of the 20d0f0d tables agrees with the contract', () => {
-  for (const k of Object.keys(p)) for (const v of [...BAD, ...GOOD]) agrees(k, v);
+  for (const k of Object.keys(p)) for (const v of [...BAD, ...GOOD, ...SPACE]) agrees(k, v);
 });
 
 test('a contract field the schema refuses is refused: receiptId null is the control', () => {
@@ -375,7 +380,8 @@ test.each([
   ROW.replace('0011', '00 11'), ROW.replace('0011', '00\u007f11'), ROW.replace('0011', '00\u00a011'), ROW.replace('0011', '00\u202811'),
   ROW.replace('0011', '0011\u0301'), ROW.replace('0011', '0011\u{1F600}'), ROW.replace('0011', '0011\ud800'),
   ROW.replace('dev-ed25519-0011', 'k'.repeat(2049)), ROW.replace('spki-sha256-00ff', 'v'.repeat(257)), ROW.replace('42e5', '12e5'),
-  ROW.replace('d21fe0a3', 'D21FE0A3'),
+  ROW.replace('d21fe0a3', 'D21FE0A3'), ROW.replace('spki-sha256-00ff', ''), ROW.replace('|spki', '| spki'), ROW.replace('5|t', '5 |t'),
+  ROW.replace('0011|', '0011 |'), ` ${ROW}`,
 ])('registryRow refuses %j', (output) => {
   assert.equal(registryRow(output), null);
 });
