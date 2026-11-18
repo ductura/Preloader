@@ -127,7 +127,8 @@ const FIELDS: [string, (o: Observed, v: unknown) => Observed, string][] = [
   ['second open body', (o, v) => ({ ...o, secondOpen: { status: 200, body: v as Record<string, unknown> } }), 'L-4'],
   ['healthBetween', (o, v) => ({ ...o, healthBetween: v as 'refused' }), 'L-2'],
 ];
-const meta = { preloaderSha: 'a'.repeat(40), serverSha: null, serverDirty: null, startedAt: 't0', finishedAt: 't1', error: null };
+// Both SHAs are named, so a FAIL below comes from the claim, not from the meta.
+const meta = { preloaderSha: 'a'.repeat(40), serverSha: 'b'.repeat(40), serverDirty: false, startedAt: 't0', finishedAt: 't1', error: null };
 
 for (const [field, set, id] of FIELDS) {
   test(`a bad ${field} fails ${id} and still gives a FAIL report`, () => {
@@ -167,7 +168,8 @@ test('a set LAB_PRELOADER_SHA that is empty, blank or not exactly HEAD fails the
   for (const claimed of [...blank, ...other]) {
     const got = preloaderSha(`${head}\n`, claimed);
     assert.equal(got.sha, head, JSON.stringify(claimed));
-    assert.match(got.error ?? '', blank.includes(claimed) ? /^LAB_PRELOADER_SHA je zadan, a prazan$/ : /nije izvršeni HEAD/, JSON.stringify(claimed));
+    if (blank.includes(claimed)) assert.equal(got.error, 'LAB_PRELOADER_SHA je zadan, a prazan', JSON.stringify(claimed));
+    else assert.match(got.error ?? '', new RegExp(`^LAB_PRELOADER_SHA "[\\x20-\\x7e]+" nije izvršeni HEAD ${head}$`), JSON.stringify(claimed));
     assert.equal(report(good(), { ...meta, error: got.error }).result, 'FAIL', JSON.stringify(claimed));
   }
   // The odd characters show in the message, not just as a blank.
@@ -197,9 +199,19 @@ test('a blank documentId in both opens fails L-3 only', () => {
 
 test('a blank sentence fails L-5 only', () => {
   for (const sentence of BLANK) {
-    assert.deepEqual(failing({ ...good(), sentence }), ['L-5'], JSON.stringify(sentence));
-    assert.equal(claims({ ...good(), sentence })[4]!.detail, 'rečenica je prazna');
+    // The run's document carries the blank sentence, so only its emptiness can fail L-5.
+    const own = Buffer.from(JSON.stringify({ text: sentence }), 'utf8');
+    const o = { ...good(), sentence, sent: own };
+    const run = { ...o, secondOpen: open({ ...o.secondOpen!.body, document: own.toString('base64'), documentHash: sha256Hex(own) }) };
+    assert.deepEqual(failing(run), ['L-5'], JSON.stringify(sentence));
+    assert.equal(claims(run)[4]!.detail, 'rečenica je prazna');
   }
+});
+
+test('an empty document sent and reopened fails L-5 and L-6', () => {
+  const none = new Uint8Array(0);
+  const o = { ...good(), sent: none };
+  assert.deepEqual(failing({ ...o, secondOpen: open({ ...o.secondOpen!.body, document: '', documentHash: sha256Hex(none) }) }), ['L-5', 'L-6']);
 });
 
 // The receipt check is the run's code: whatever it throws or returns, L-1
@@ -210,7 +222,11 @@ const CHECKS: [string, ReceiptCheck, RegExp][] = [
   ['throws a string', () => { throw 'tekst'; }, /provjera potvrde: tekst/],
   ['throws null', () => { throw null; }, /provjera potvrde: -/],
   ['throws an object whose message getter throws', () => { throw odd; }, /provjera potvrde: \[objekt\]/],
-  ...([[undefined, 'undefined'], ['', "''"], [' ', "' '"], ['\u00a0', 'NBSP'], [0, '0'], [false, 'false'], [{}, '{}']] as const).map(
+  ['throws an Error whose message getter throws', () => { throw Object.defineProperty(new Error('x'), 'message', { get() { throw new Error('getter'); } }); }, /provjera potvrde: -$/],
+  ['throws a revoked Proxy', () => { const p = Proxy.revocable({}, {}); p.revoke(); throw p.proxy; }, /provjera potvrde: -$/],
+  ['is not a function', 'nije funkcija' as unknown as ReceiptCheck, /provjera potvrde: /],
+  ...([[undefined, 'undefined'], ['', "''"], [' ', "' '"], ['\u00a0', 'NBSP'], [0, '0'], [false, 'false'], [{}, '{}'], [Symbol('s'), 'Symbol'], [Object.create(null), 'Object.create(null)'],
+    [{ toString() { throw new Error('toString'); } }, 'an object whose toString throws']] as const).map(
     ([v, name]): [string, ReceiptCheck, RegExp] => [`returns ${name}`, () => v as unknown as string, /provjera potvrde nije dala razlog/]),
 ];
 for (const [name, bad, why] of CHECKS) {
@@ -242,4 +258,8 @@ test('the fallback report reads nothing that can throw', () => {
   Object.defineProperty(o, 'sentence', { get(): string { throw new Error('rečenica'); } });
   const file = JSON.parse(reportText(o, meta)) as { result: string; sentence: string; claims: unknown[] };
   assert.deepEqual([file.result, file.sentence, file.claims.length], ['FAIL', '-', 6]);
+  // Not even meta can be read: still a FAIL report with six failed claims.
+  const hostile = Object.defineProperty({ ...meta }, 'error', { enumerable: true, get(): string { throw new Error('meta'); } });
+  const last = JSON.parse(reportText(o, hostile)) as { result: string; error: string; claims: { pass: boolean }[] };
+  assert.deepEqual([last.result, last.error, last.claims.length, last.claims.some((c) => c.pass)], ['FAIL', 'izvještaj se ne može složiti', 6, false]);
 });

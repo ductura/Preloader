@@ -88,8 +88,8 @@ function reopened(o: Observed): Buffer | null {
   const doc = own(okBody(o.secondOpen), 'document');
   if (typeof doc !== 'string') return null;
   const bytes = Buffer.from(doc, 'base64');
-  // Node skips stray characters; only one spelling of the bytes counts.
-  return bytes.toString('base64') === doc ? bytes : null;
+  // Node skips stray characters; only one spelling of the bytes counts, and no bytes are no document.
+  return bytes.byteLength > 0 && bytes.toString('base64') === doc ? bytes : null;
 }
 
 export function claims(o: Observed): Claim[] {
@@ -209,6 +209,12 @@ export function reportText(o: Observed, meta: Meta): string {
       sentence, sent: null, firstOpen: null, commit: null, receipt: null,
       healthBetween: null, pidBefore: null, pidAfter: null, secondOpen: null,
     };
-    return `${JSON.stringify(report(empty, { ...meta, error: meta.error === null ? why : `${meta.error}; ${why}` }), null, 2)}\n`;
+    try {
+      return `${JSON.stringify(report(empty, { ...meta, error: meta.error === null ? why : `${meta.error}; ${why}` }), null, 2)}\n`;
+    } catch {
+      // Not even meta can be read: a FAIL with no claim passed, naming nothing it cannot read.
+      const none = ['L-1', 'L-2', 'L-3', 'L-4', 'L-5', 'L-6'].map((id) => claim(id, false, 'izvještaj se ne može složiti'));
+      return `${JSON.stringify({ schema: 'ductura.lab.oporavak/1', ticket: 'DAN-1096', result: 'FAIL', error: 'izvještaj se ne može složiti', claims: none }, null, 2)}\n`;
+    }
   }
 }
