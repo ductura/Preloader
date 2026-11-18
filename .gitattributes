@@ -4,3 +4,5 @@ scripts/dependabot/dependabot-2.0.json text eol=lf
 # DAN-1097-2: the vendored fonts are pinned by sha256 (test/e2e-image.test.ts).
 e2e/fonts/*.ttf binary
 e2e/fonts/SHA256SUMS text eol=lf
+# Upstream license text, kept byte for byte (trailing spaces included).
+e2e/fonts/LICENSE -whitespace

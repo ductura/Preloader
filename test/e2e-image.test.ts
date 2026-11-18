@@ -126,9 +126,12 @@ function problems(ciText: string, lockText: string, pkgText: string): string[] {
   return out;
 }
 
-const CI = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
-const LOCK = readFileSync(new URL('../pnpm-lock.yaml', import.meta.url), 'utf8');
-const PKG = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+// Read as LF: a Windows checkout (core.autocrlf=true) has CRLF, and the
+// fixtures below edit the text by LF lines. The CRLF case is tested below.
+const lf = (path: string): string => readFileSync(new URL(path, import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+const CI = lf('../.github/workflows/ci.yml');
+const LOCK = lf('../pnpm-lock.yaml');
+const PKG = lf('../package.json');
 const IMAGE = `mcr.microsoft.com/playwright:v1.63.0-noble@sha256:${DIGEST}`;
 const swap = (text: string, from: string, to: string): string => {
   assert.ok(text.includes(from), `fixture has ${JSON.stringify(from)}`);
@@ -231,6 +234,12 @@ test('e2e image check refuses: tag and lockfile on 1.64.0 with the 1.63.0 digest
 
 test('ci.yml, the lockfile and package.json pass the e2e image check', () => {
   assert.deepEqual(problems(CI, LOCK, PKG), []);
+});
+
+test('the e2e image check gives the same result with CRLF line ends', () => {
+  const crlf = (t: string): string => t.replaceAll('\n', '\r\n');
+  assert.deepEqual(problems(crlf(CI), crlf(LOCK), crlf(PKG)), []);
+  assert.match(problems(crlf(img('mcr.microsoft.com/playwright:v1.63.0-noble')), crlf(LOCK), crlf(PKG)).join('\n'), /not a pinned/);
 });
 
 const fontDir = new URL('../e2e/fonts/', import.meta.url);
