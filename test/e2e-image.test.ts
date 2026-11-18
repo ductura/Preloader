@@ -58,7 +58,10 @@ const STEPS: Obj[] = [
     with: { name: 'e2e-matrix-report', path: 'playwright-report/', 'retention-days': 7 },
   },
 ];
-const FORBIDDEN = /(?<![\w-])(?:apt|apt-get|aptitude|dpkg)(?![\w-])|playwright\S*\s+install/;
+const FORBIDDEN = /(?<![\w-])(?:apt|apt-get|aptitude|dpkg|dpkg-deb)(?![\w-])|playwright\S*\s+install/;
+// pnpm runs these around install and e2e on its own; `e2e` itself is pinned.
+const LIFECYCLE = /^(?:pre|post)(?:install|e2e)$|^(?:install|prepare|prepublish)$/;
+const E2E_SCRIPT = 'node scripts/build.ts && playwright test -c e2e/matrix/playwright.config.ts';
 // Shell text without quotes, backslashes and line continuations, so that
 // `ap''t-get`, `playwright "install"` and `playwright \<newline>install` are caught.
 const installs = (s: unknown): boolean =>
@@ -102,7 +105,9 @@ function problems(ciText: string, lockText: string, pkgText: string): string[] {
   }
   for (const [name, s] of Object.entries(isMap(scripts) ? scripts : {})) {
     if (installs(s)) out.push(`package.json script ${name} installs packages or browsers`);
+    if (LIFECYCLE.test(name)) out.push(`package.json has lifecycle script ${name}`);
   }
+  if (own(scripts, 'e2e') !== E2E_SCRIPT) out.push('package.json e2e script changed');
   const job = own(jobs, 'e2e-matrix');
   if (!isMap(job)) return [...out, 'no e2e-matrix job'];
   if (!isDeepStrictEqual(Object.keys(job).sort(), ['container', 'runs-on', 'steps', 'timeout-minutes'])) {
@@ -144,7 +149,8 @@ const ciCases: [string, string, RegExp][] = [
   ['dpkg -i', before('      - run: dpkg -i x.deb\n'), /installs/],
   ['setup-node is back', before('      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1\n'), /allowed steps/],
   ['pnpm dlx playwright install', before('      - run: pnpm dlx playwright install\n'), /installs/],
-  ['harmless extra step', before('      - run: echo Adapt\n'), /allowed steps/],
+  ['harmless extra step', before('      - run: echo Adapt\n'), /^e2e-matrix steps are not the allowed steps$/],
+  ['dpkg-deb', before('      - run: dpkg-deb -x x.deb /\n'), /installs/],
   ['|| true on the font check', swap(CI, FONT_TEST, `${FONT_TEST} || true`), /allowed steps/],
   ['continue-on-error on e2e', swap(CI, E2E, `${E2E}        continue-on-error: true\n`), /allowed steps/],
   ['continue-on-error on the font step', swap(CI, '        shell: bash\n', '        shell: bash\n        continue-on-error: true\n'), /allowed steps/],
@@ -209,6 +215,8 @@ const otherCases: [string, string, string, RegExp][] = [
   ['pree2e installs browsers', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "pree2e": "playwright install",'), /script pree2e installs/],
   ['pree2e with a line continuation', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "pree2e": "playwright \\\\\\ninstall",'), /script pree2e installs/],
   ['postinstall runs apt', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "postinstall": "apt-get update",'), /script postinstall installs/],
+  ['prepare script', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "prepare": "node x.js",'), /lifecycle script prepare/],
+  ['e2e script changed', LOCK, swap(PKG, '"e2e": "node scripts/build.ts && ', '"e2e": "node scripts/build.ts && playwright ins$()tall && '), /e2e script changed/],
 ];
 for (const [name, lock, pkg, reason] of otherCases) {
   test(`e2e image check refuses: ${name}`, () => {
