@@ -93,6 +93,15 @@ test('.stack that is a file, a link inside the checkout or writable by others is
   }
 });
 
+test('a server checkout writable by others is refused before .stack is made', async () => {
+  for (const mode of [0o775, 0o757]) {
+    const f = fixture();
+    chmodSync(f.root, mode);
+    await assert.rejects(f.run(async (s) => s.up()), /server.* mora biti direktorij ovog korisnika u koji drugi ne pišu/);
+    assert.deepEqual([f.calls, existsSync(join(f.root, '.stack'))], [[], false]);
+  }
+});
+
 test('a run directory found outside right after mkdtemp is removed and nothing runs', async () => {
   const f = fixture();
   const real = (p: string) => (/\/\.stack\/lab-(?!XXXXXX)/.test(p) ? join(f.outside, 'x') : realpathSync(p));
@@ -103,6 +112,10 @@ test('a run directory found outside right after mkdtemp is removed and nothing r
   const racing = (p: string) => (/\/\.stack\/lab-(?!XXXXXX)/.test(p) ? (writeFileSync(join(p, 'f'), ''), join(g.outside, 'x')) : realpathSync(p));
   await assert.rejects(g.run(async () => 'x', g.command, g.root, racing), /vodi izvan/);
   assert.match(g.calls.join(), /^warn rmdir .*\/\.stack\/lab-\w{6}: ENOTEMPTY/);
+  const h = fixture();
+  const angry = (m: string) => { throw new Error(`warn ${m}`); };
+  const racingH = (p: string) => (/\/\.stack\/lab-(?!XXXXXX)/.test(p) ? (writeFileSync(join(p, 'f'), ''), join(h.outside, 'x')) : realpathSync(p));
+  await assert.rejects(withStack(h.root, h.command, async () => 'x', { tmp: h.tmp, real: racingH, warn: angry }), /vodi izvan/);
 });
 
 test('our directory replaced after up (other real directory, link, deleted): down is never called', async () => {
@@ -141,8 +154,34 @@ test('an up still running when the run fails is awaited and downed; after the ru
   release();
   await assert.rejects(run, /^Error: health failed$/);
   assert.deepEqual(f.calls, [`up ${kept?.dir}`, `down ${kept?.dir}`]);
-  await assert.rejects(kept!.up(), /pokretanje je završilo/);
+  await assert.rejects(kept!.up(), /pokretanje se zatvara/);
   assert.equal(f.calls.length, 2);
+});
+
+test('commands run one at a time; once the body settles new commands are refused and the cleanup waits', async () => {
+  const f = fixture();
+  let release!: () => void;
+  let downs = 0;
+  const slow: StackCommand = async (cmd) => {
+    f.calls.push(`start ${cmd}`);
+    if (cmd === 'down') {
+      downs += 1;
+      await new Promise<void>((r) => (release = r));
+      if (downs === 1) throw new Error('port still answers');
+    }
+    f.calls.push(`end ${cmd}`);
+  };
+  let kept!: Stack;
+  const run = f.run(async (s) => { kept = s; await s.up(); void s.down().catch(() => undefined); throw new Error('health failed'); }, slow);
+  await new Promise((r) => setImmediate(r));
+  await assert.rejects(kept.up(), /pokretanje se zatvara/);
+  release(); // the body's down fails; only then does the cleanup try down again
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(f.calls, ['start up', 'end up', 'start down', 'start down']);
+  release();
+  await assert.rejects(run, /^Error: health failed$/);
+  assert.deepEqual(f.calls, ['start up', 'end up', 'start down', 'start down', 'end down']);
+  await assert.rejects(kept.down(), /pokretanje se zatvara/);
 });
 
 test('a failed up never leads to down, and its error stands', async () => {
@@ -151,6 +190,9 @@ test('a failed up never leads to down, and its error stands', async () => {
   await assert.rejects(f.run(async (s) => s.up(), failing), /port 54360/);
   assert.equal(f.calls.length, 1);
   assert.match(f.calls[0] ?? '', /^up /);
+  // A down with no up of ours (also one that failed) is refused and never reaches the command.
+  await assert.rejects(f.run(async (s) => { await s.up().catch(() => undefined); await s.down(); }, failing), /nije podiglo ovo pokretanje/);
+  assert.equal(f.calls.length, 2);
 });
 
 test('the error of the run wins over a failed down, which is reported; down alone fails the run', async () => {
@@ -159,6 +201,8 @@ test('the error of the run wins over a failed down, which is reported; down alon
   const thrown = new Error('commit pao');
   await assert.rejects(f.run(async (s) => { await s.up(); throw thrown; }, downFails), (e) => e === thrown);
   assert.equal(f.calls.at(-1), 'warn down: port still answers');
+  const angry = (m: string) => { throw new Error(`warn ${m}`); };
+  await assert.rejects(withStack(f.root, downFails, async (s) => { await s.up(); throw thrown; }, { tmp: f.tmp, warn: angry }), (e) => e === thrown);
   await assert.rejects(f.run(async (s) => s.up(), downFails), /^Error: down: port still answers$/);
 });
 

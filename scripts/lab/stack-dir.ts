@@ -63,11 +63,16 @@ function newRunDir(root: string, tmp: string, real: Real, warn: (message: string
   const stack = `${root}/.stack`;
   checkStackPath(`${stack}/lab-XXXXXX`, root, tmp, real);
   if (`${stack}/lab-XXXXXX`.length > SOCKET_MAX) fail(`putanja servera ${root} je predug za utičnicu PostgreSQL-a`);
+  // Others who may write into the checkout or .stack could swap .stack between the check and mkdtemp.
+  const mine = (path: string): void => {
+    const st = lstatSync(path);
+    if (!st.isDirectory() || st.uid !== process.getuid?.() || (st.mode & 0o022) !== 0) {
+      fail(`${path === root ? `server ${path}` : path} mora biti direktorij ovog korisnika u koji drugi ne pišu, ne poveznica`);
+    }
+  };
+  mine(root);
   try { mkdirSync(stack, { mode: 0o700 }); } catch (e) { if (code(e) !== 'EEXIST') throw e; }
-  const st = lstatSync(stack);
-  if (!st.isDirectory() || st.uid !== process.getuid?.() || (st.mode & 0o022) !== 0) {
-    fail(`${stack} mora biti direktorij ovog korisnika u koji drugi ne pišu, ne poveznica`);
-  }
+  mine(stack);
   const path = mkdtempSync(`${stack}/lab-`);
   const { dev, ino } = lstatSync(path), dir = { path, dev, ino };
   try {
@@ -87,34 +92,36 @@ function newRunDir(root: string, tmp: string, real: Real, warn: (message: string
  * Runs `body` with a stack in a directory of its own. The stack is ours only
  * after an `up` that succeeded; a failed `up` is never followed by `down`
  * (the server stops what it started, vs1.ts up). Before every command the
- * directory must still be ours. At the end our stack is downed; the error of
- * the run wins, and a failed `down` after it is reported through `warn`.
+ * directory must still be ours. Commands run one at a time; once the body
+ * settles no new command starts, what it started is awaited, and our stack is
+ * downed. The error of the run wins; a failed `down` after it goes to `warn`,
+ * which never replaces it.
  */
 export async function withStack<T>(serverDir: string, command: StackCommand, body: (stack: Stack) => Promise<T>, options: Options = {}): Promise<T> {
   const { tmp = '/tmp', real = realpathSync, warn = console.error } = options;
+  // A warning never replaces the error it accompanies.
+  const tell = (message: string): void => { try { warn(message); } catch { /* the error stands */ } };
   const root = real(serverDir);
-  const dir = newRunDir(root, tmp, real, warn);
+  const dir = newRunDir(root, tmp, real, tell);
   let owned = false;
-  let done = false;
-  let pending: Promise<unknown> = Promise.resolve();
-  const run = async (cmd: 'up' | 'down'): Promise<void> => {
-    if (done) fail('pokretanje je završilo; stog se više ne dira');
-    checkRun(dir, root, tmp, real);
-    await command(cmd, dir.path);
+  let closing = false;
+  // One command at a time, in call order; ownership is checked when a command's turn comes.
+  let queue: Promise<unknown> = Promise.resolve();
+  const exec = (cmd: 'up' | 'down'): Promise<void> => {
+    const step = queue.then(async () => {
+      if (cmd === 'down' && !owned) fail('stog nije podiglo ovo pokretanje; laboratorij ga ne gasi');
+      checkRun(dir, root, tmp, real);
+      await command(cmd, dir.path);
+      owned = cmd === 'up';
+    });
+    queue = step.catch(() => undefined);
+    return step;
   };
-  const stack: Stack = {
-    dir: dir.path,
-    up: async () => {
-      const up = run('up').then(() => void (owned = true));
-      pending = Promise.all([pending, up.catch(() => undefined)]); // an up still running is awaited at the end
-      await up;
-    },
-    down: async () => {
-      if (!owned) fail('stog nije podiglo ovo pokretanje; laboratorij ga ne gasi');
-      await run('down');
-      owned = false;
-    },
+  const open = (cmd: 'up' | 'down') => async (): Promise<void> => {
+    if (closing) fail('pokretanje se zatvara; stog se više ne dira');
+    await exec(cmd);
   };
+  const stack: Stack = { dir: dir.path, up: open('up'), down: open('down') };
   let failure: { error: unknown } | null = null;
   let result: T | undefined;
   try {
@@ -122,16 +129,16 @@ export async function withStack<T>(serverDir: string, command: StackCommand, bod
   } catch (e) {
     failure = { error: e };
   }
-  await pending;
+  closing = true; // what the body started is awaited, nothing new starts
+  await queue;
   if (owned) {
     try {
-      await stack.down();
+      await exec('down');
     } catch (e) {
       if (failure === null) failure = { error: new Error(`down: ${reason(e)}`) };
-      else warn(`down: ${reason(e)}`);
+      else tell(`down: ${reason(e)}`);
     }
   }
-  done = true;
   if (failure !== null) throw failure.error;
   return result as T;
 }
