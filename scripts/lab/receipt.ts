@@ -111,7 +111,8 @@ export function registryRow(output: string): Omit<ReceiptTrust, 'keyBase64Url'> 
   return UUID_V4.test(evidenceDomainId) && seedKey === 't' ? { keyId, keyVersion, evidenceDomainId } : null;
 }
 
-const filled = (v: unknown) => str(v) && v.length > 0;
+// Not blank: a label the signature repeats must still name something.
+const filled = (v: unknown) => str(v) && /\S/u.test(v);
 const TRUST: Record<keyof ReceiptTrust, Rule> = { keyBase64Url: filled, keyId: filled, keyVersion: filled, evidenceDomainId: filled };
 const EXPECTED: Record<keyof ReceiptExpectation, Rule> = {
   documentId: filled, clientTransactionId: filled, revision: positive, principalId: filled, segmentHash: filled,

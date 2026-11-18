@@ -6,7 +6,6 @@ import { createHash } from 'node:crypto';
 import { isDeepStrictEqual, types } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 /** The one source the copy may come from. */
 export const SOURCE_PATH = 'server/domain/forensics/golden-vectors/evidence-v2.json';
@@ -15,8 +14,9 @@ type Obj = Record<string, unknown>;
 const SHA = /^[0-9a-f]{40}$/;
 const FIXTURE = ['source', 'verificationKey', 'accepted'];
 const SOURCE = ['repository', 'commit', 'path', 'blob', 'take'];
+const TAKE = ['chain.verificationKey', 'receiptV2.accepted[0]'];
 
-/** A plain JSON object holding exactly `keys` as its own enumerable data properties; no getter, no Proxy. */
+/** An object holding exactly `keys` as its own enumerable data properties; no getter, no Proxy. Only own properties are read. */
 function exact(value: unknown, keys: readonly string[]): value is Obj {
   if (typeof value !== 'object' || value === null || types.isProxy(value) || Array.isArray(value)) return false;
   const own = Reflect.ownKeys(value);
@@ -49,6 +49,7 @@ function problem(source: Buffer, fixture: unknown, serverSha: unknown): string |
   const from = fixture['source'] as Obj;
   if (from['repository'] !== 'ductura/server') return 'kopija nije iz ductura/server';
   if (from['path'] !== SOURCE_PATH) return `kopija nije iz ${SOURCE_PATH}`;
+  if (!isDeepStrictEqual(from['take'], TAKE)) return 'kopija ne navodi što je preuzeto';
   const blob = createHash('sha1').update(`blob ${source.byteLength}\0`).update(source).digest('hex');
   if (from['blob'] !== blob) return `izvor nije blob ${String(from['blob'])}`;
   if (typeof from['commit'] !== 'string' || !SHA.test(from['commit'])) return 'kopija ne navodi puni SHA commita';
@@ -76,7 +77,8 @@ function main(args: string[], serverSha: unknown): string | null {
   return vendoredProblem(readFileSync(join(server, SOURCE_PATH)), JSON.parse(readFileSync(file, 'utf8')), serverSha);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// import.meta.main also holds when the script is run through a link (argv[1] is the link, the URL the real path).
+if (import.meta.main) {
   let problem: string | null;
   try {
     problem = main(process.argv.slice(2), process.env['SERVER_SHA']);

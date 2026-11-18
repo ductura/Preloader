@@ -7,14 +7,15 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import openapi from '@ductura/contracts/openapi/v1.json' with { type: 'json' };
 import { Ajv } from 'ajv';
 
 import { type ReceiptExpectation, type ReceiptTrust, checkReceipt, jcs, publicKeyFromSeed, registryRow } from '../scripts/lab/receipt.ts';
-import { vendoredProblem } from '../scripts/lab/vendored.ts';
+import { SOURCE_PATH, vendoredProblem } from '../scripts/lab/vendored.ts';
 
 type Golden = {
   verificationKey: { keyId: string; keyVersion: string; spkiDerHex: string; signingSeedSha256: string };
@@ -231,6 +232,12 @@ const neverThrows: [string, unknown, ReceiptTrust, unknown][] = [
   ['an expectation with an extra field', vector(), trust, { ...expected, extra: 'x' }],
   ['an empty trusted key id', vector(), { ...trust, keyId: '' }, expected],
   ['an empty trusted domain', vector(), { ...trust, evidenceDomainId: '' }, expected],
+  // QA self-check: the trust check alone must refuse an empty or blank label the signature repeats.
+  ...['', ' ', '\u00a0', '\t'].map((blank): [string, unknown, ReceiptTrust, unknown] => [
+    `a ${JSON.stringify(blank)} key label in both trust and signature`,
+    (() => { const r = vector(); r.signedReceipt.signature = { ...r.signedReceipt.signature, keyId: blank, keyVersion: blank }; return r; })(),
+    { ...trust, keyId: blank, keyVersion: blank }, expected]),
+  ['a blank expected document named by the receipt', signed({ ...clone(p), documentId: ' ' }), trust, { ...expected, documentId: ' ' }],
   ['a trust that is null', vector(), null as unknown as ReceiptTrust, expected],
   // Codex on f1401f9: a non-enumerable expectation was checked but never compared.
   ['a hidden wrong document in the expectation', vector(), trust, Object.defineProperty({ ...expected }, 'documentId', { value: 'wrong-document', enumerable: false })],
@@ -309,23 +316,46 @@ test('a malformed fixture or source gives a reason, never an exception', () => {
     const own = { ...vOwn, source: { ...vOwn.source, blob } };
     assert.doesNotThrow(() => vendoredProblem(src, own, SHA));
     assert.notEqual(vendoredProblem(src, own, SHA), null, doc);
+    const empty = { ...own, verificationKey: undefined, accepted: undefined };
+    assert.notEqual(vendoredProblem(src, empty, SHA), null, `${doc}: undefined = undefined`);
   }
+  assert.notEqual(vendoredProblem(vSource, { ...vOwn, source: { ...vOwn.source, take: 'anything' } }, SHA), null, 'take');
 });
 
-test('the vendored CLI fails with a message, not a stack trace', () => {
-  const cli = fileURLToPath(new URL('../scripts/lab/vendored.ts', import.meta.url));
-  const fixturePath = fileURLToPath(new URL('fixtures/receipt-v2-golden.json', import.meta.url));
-  const { SERVER_SHA: _s, ...env } = process.env;
-  const runs: [string[], Record<string, string>][] = [
-    [[cli, '.', fixturePath], {}],
-    [[cli, '.', fixturePath], { SERVER_SHA: ' ' }],
-    [[cli], { SERVER_SHA: SHA }],
-    [[cli, '.', 'nema-ove-datoteke.json'], { SERVER_SHA: SHA }],
-  ];
-  for (const [args, extra] of runs) {
-    const run = spawnSync(process.execPath, args, { cwd: tmpdir(), env: { ...env, ...extra }, encoding: 'utf8', timeout: 20_000 });
-    assert.equal(run.status, 1, `${args.length} ${JSON.stringify(extra)}`);
-    assert.match(run.stderr, /^Vendorirani vektor: /);
-    assert.doesNotMatch(run.stderr, /^\s+at /m);
+test('the vendored CLI checks SHA and arguments first and fails with one line, also through a link', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lab-vendored-'));
+  try {
+    const server = join(dir, 'server');
+    mkdirSync(join(server, dirname(SOURCE_PATH)), { recursive: true });
+    writeFileSync(join(server, SOURCE_PATH), vSource);
+    const fixturePath = join(dir, 'fixture.json');
+    writeFileSync(fixturePath, JSON.stringify(vOwn));
+    const real = fileURLToPath(new URL('../scripts/lab/vendored.ts', import.meta.url));
+    const link = join(dir, 'vendored.ts');
+    symlinkSync(real, link);
+    const { SERVER_SHA: _s, ...env } = process.env;
+    const runs: [string, string[], Record<string, string>, RegExp | null][] = [
+      [real, [server, fixturePath], { SERVER_SHA: SHA }, null],
+      [link, [server, fixturePath], { SERVER_SHA: SHA }, null],
+      [real, [server, fixturePath], {}, /^Vendorirani vektor: SERVER_SHA nije puni SHA commita\n$/],
+      [real, [server, fixturePath], { SERVER_SHA: ' ' }, /^Vendorirani vektor: SERVER_SHA nije puni SHA commita\n$/],
+      [real, [join(dir, 'nema'), join(dir, 'nema.json')], {}, /^Vendorirani vektor: SERVER_SHA nije puni SHA commita\n$/],
+      [link, [server, fixturePath], { SERVER_SHA: `${SHA}\n` }, /^Vendorirani vektor: SERVER_SHA nije puni SHA commita\n$/],
+      [real, [], { SERVER_SHA: SHA }, /^Vendorirani vektor: upotreba: /],
+      [real, [server], { SERVER_SHA: SHA }, /^Vendorirani vektor: upotreba: /],
+      [real, [server, fixturePath, 'višak'], { SERVER_SHA: SHA }, /^Vendorirani vektor: upotreba: /],
+      [real, [server, join(dir, 'nema.json')], { SERVER_SHA: SHA }, /^Vendorirani vektor: .*nema\.json/],
+      [real, [server, fixturePath], { SERVER_SHA: 'f'.repeat(40) }, /^Vendorirani vektor: kopija je iz /],
+    ];
+    for (const [cli, args, extra, message] of runs) {
+      const run = spawnSync(process.execPath, [cli, ...args], { cwd: dir, env: { ...env, ...extra }, encoding: 'utf8', timeout: 20_000 });
+      const name = `${cli === link ? 'link' : 'file'} ${args.length} ${JSON.stringify(extra)}`;
+      assert.equal(run.status, message === null ? 0 : 1, name);
+      if (message === null) assert.equal(run.stderr, '', name);
+      else assert.match(run.stderr, message, name);
+      assert.doesNotMatch(run.stderr, /^\s+at /m, name);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
