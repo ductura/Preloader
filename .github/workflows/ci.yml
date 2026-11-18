@@ -12,8 +12,9 @@ jobs:
   # P-0.11: matrica uređaja u tri motora (Chromium, Firefox, WebKit). Opera je ručna provjera.
   # DAN-1101: the job runs in the official Playwright image (tag index, pinned by
   # digest). The image brings the browsers and their system packages, so the job
-  # has no apt and no `playwright install`. Its tag is the @playwright/test version
-  # from package.json (test/e2e-image.test.ts). The image lacks DejaVu Sans, which
+  # has no apt and no `playwright install`. Its tag names the @playwright/test pin
+  # from package.json (test/e2e-image.test.ts); the digest is what Docker pulls, and
+  # a browser of another revision fails pnpm e2e. The image lacks DejaVu Sans, which
   # the DAN-1076 baselines were made with on ubuntu-24.04, so the runner's own two
   # DejaVu Sans files are mounted read-only and checked before the tests (a missing
   # host file becomes an empty directory and fails the sha256 check).
@@ -43,10 +44,11 @@ jobs:
           5c1247acef7f2b8522a31742c76d6adcb5569bacc0be7ceaa4dc39dd252ce895  DejaVuSans-Bold.ttf
           SUMS
           fc-cache -f
+          # The match must be the checked file itself, not just a face of that name.
           for q in sans-serif system-ui sans-serif:lang=hr; do
-            test "$(fc-match -f '%{family[0]}' "$q")" = 'DejaVu Sans'
+            test "$(fc-match -f '%{family[0]}|%{file}' "$q")" = "DejaVu Sans|$PWD/DejaVuSans.ttf"
           done
-          test "$(fc-match -f '%{family[0]}|%{style[0]}' sans-serif:bold)" = 'DejaVu Sans|Bold'
+          test "$(fc-match -f '%{family[0]}|%{style[0]}|%{file}' sans-serif:bold)" = "DejaVu Sans|Bold|$PWD/DejaVuSans-Bold.ttf"
       - run: pnpm e2e
         env:
           # Firefox as root refuses a HOME owned by another user (/github/home).

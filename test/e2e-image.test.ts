@@ -1,9 +1,11 @@
 // DAN-1101: e2e-matrix runs in the official Playwright image, whose browsers
-// belong to one Playwright version. The image tag must be the exact
-// @playwright/test version from package.json (pnpm install --frozen-lockfile
-// keeps the lockfile equal to it) and the image is pinned by digest. A
-// Playwright bump therefore fails here, in the node job, with a clear message,
-// instead of only as a missing browser in e2e-matrix.
+// belong to one Playwright version. This test only checks the text of the image
+// reference: its tag names the exact @playwright/test pin from package.json and
+// it carries a digest of the right shape. A plain Playwright bump in package.json
+// therefore fails here, in the node job, with a clear message. It does not check
+// that the digest belongs to the tag, nor the resolved playwright-core (e.g. an
+// override): Docker pulls by digest, and a browser of another revision fails
+// pnpm e2e in e2e-matrix, which is the real check.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -25,7 +27,7 @@ function imageProblems(image: unknown, version: unknown): string[] {
   return [];
 }
 
-test('e2e-matrix runs in the Playwright image of the package.json version, pinned by digest', () => {
+test('the e2e-matrix image tag names the package.json Playwright pin and has a digest', () => {
   const doc = parseDocument(read('../.github/workflows/ci.yml'), { uniqueKeys: true });
   assert.equal(doc.errors.length, 0, doc.errors.map((e) => e.message).join('; '));
   const wf = doc.toJS() as { jobs?: Record<string, { container?: { image?: unknown } }> };
