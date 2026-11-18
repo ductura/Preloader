@@ -6,7 +6,7 @@ import openapi from '@ductura/contracts/openapi/v1.json' with { type: 'json' };
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { CLIENT_CONTEXT_PATH, clientContextBody, clientContextFrom, sendClientContext } from '../src/client-context/index.ts';
-import { checkHealth, HEALTH_PATH, VERSION_RE, type Health } from '../src/server-check/health.ts';
+import { checkHealth, HEALTH_KEYS, HEALTH_PATH, HEALTH_REQUIRED, VERSION_RE, type Health } from '../src/server-check/health.ts';
 import { UA } from './user-agents.ts';
 
 const server = createFakeServer();
@@ -66,6 +66,35 @@ describe('platform.health.get: vektori kroz checkHealth', () => {
   ])('kriv oblik odgovora 200 daje null: %s', async (_name, body) => {
     const get = () => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }));
     expect(await checkHealth(get)).toBeNull();
+  });
+
+  /** Razlike između sheme odgovora 200 i onoga što `checkHealth` prihvaća; prazan popis znači da se slažu. */
+  type Schema = { properties: Record<string, unknown>; required?: string[]; additionalProperties?: unknown };
+  const shapeDiff = (s: Schema) => {
+    const keys = Object.keys(s.properties), req = s.required ?? [];
+    return [
+      ...keys.filter((k) => !HEALTH_KEYS.includes(k)).map((k) => `polje u ugovoru, a checkHealth ga odbija: ${k}`),
+      ...HEALTH_KEYS.filter((k) => !keys.includes(k)).map((k) => `checkHealth prihvaća polje kojeg nema u ugovoru: ${k}`),
+      ...req.filter((k) => !HEALTH_REQUIRED.includes(k)).map((k) => `obvezno u ugovoru, a checkHealth ga ne traži: ${k}`),
+      ...HEALTH_REQUIRED.filter((k) => !req.includes(k)).map((k) => `checkHealth traži polje koje nije obvezno u ugovoru: ${k}`),
+      ...(s.additionalProperties === false ? [] : ['ugovor više nije zatvoren oblik']),
+    ];
+  };
+  const contract200 = (openapi.paths as unknown as Record<string, { get: { responses: Record<string, { content: Record<string, { schema: Schema }> }> } }>)[HEALTH_PATH]!.get
+    .responses['200']!.content['application/json']!.schema;
+
+  test('ključevi i obvezna polja sheme 200 iz ugovora jednaki su onima koje checkHealth prihvaća (novo ili obvezno polje ruši test)', () => {
+    expect(shapeDiff(contract200)).toEqual([]);
+  });
+
+  test('usporedba hvata dodano, uklonjeno i obvezno polje te otvoreni oblik', () => {
+    const add = { ...contract200, properties: { ...contract200.properties, novo: {} } };
+    expect(shapeDiff(add)).toEqual(['polje u ugovoru, a checkHealth ga odbija: novo']);
+    const { state: _s, ...rest } = contract200.properties;
+    expect(shapeDiff({ ...contract200, properties: rest })).toEqual(['checkHealth prihvaća polje kojeg nema u ugovoru: state']);
+    expect(shapeDiff({ ...contract200, required: ['status', 'state'] })).toEqual(['obvezno u ugovoru, a checkHealth ga ne traži: state']);
+    expect(shapeDiff({ ...contract200, required: [] })).toEqual(['checkHealth traži polje koje nije obvezno u ugovoru: status']);
+    expect(shapeDiff({ ...contract200, additionalProperties: true })).toEqual(['ugovor više nije zatvoren oblik']);
   });
 
   test('VERSION_RE je uzorak polja verzija iz ugovora', () => {

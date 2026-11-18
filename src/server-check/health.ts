@@ -12,6 +12,9 @@ export type Health = { state: NonNullable<Body['state']>; minClientVersion: stri
 /** Isti uzorak kao polja verzija u ugovoru (test ih uspoređuje). */
 export const VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const VERSION_KEYS = ['version', 'apiVersion', 'serverVersion', 'minClientVersion'];
+/** Ključevi koje `checkHealth` prihvaća i ključevi koje traži; test ih uspoređuje s shemom iz ugovora. */
+export const HEALTH_KEYS = ['status', 'state', ...VERSION_KEYS];
+export const HEALTH_REQUIRED = ['status'];
 
 export async function checkHealth(get: Get): Promise<Health> {
   try {
