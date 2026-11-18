@@ -3,23 +3,27 @@
 // student, restarts the server, reopens the work and writes the report.
 import { execFileSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { type Answer, type Observed, preloaderSha, report, sha256Hex } from './claims.ts';
+import { type Answer, type Meta, type Observed, preloaderSha, reportText, sha256Hex } from './claims.ts';
 import { probePort } from './probe.ts';
 import { type ReceiptTrust, publicKeyFromSeed, registryRow } from './receipt.ts';
+import { withStack } from './stack-lock.ts';
 
 type State = {
-  repos: { server: { sha: string; dirty: boolean } };
+  startedAt?: unknown;
+  repos?: { server?: { sha?: unknown; dirty?: unknown } };
   ports: { postgres: number; server: number };
-  processes: { server?: { pid: number } };
+  processes?: { server?: { pid?: unknown } };
 };
 
 const SERVER = resolve(process.env['SERVER_DIR'] ?? '');
 const STACK = process.env['VS1_STACK_DIR'] ?? join(SERVER, '.stack', 'vs1');
 const OUT = process.env['LAB_REPORT'] ?? 'lab-oporavak.json';
+// Next to the stack directory, not in it: the stack's own files stay the stack's.
+const LOCK = `${STACK}.lab-lock`;
 const INSTITUTION = 'demo-fakultet'; // server scripts/stack/evidence.ts INSTITUTION_SLUG
 
 const fromServer = async <T>(path: string): Promise<T> => (await import(pathToFileURL(join(SERVER, path)).href)) as T;
@@ -33,6 +37,16 @@ function stack(cmd: 'up' | 'down'): void {
 }
 
 const readState = (): State => JSON.parse(readFileSync(join(STACK, 'state.json'), 'utf8')) as State;
+
+/** The mark of the running stack (state.json startedAt), or null. */
+function stackMark(): string | null {
+  try {
+    const at = readState().startedAt;
+    return typeof at === 'string' ? at : null;
+  } catch {
+    return null;
+  }
+}
 
 const psql = (port: number, input: string, stdout: 'pipe' | 'ignore'): string =>
   execFileSync('psql', ['-h', STACK, '-p', String(port), '-U', 'ductus', '-d', 'ductus', '-X', '-q', '-t', '-A'], {
@@ -154,7 +168,19 @@ async function main(): Promise<number> {
   const sha = preloaderSha(head, process.env['LAB_PRELOADER_SHA']);
   let error: string | null = sha.error;
   let state: State | null = null;
-  let started = false;
+  const meta = (why: string | null): Meta => {
+    const repo = state?.repos?.server;
+    return {
+      preloaderSha: sha.sha,
+      serverSha: typeof repo?.sha === 'string' ? repo.sha : null,
+      serverDirty: typeof repo?.dirty === 'boolean' ? repo.dirty : null,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      error: why,
+    };
+  };
+  // An older report never outlives this run: FAIL until the run writes its own.
+  writeFileSync(OUT, reportText(o, meta('izvođenje nije završilo')));
   try {
     if (error !== null) throw new Error(error);
     if (!process.env['SERVER_DIR']) throw new Error('SERVER_DIR nije zadan');
@@ -164,54 +190,41 @@ async function main(): Promise<number> {
     };
     const { post, stackServerEnv } = await fromServer<CommitCheck>('scripts/stack/vs1-commit-check.ts');
     const { canonicalizeJcs } = await fromServer<{ canonicalizeJcs: (v: unknown) => string }>('server/domain/index.ts');
-    // Never down a stack this run did not bring up.
-    if (existsSync(join(STACK, 'state.json'))) throw new Error('stog je već podignut; laboratorij ga ne dira');
-    started = true;
-    stack('up');
-    state = readState();
-    const token = randomBytes(32).toString('base64url');
-    const { assignmentId, studentId } = seed(state.ports.postgres, token);
-    o.trust = stackTrust(state.ports.postgres, stackServerEnv(state));
-    o.firstOpen = await post(state.ports.server, '/api/v1/evidence/open', { assignmentId, start: true }, token);
-    if (o.firstOpen.status !== 200) throw new Error(`prvi open: ${o.firstOpen.status}`);
-    const req = commitRequest(canonicalizeJcs, o.firstOpen.body, o.sentence);
-    o.sent = req.sent;
-    o.expected = {
-      documentId: String(o.firstOpen.body['documentId']),
-      clientTransactionId: req.body.clientTransactionId,
-      revision: 1,
-      principalId: studentId,
-      segmentHash: req.segmentHash,
-    };
-    o.commit = await post(state.ports.server, '/api/v1/evidence/commit', req.body, token);
-    o.pidBefore = state.processes.server?.pid ?? null;
-    stack('down');
-    o.healthBetween = await probePort(state.ports.server);
-    stack('up');
-    state = readState();
-    o.pidAfter = state.processes.server?.pid ?? null;
-    o.secondOpen = await post(state.ports.server, '/api/v1/evidence/open', { assignmentId }, token);
+    await withStack(LOCK, stack, stackMark, async (s) => {
+      await s.up();
+      state = readState();
+      const token = randomBytes(32).toString('base64url');
+      const { assignmentId, studentId } = seed(state.ports.postgres, token);
+      o.trust = stackTrust(state.ports.postgres, stackServerEnv(state));
+      o.firstOpen = await post(state.ports.server, '/api/v1/evidence/open', { assignmentId, start: true }, token);
+      if (o.firstOpen.status !== 200) throw new Error(`prvi open: ${o.firstOpen.status}`);
+      const documentId = o.firstOpen.body['documentId'];
+      if (typeof documentId !== 'string') throw new Error('prvi open nema documentId');
+      const req = commitRequest(canonicalizeJcs, o.firstOpen.body, o.sentence);
+      o.sent = req.sent;
+      o.expected = {
+        documentId,
+        clientTransactionId: req.body.clientTransactionId,
+        revision: 1,
+        principalId: studentId,
+        segmentHash: req.segmentHash,
+      };
+      o.commit = await post(state.ports.server, '/api/v1/evidence/commit', req.body, token);
+      o.pidBefore = state.processes?.server?.pid ?? null;
+      await s.down();
+      o.healthBetween = await probePort(state.ports.server);
+      await s.up();
+      state = readState();
+      o.pidAfter = state.processes?.server?.pid ?? null;
+      o.secondOpen = await post(state.ports.server, '/api/v1/evidence/open', { assignmentId }, token);
+    });
   } catch (e) {
-    error = e instanceof Error ? e.message : String(e);
-  } finally {
-    if (started) {
-      try {
-        stack('down');
-      } catch (e) {
-        error ??= `down: ${e instanceof Error ? e.message : String(e)}`;
-      }
-    }
+    error ??= e instanceof Error ? e.message : 'nepoznata greška';
   }
-  const out = report(o, {
-    preloaderSha: sha.sha,
-    serverSha: state?.repos.server.sha ?? null,
-    serverDirty: state?.repos.server.dirty ?? null,
-    startedAt,
-    finishedAt: new Date().toISOString(),
-    error,
-  });
+  const text = reportText(o, meta(error));
   // The report is the file only: pnpm writes its own lines to stdout.
-  writeFileSync(OUT, `${JSON.stringify(out, null, 2)}\n`);
+  writeFileSync(OUT, text);
+  const out = JSON.parse(text) as { result: string; error: string | null; claims: { id: string; pass: boolean }[] };
   const lines = out.claims.map((c) => `${c.id} ${c.pass ? 'PASS' : 'FAIL'}`);
   process.stdout.write(`lab:oporavak ${out.result} ${OUT}\n${out.error === null ? '' : `greška: ${out.error}\n`}${lines.join('\n')}\n`);
   return out.result === 'PASS' ? 0 : 1;

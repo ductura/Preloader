@@ -20,8 +20,9 @@ export type Observed = {
   expected: ReceiptExpectation | null;
   /** The server's port between down and up (probe.ts); only 'refused' is down. */
   healthBetween: Probe | null;
-  pidBefore: number | null;
-  pidAfter: number | null;
+  /** From state.json: unchecked, so any JSON value. */
+  pidBefore: unknown;
+  pidAfter: unknown;
   secondOpen: Answer | null;
 };
 
@@ -31,6 +32,20 @@ export const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').upd
 
 const claim = (id: string, pass: boolean, detail: string): Claim => ({ id, pass, detail });
 
+/** A value of an answer as text for a detail, calling nothing on it (no toString, valueOf or toJSON). */
+export function text(v: unknown): string {
+  if (v === null || v === undefined) return '-';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'object' || typeof v === 'function') return Array.isArray(v) ? '[niz]' : '[objekt]';
+  return String(v);
+}
+
+/** An own field of an answer body; nothing inherited. */
+const own = (body: Record<string, unknown> | null, key: string): unknown =>
+  body !== null && Object.hasOwn(body, key) ? body[key] : undefined;
+
+const isPid = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0;
+
 /** The body of a 200 answer when it is a JSON object, else null: a body of null or a list counts as no answer. */
 function okBody(a: Answer | null): Record<string, unknown> | null {
   const body: unknown = a?.status === 200 ? a.body : null;
@@ -39,7 +54,7 @@ function okBody(a: Answer | null): Record<string, unknown> | null {
 
 /** The document of the second open in strict standard base64, decoded here, or null. */
 function reopened(o: Observed): Buffer | null {
-  const doc = okBody(o.secondOpen)?.['document'];
+  const doc = own(okBody(o.secondOpen), 'document');
   if (typeof doc !== 'string') return null;
   const bytes = Buffer.from(doc, 'base64');
   // Node skips stray characters; only one spelling of the bytes counts.
@@ -50,30 +65,32 @@ export function claims(o: Observed): Claim[] {
   const second = okBody(o.secondOpen);
   const commit = okBody(o.commit);
   const doc = reopened(o);
-  const own = doc === null ? null : sha256Hex(doc);
+  const mine = doc === null ? null : sha256Hex(doc);
   const sent = o.sent === null ? null : sha256Hex(o.sent);
   const why =
     o.trust === null || o.expected === null
       ? 'nema ključa stoga ili očekivanog commita'
-      : checkReceipt(commit?.['receipt'], o.trust, o.expected);
-  const first = okBody(o.firstOpen)?.['documentId'];
+      : checkReceipt(own(commit, 'receipt'), o.trust, o.expected);
+  const first = own(okBody(o.firstOpen), 'documentId');
+  const [status, revision] = [own(commit, 'status'), own(commit, 'revision')];
+  const [docId, current, docHash] = [own(second, 'documentId'), own(second, 'currentRevision'), own(second, 'documentHash')];
   return [
     claim(
       'L-1',
-      commit?.['status'] === 'committed' && commit['revision'] === 1 && why === null,
-      `commit ${o.commit?.status ?? '-'} ${String(commit?.['status'] ?? '-')}, revizija ${String(commit?.['revision'] ?? '-')}, potvrda: ${why ?? 'potpis provjeren ključem stoga'}`,
+      status === 'committed' && revision === 1 && why === null,
+      `commit ${text(o.commit?.status)} ${text(status)}, revizija ${text(revision)}, potvrda: ${why ?? 'potpis provjeren ključem stoga'}`,
     ),
     claim(
       'L-2',
-      o.healthBetween === 'refused' && o.pidBefore !== null && o.pidAfter !== null && o.pidBefore !== o.pidAfter,
-      `port servera između down i up: ${o.healthBetween ?? '-'}; PID ${o.pidBefore ?? '-'} -> ${o.pidAfter ?? '-'}`,
+      o.healthBetween === 'refused' && isPid(o.pidBefore) && isPid(o.pidAfter) && o.pidBefore !== o.pidAfter,
+      `port servera između down i up: ${text(o.healthBetween)}; PID ${text(o.pidBefore)} -> ${text(o.pidAfter)}`,
     ),
     claim(
       'L-3',
-      typeof first === 'string' && second?.['documentId'] === first,
-      `drugi open ${o.secondOpen?.status ?? '-'}, documentId ${String(second?.['documentId'] ?? '-')}`,
+      typeof first === 'string' && docId === first,
+      `drugi open ${text(o.secondOpen?.status)}, documentId ${text(docId)}`,
     ),
-    claim('L-4', second?.['currentRevision'] === 1, `currentRevision ${String(second?.['currentRevision'] ?? '-')}`),
+    claim('L-4', current === 1, `currentRevision ${text(current)}`),
     claim(
       'L-5',
       doc !== null && o.sent !== null && Buffer.compare(doc, o.sent) === 0 && doc.toString('utf8').includes(o.sentence),
@@ -81,8 +98,8 @@ export function claims(o: Observed): Claim[] {
     ),
     claim(
       'L-6',
-      own !== null && own === second?.['documentHash'] && own === sent,
-      `ovdje ${own ?? '-'}, server ${String(second?.['documentHash'] ?? '-')}, poslano ${sent ?? '-'}`,
+      mine !== null && mine === docHash && mine === sent,
+      `ovdje ${text(mine)}, server ${text(docHash)}, poslano ${text(sent)}`,
     ),
   ];
 }
@@ -125,8 +142,8 @@ export function report(o: Observed, meta: Meta) {
     serverSha: meta.serverSha,
     serverDirty: meta.serverDirty,
     browser: null,
-    documentId: typeof second?.['documentId'] === 'string' ? second['documentId'] : null,
-    revision: typeof second?.['currentRevision'] === 'number' ? second['currentRevision'] : null,
+    documentId: typeof own(second, 'documentId') === 'string' ? own(second, 'documentId') : null,
+    revision: Number.isSafeInteger(own(second, 'currentRevision')) ? own(second, 'currentRevision') : null,
     hash: doc === null ? null : sha256Hex(doc),
     sentence: o.sentence,
     startedAt: meta.startedAt,
@@ -139,4 +156,22 @@ export function report(o: Observed, meta: Meta) {
       'radnik se ne restartira: stog VS-1 ga još nema',
     ],
   };
+}
+
+/**
+ * The report file's text, always: a report that cannot be built or written
+ * out (an answer of an odd shape) is a FAIL report naming why, never an
+ * exception that leaves an older report in place.
+ */
+export function reportText(o: Observed, meta: Meta): string {
+  try {
+    return `${JSON.stringify(report(o, meta), null, 2)}\n`;
+  } catch (e) {
+    const why = `izvještaj: ${e instanceof Error ? text(e.message) : text(e)}`;
+    const empty: Observed = {
+      sentence: text(o.sentence), sent: null, firstOpen: null, commit: null, trust: null, expected: null,
+      healthBetween: null, pidBefore: null, pidAfter: null, secondOpen: null,
+    };
+    return `${JSON.stringify(report(empty, { ...meta, error: meta.error === null ? why : `${meta.error}; ${why}` }), null, 2)}\n`;
+  }
 }

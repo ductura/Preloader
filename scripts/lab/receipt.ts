@@ -26,12 +26,28 @@ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 const RECEIPT = ['status', 'signedReceipt'];
 const SIGNED = ['payload', 'payloadDigestSha256', 'signature'];
 const SIGNATURE = ['algorithm', 'keyId', 'keyVersion', 'signatureEncoding', 'signatureBase64Url'];
-const PAYLOAD = [
-  'receiptSchema', 'receiptId', 'evidencePackageId', 'documentId', 'sessionId', 'segmentId', 'segmentHash',
-  'predecessorSegmentHash', 'previousReceiptId', 'evidenceSchema', 'evidenceProfileId', 'sequenceFrom',
-  'sequenceTo', 'eventCount', 'payloadBytes', 'acceptedAt', 'revision', 'clientTransactionId',
-  'evidenceDomainId', 'principalId',
-];
+type Rule = (v: unknown) => boolean;
+const str = (v: unknown): v is string => typeof v === 'string';
+// Text(n) of the server contract: length in UTF-16 units (TypeBox, value.length), not code points.
+const text = (max: number): Rule => (v) => str(v) && v.length >= 1 && v.length <= max && /\S/u.test(v);
+const match = (re: RegExp): Rule => (v) => str(v) && re.test(v);
+const oneOf = (...values: string[]): Rule => (v) => str(v) && values.includes(v);
+const orNull = (rule: Rule): Rule => (v) => v === null || rule(v);
+const positive: Rule = (v) => Number.isSafeInteger(v) && (v as number) >= 1;
+const sha256 = match(/^[0-9a-f]{64}$/);
+const uuid = match(UUID_V4);
+/** Value and type of every payload field: SignedReceipt of ductura/server server/contracts/routes/evidence.ts. */
+const PAYLOAD_TYPES: Record<string, Rule> = {
+  receiptSchema: oneOf('ductus-evidence-receipt-v2'),
+  receiptId: text(256), evidencePackageId: text(256), documentId: text(256), sessionId: text(256), segmentId: text(256),
+  segmentHash: sha256, predecessorSegmentHash: orNull(sha256), previousReceiptId: orNull(text(256)),
+  evidenceSchema: oneOf('ductus-evidence-segment-v2', 'ductus-evidence-segment-v3'),
+  evidenceProfileId: text(120), sequenceFrom: positive, sequenceTo: positive, eventCount: positive, payloadBytes: positive,
+  acceptedAt: match(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00\.000Z$/), revision: positive,
+  clientTransactionId: (v) => str(v) && v.length <= 128 && /^(?=.*\S)[^\u0000-\u001f\u007f-\u009f]+$/u.test(v),
+  evidenceDomainId: uuid, principalId: uuid,
+};
+const PAYLOAD = Object.keys(PAYLOAD_TYPES);
 
 type Obj = Record<string, unknown>;
 
@@ -95,6 +111,8 @@ export function checkReceipt(receipt: unknown, trust: ReceiptTrust, expected: Re
   if (!exact(signed, SIGNED)) return 'potpisana potvrda nema oblik v2';
   const { payload, signature } = signed;
   if (!exact(signature, SIGNATURE) || !exact(payload, PAYLOAD)) return 'potpisana potvrda nema oblik v2';
+  const badType = PAYLOAD.find((k) => !PAYLOAD_TYPES[k]!(payload[k]));
+  if (badType !== undefined) return `potpisana potvrda nema oblik v2 (${badType})`;
   if (signature['algorithm'] !== 'Ed25519' || signature['signatureEncoding'] !== 'raw') return 'potpis nije Ed25519';
   if (signature['keyId'] !== trust.keyId || signature['keyVersion'] !== trust.keyVersion) return 'potpis nije ključem stoga';
   const sig = base64Url(signature['signatureBase64Url'], 64);

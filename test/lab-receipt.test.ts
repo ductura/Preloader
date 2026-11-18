@@ -7,6 +7,8 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import openapi from '@ductura/contracts/openapi/v1.json' with { type: 'json' };
+import { Ajv } from 'ajv';
 
 import { type ReceiptExpectation, type ReceiptTrust, checkReceipt, jcs, publicKeyFromSeed, registryRow } from '../scripts/lab/receipt.ts';
 
@@ -127,4 +129,68 @@ test('the registry holds exactly one active receipt key in the domain, and it is
     `${row}\r\n`, row.replace('|', '\t|'), row.replace('0011', '00 11'), row.replace('0011', '00\u007f11'), `${row}|x`, row.replace('42e5', '12e5'),
   ];
   for (const b of bad) assert.equal(registryRow(b), null, JSON.stringify(b));
+});
+
+// Review 2 and QA 1 on 55f02977: L-1 checks the value and type of every payload
+// field, not its presence. The oracle is the server's contract schema of the
+// payload (@ductura/contracts openapi), so the rules here cannot drift from it.
+type Schema = { properties?: Record<string, { const?: unknown }> } & Record<string, unknown>;
+function payloadSchema(node: unknown): Schema | null {
+  if (typeof node !== 'object' || node === null) return null;
+  if ((node as Schema).properties?.['receiptSchema']?.const === 'ductus-evidence-receipt-v2') return node as Schema;
+  for (const child of Object.values(node)) {
+    const found = payloadSchema(child);
+    if (found !== null) return found;
+  }
+  return null;
+}
+const contract = new Ajv({ strict: false }).compile(payloadSchema(openapi)!);
+const BAD: unknown[] = [
+  null, undefined, 0, -1, -0, 1.5, NaN, Infinity, 2 ** 53, true, '', ' ', ' ', '\t', '\r\n', ' ', '\u007f', 'x'.repeat(257),
+  '1', {}, [], ['r-1'], JSON.parse('{"toString":null}'), JSON.parse('{"__proto__":{"a":1}}'), 'tx\r\n', 'tx\t', 'tx\u007f', 'tx\u0085',
+];
+const GOOD: unknown[] = ['r-0', 'a b', 'x'.repeat(120), 'a'.repeat(64), 1, 2, Number.MAX_SAFE_INTEGER, null,
+  'ductus-evidence-segment-v3', '2026-10-03T06:05:00.000Z', '6f1c2b7e-0d4a-4c3b-9a8e-1b2c3d4e5f60'];
+const COMPARED = new Set(['receiptSchema', 'evidenceDomainId', ...Object.keys(expected)]);
+
+/** The vector with `key` set to `value`: signed when JCS can spell it, else as it stands. */
+function swapped(key: string, value: unknown) {
+  const payload = { ...clone(p), [key]: value };
+  if (value === undefined) delete payload[key];
+  try {
+    return signed(payload);
+  } catch {
+    const r = vector();
+    r.signedReceipt.payload = payload;
+    return r;
+  }
+}
+
+test('every payload field the contract refuses is refused, signed or not', () => {
+  for (const key of Object.keys(p)) {
+    for (const value of BAD) {
+      const payload = { ...clone(p), [key]: value };
+      if (value === undefined) delete payload[key];
+      if (contract(payload)) continue;
+      assert.notEqual(checkReceipt(swapped(key, value), trust, expected), null, `${key}: ${String(JSON.stringify(value))}`);
+    }
+  }
+  assert.equal(contract({ ...clone(p), receiptId: null }), false);
+  assert.match(checkReceipt(swapped('receiptId', null), trust, expected) ?? '', /oblik v2/);
+});
+
+test('a field the contract accepts is not refused when the lab does not compare it', () => {
+  for (const key of Object.keys(p).filter((k) => !COMPARED.has(k))) {
+    for (const value of [...GOOD, ...BAD]) {
+      const payload = { ...clone(p), [key]: value };
+      if (value === undefined || !contract(payload)) continue;
+      assert.equal(checkReceipt(signed(payload), trust, expected), null, `${key}: ${JSON.stringify(value)}`);
+    }
+  }
+});
+
+test('text length is counted in UTF-16 units, as the server counts it', () => {
+  assert.equal(checkReceipt(signed({ ...clone(p), receiptId: '\u{1F600}'.repeat(128) }), trust, expected), null);
+  assert.notEqual(checkReceipt(signed({ ...clone(p), receiptId: '\u{1F600}'.repeat(129) }), trust, expected), null);
+  assert.equal(contract({ ...clone(p), receiptId: '\u{1F600}'.repeat(129) }), true, 'ajv counts code points');
 });

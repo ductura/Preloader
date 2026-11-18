@@ -4,12 +4,12 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { type Observed, claims, preloaderSha, report, sha256Hex } from '../scripts/lab/claims.ts';
+import { type Observed, claims, preloaderSha, report, reportText, sha256Hex, text } from '../scripts/lab/claims.ts';
 import { jcs, publicKeyFromSeed } from '../scripts/lab/receipt.ts';
 
 const sentence = 'Izmišljena rečenica laboratorija 0000.';
@@ -75,6 +75,11 @@ const cases: [string, (o: Observed) => Observed, string[]][] = [
   ['port not probed', (o) => ({ ...o, healthBetween: null }), ['L-2']],
   ['same pid', (o) => ({ ...o, pidAfter: 100 }), ['L-2']],
   ['no pid', (o) => ({ ...o, pidBefore: null }), ['L-2']],
+  // QA 2 on 55f02977: a new PID is a safe integer above 0, before and after.
+  ...[0, -0, -1, NaN, 1.5, Infinity, 2 ** 53, '200', null, undefined, {}, [], JSON.parse('{"toString":null}')].flatMap((pid, i) => [
+    [`pid after is bad value ${i} (${text(pid)})`, (o: Observed) => ({ ...o, pidAfter: pid }), ['L-2']],
+    [`pid before is bad value ${i} (${text(pid)})`, (o: Observed) => ({ ...o, pidBefore: pid }), ['L-2']],
+  ] as [string, (o: Observed) => Observed, string[]][]),
   ['first open has no documentId', (o) => ({ ...o, firstOpen: open({ currentRevision: 0 }) }), ['L-3']],
   ['neither open has a documentId', (o) => ({ ...o, firstOpen: open({ currentRevision: 0 }), secondOpen: open({ ...o.secondOpen!.body, documentId: undefined }) }), ['L-3']],
   ['other document', (o) => ({ ...o, secondOpen: open({ ...o.secondOpen!.body, documentId: 'd-2' }) }), ['L-3']],
@@ -132,6 +137,7 @@ test('the preloader SHA is the checked-out HEAD, and a named SHA must be it', ()
 // Review finding 4: the report is the file; stdout carries no JSON to parse.
 test('pnpm lab:oporavak writes the report file and exits 1 on a failed run', () => {
   const out = join(mkdtempSync(join(tmpdir(), 'lab-')), 'report.json');
+  writeFileSync(out, '{"result":"PASS"}\n');
   const env: Record<string, string | undefined> = { ...process.env, LAB_REPORT: out };
   delete env['SERVER_DIR'];
   delete env['LAB_PRELOADER_SHA'];
@@ -145,4 +151,74 @@ test('pnpm lab:oporavak writes the report file and exits 1 on a failed run', () 
   assert.equal(file.claims.length, 6);
   assert.match(run.stdout, /^lab:oporavak FAIL /m);
   assert.doesNotMatch(run.stdout, /[{}]/);
+});
+
+// Review 3 and QA 3 on 55f02977: no value in an answer or in state.json makes
+// the report throw; each is text in a detail, and the claim it feeds fails.
+const BAD: unknown[] = [null, undefined, 0, -1, '', {}, [], NaN, JSON.parse('{"toString":null}'), JSON.parse('{"valueOf":null,"toString":null}'),
+  JSON.parse('{"__proto__":{"documentId":"d-1","currentRevision":1}}'), Object.create(null)];
+const FIELDS: [string, (o: Observed, v: unknown) => Observed, string][] = [
+  ['commit status code', (o, v) => ({ ...o, commit: { ...o.commit!, status: v as number } }), 'L-1'],
+  ['commit.status', (o, v) => ({ ...o, commit: open({ ...o.commit!.body, status: v }) }), 'L-1'],
+  ['commit.revision', (o, v) => ({ ...o, commit: open({ ...o.commit!.body, revision: v }) }), 'L-1'],
+  ['commit.receipt', (o, v) => ({ ...o, commit: open({ ...o.commit!.body, receipt: v }) }), 'L-1'],
+  ['commit body', (o, v) => ({ ...o, commit: { status: 200, body: v as Record<string, unknown> } }), 'L-1'],
+  ['first documentId', (o, v) => ({ ...o, firstOpen: open({ currentRevision: 0, documentId: v }) }), 'L-3'],
+  ['second open status code', (o, v) => ({ ...o, secondOpen: { ...o.secondOpen!, status: v as number } }), 'L-3'],
+  ['second documentId', (o, v) => ({ ...o, secondOpen: open({ ...o.secondOpen!.body, documentId: v }) }), 'L-3'],
+  ['currentRevision', (o, v) => ({ ...o, secondOpen: open({ ...o.secondOpen!.body, currentRevision: v }) }), 'L-4'],
+  ['document', (o, v) => ({ ...o, secondOpen: open({ ...o.secondOpen!.body, document: v }) }), 'L-5'],
+  ['documentHash', (o, v) => ({ ...o, secondOpen: open({ ...o.secondOpen!.body, documentHash: v }) }), 'L-6'],
+  ['second open body', (o, v) => ({ ...o, secondOpen: { status: 200, body: v as Record<string, unknown> } }), 'L-4'],
+  ['healthBetween', (o, v) => ({ ...o, healthBetween: v as 'refused' }), 'L-2'],
+];
+const meta = { preloaderSha: 'a'.repeat(40), serverSha: null, serverDirty: null, startedAt: 't0', finishedAt: 't1', error: null };
+
+for (const [field, set, id] of FIELDS) {
+  test(`a bad ${field} fails ${id} and still gives a FAIL report`, () => {
+    for (const v of BAD) {
+      const o = set(good(), v);
+      assert.ok(failing(o).includes(id), `${field}: ${text(v)}`);
+      const file = JSON.parse(reportText(o, meta)) as { result: string; claims: unknown[] };
+      assert.equal(file.result, 'FAIL');
+      assert.equal(file.claims.length, 6);
+    }
+  });
+}
+
+test('text calls nothing on the value', () => {
+  assert.equal(text(JSON.parse('{"toString":null,"valueOf":null}')), '[objekt]');
+  assert.equal(text(Object.create(null)), '[objekt]');
+  assert.equal(text([1]), '[niz]');
+  assert.deepEqual([text(null), text(undefined), text(NaN), text(-0), text('x')], ['-', '-', 'NaN', '0', 'x']);
+});
+
+test('a report that cannot be built is a FAIL report naming why', () => {
+  const trap = { status: 200, get body(): Record<string, unknown> { throw new Error('zamka'); } };
+  const file = JSON.parse(reportText({ ...good(), secondOpen: trap }, meta)) as { result: string; error: string; claims: { pass: boolean }[] };
+  assert.equal(file.result, 'FAIL');
+  assert.equal(file.error, 'izvještaj: zamka');
+  assert.ok(file.claims.every((c) => !c.pass));
+  assert.equal(JSON.parse(reportText({ ...good(), secondOpen: trap }, { ...meta, error: 'down' })).error, 'down; izvještaj: zamka');
+});
+
+// The report is FAIL before the run touches the stack: a fake SERVER_DIR whose
+// helper module, imported first, copies LAB_REPORT as it stands at that moment.
+test('pnpm lab:oporavak replaces an older report with FAIL before it starts', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lab-'));
+  const out = join(dir, 'report.json');
+  writeFileSync(out, '{"result":"PASS"}\n');
+  mkdirSync(join(dir, 'scripts', 'stack'), { recursive: true });
+  writeFileSync(join(dir, 'scripts', 'stack', 'vs1-commit-check.ts'),
+    `import { copyFileSync } from 'node:fs';\ncopyFileSync(${JSON.stringify(out)}, ${JSON.stringify(join(dir, 'seen.json'))});\nthrow new Error('lažni server');\n`);
+  const env: Record<string, string | undefined> = { ...process.env, LAB_REPORT: out, SERVER_DIR: dir };
+  delete env['LAB_PRELOADER_SHA'];
+  const cwd = fileURLToPath(new URL('..', import.meta.url));
+  const run = spawnSync('pnpm', ['lab:oporavak'], { cwd, env, encoding: 'utf8', shell: process.platform === 'win32' });
+  assert.equal(run.status, 1, run.stderr);
+  const final = JSON.parse(readFileSync(out, 'utf8')) as { result: string; error: string };
+  if (final.error === 'HEAD preloadera nije čitljiv') return; // no git here: the run stops before SERVER_DIR
+  const seen = JSON.parse(readFileSync(join(dir, 'seen.json'), 'utf8')) as { result: string; error: string };
+  assert.deepEqual([seen.result, seen.error], ['FAIL', 'izvođenje nije završilo']);
+  assert.deepEqual([final.result, final.error], ['FAIL', 'lažni server']);
 });
