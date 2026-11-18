@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { expect, test } from 'vitest';
-import { infoText } from '../src/text.ts';
+import { clientText, errorText, infoText, PACKAGE_LABELS, text } from '../src/text.ts';
 
 // Redoslijed ključeva je namjeran (kao u izvoru). SHA-256 od JSON.stringify(Ductus messagesHr.howItWorks bez `rules`, APP_NAME = „Ductura”), commit b36c82b9.
 const DUCTUS_SHA256 = 'b1dcb8b906940df7bcf4b807720edc88595caef831d9ce82b538c9cc132a323a';
@@ -44,19 +44,34 @@ test('regresija: tekst nema imena ustanove (puna zaštita je 969-4)', () => {
   for (const root of ['fpzg', 'sveucilist', 'fakultet', 'ustanov']) expect(all).not.toContain(root);
 });
 
-test('infoText ne ulazi u klijentske stranice: nijedan njegov niz nije u dist/index.html ni dist/greska.html', async () => {
+// Tvrdnje preuzete iz Ductus `src/components/how-it-works/copy.test.ts` (b36c82b9), neovisne o sažetku.
+test('oznake spremanja se zovu kao u uređivaču', () => {
+  expect(infoText.saving.device.startsWith('Spremljeno na uređaju')).toBe(true);
+  expect(infoText.saving.server.startsWith('Spremljeno na poslužitelju')).toBe(true);
+});
+
+test('oznaka na uređaju ne tvrdi da poslužitelj nema tekst, nego da ne govori je li ga primio', () => {
+  expect(infoText.saving.device).not.toMatch(/nije primio|nema tekst|nije stigao/);
+  expect(infoText.saving.device).toMatch(/je li ga poslužitelj već primio/);
+});
+
+test('infoText ne ulazi u klijentske stranice: nijedan njegov niz (i naslov) nije u dist/index.html ni dist/greska.html', async () => {
   const { mkdtempSync, readFileSync, rmSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
   const { build } = await import('../scripts/build.ts');
+  // Ne računaju se nizovi iz vlastitih kataloga klijentskih stranica (npr. „Prikaz”) ni kratki nizovi (Da, Ne, Vi…)
+  // koji su podniz bilo kojeg HTML-a; svi naslovi i rečenice (od 12 znakova) računaju se.
+  const own = new Set([...leaves(text), ...leaves(clientText), ...leaves(errorText), ...leaves(PACKAGE_LABELS)]);
+  const mine = leaves(infoText).filter((t) => t.length >= 12 && !own.has(t));
+  expect(mine).toContain(infoText.title);
+  expect(mine.length).toBeGreaterThan(20);
   const out = mkdtempSync(join(tmpdir(), 'dist-text-'));
   try {
     await build(out);
     for (const file of ['index.html', 'greska.html']) {
-      const html = readFileSync(join(out, file), 'utf8');
-      for (const t of ['Što se bilježi', 'Tko što vidi', 'Provjera predanog rada', 'Kako se rad sprema']) {
-        expect(html).not.toContain(t);
-      }
+      const html = readFileSync(join(out, file), 'utf8').normalize('NFC');
+      for (const t of mine) expect(html, `${file}: ${t}`).not.toContain(t.normalize('NFC'));
     }
   } finally {
     rmSync(out, { recursive: true, force: true });
