@@ -87,6 +87,21 @@ describe('platform.health.get: vektori kroz checkHealth', () => {
     expect(shapeDiff(contract200)).toEqual([]);
   });
 
+  test('vrijednosti polja iz ugovora (const, enum, tip) odgovaraju onome što checkHealth prihvaća', async () => {
+    const p = contract200.properties as Record<string, { const?: string; type?: string; anyOf?: { const: string }[] }>;
+    expect(p.status!.const).toBe('ok');
+    expect(p.state!.anyOf!.map((x) => x.const)).toEqual(['ok', 'degraded']);
+    // Svaki ključ koji checkHealth prihvaća zaista prolazi s vrijednošću iz ugovora.
+    const valid: Record<string, string> = { status: 'ok', state: 'degraded', version: '1.2.3', apiVersion: '1.2.3', serverVersion: '1.2.3', minClientVersion: '1.2.3' };
+    expect(Object.keys(valid).sort()).toEqual([...HEALTH_KEYS].sort());
+    for (const k of HEALTH_KEYS) {
+      if (k !== 'status' && k !== 'state') expect([k, p[k]!.type]).toEqual([k, 'string']);
+      const get = () => Promise.resolve(new Response(JSON.stringify({ status: 'ok', [k]: valid[k] }), { status: 200, headers: { 'content-type': 'application/json' } }));
+      expect([k, await checkHealth(get)]).not.toEqual([k, null]);
+    }
+    expect(Object.keys(contract200.properties ? (openapi.paths as Record<string, any>)[HEALTH_PATH].get.responses['200'].content : {})).toEqual(['application/json']);
+  });
+
   test('usporedba hvata dodano, uklonjeno i obvezno polje te otvoreni oblik', () => {
     const add = { ...contract200, properties: { ...contract200.properties, novo: {} } };
     expect(shapeDiff(add)).toEqual(['polje u ugovoru, a checkHealth ga odbija: novo']);
