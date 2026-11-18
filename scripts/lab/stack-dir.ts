@@ -25,6 +25,7 @@ const code = (e: unknown): unknown => (typeof e === 'object' && e !== null ? Ref
  * the server), whose nearest existing ancestor, links resolved, stays inside.
  */
 export function checkStackPath(path: string, root: string, tmp = '/tmp', real: Real = realpathSync): string {
+  if (!SAFE_PATH.test(tmp) || tmp.endsWith('/')) fail(`korijen za privremene datoteke mora biti apsolutna putanja bez završnog /: ${JSON.stringify(tmp)}`);
   const roots = [`${root}/.stack`, tmp];
   try { roots.push(real(tmp)); } catch { /* a temp dir that does not exist adds no resolved root */ }
   const ok = (p: string): boolean => roots.some((r) => p.startsWith(`${r}/`));
@@ -58,7 +59,7 @@ function checkRun(dir: RunDir, root: string, tmp: string, real: Real): void {
   if (real(dir.path) !== dir.path) fail(`putanja stoga ${dir.path} vodi izvan .stack/ servera`);
 }
 
-function newRunDir(root: string, tmp: string, real: Real): RunDir {
+function newRunDir(root: string, tmp: string, real: Real, warn: (message: string) => void): RunDir {
   const stack = `${root}/.stack`;
   checkStackPath(`${stack}/lab-XXXXXX`, root, tmp, real);
   if (`${stack}/lab-XXXXXX`.length > SOCKET_MAX) fail(`putanja servera ${root} je predug za utičnicu PostgreSQL-a`);
@@ -72,7 +73,11 @@ function newRunDir(root: string, tmp: string, real: Real): RunDir {
   try {
     checkRun(dir, root, tmp, real);
   } catch (e) {
-    rmdirSync(path); // empty and ours: nothing is left where it does not belong
+    // Only the very directory mkdtemp made, and the reason of the refusal stands.
+    const now = lstatSync(path, { throwIfNoEntry: false });
+    if (now?.dev === dev && now.ino === ino) {
+      try { rmdirSync(path); } catch (r) { warn(`rmdir ${path}: ${reason(r)}`); }
+    }
     throw e;
   }
   return dir;
@@ -88,17 +93,21 @@ function newRunDir(root: string, tmp: string, real: Real): RunDir {
 export async function withStack<T>(serverDir: string, command: StackCommand, body: (stack: Stack) => Promise<T>, options: Options = {}): Promise<T> {
   const { tmp = '/tmp', real = realpathSync, warn = console.error } = options;
   const root = real(serverDir);
-  const dir = newRunDir(root, tmp, real);
+  const dir = newRunDir(root, tmp, real, warn);
   let owned = false;
+  let done = false;
+  let pending: Promise<unknown> = Promise.resolve();
   const run = async (cmd: 'up' | 'down'): Promise<void> => {
+    if (done) fail('pokretanje je završilo; stog se više ne dira');
     checkRun(dir, root, tmp, real);
     await command(cmd, dir.path);
   };
   const stack: Stack = {
     dir: dir.path,
     up: async () => {
-      await run('up');
-      owned = true;
+      const up = run('up').then(() => void (owned = true));
+      pending = Promise.all([pending, up.catch(() => undefined)]); // an up still running is awaited at the end
+      await up;
     },
     down: async () => {
       if (!owned) fail('stog nije podiglo ovo pokretanje; laboratorij ga ne gasi');
@@ -113,6 +122,7 @@ export async function withStack<T>(serverDir: string, command: StackCommand, bod
   } catch (e) {
     failure = { error: e };
   }
+  await pending;
   if (owned) {
     try {
       await stack.down();
@@ -121,6 +131,7 @@ export async function withStack<T>(serverDir: string, command: StackCommand, bod
       else warn(`down: ${reason(e)}`);
     }
   }
+  done = true;
   if (failure !== null) throw failure.error;
   return result as T;
 }
