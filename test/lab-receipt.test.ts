@@ -1,14 +1,13 @@
 // DAN-1096 L-1: the RFC 8785 text a receipt v2 is signed over, and the key the lab derives from the stack's seed.
 // The contract vector is the server's own (test/fixtures/receipt-v2-golden.json); its key is RFC 8032 test 1.
-import { test } from 'vitest';
+import { onTestFinished, test } from 'vitest';
 import assert from 'node:assert/strict';
 import fc from 'fast-check';
 import { canonicalJson } from '@ductura/contracts';
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 import { type ReceiptExpectation, type ReceiptTrust, checkReceipt, jcs, jcsText, publicKeyFromSeed } from '../scripts/lab/receipt.ts';
@@ -130,9 +129,9 @@ test('jcs writes every JSON value as canonicalJson does, and jcsText its JSON te
 });
 test('jcs gives jcs: even where reading the value throws, as a module namespace in its TDZ does (review on c1403730)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'jcs-ns-'));
-  const receipt = pathToFileURL(fileURLToPath(new URL('../scripts/lab/receipt.ts', import.meta.url))).href;
+  onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(join(dir, 'a.mjs'), "import './b.mjs';\nexport const x = 1;\n");
-  writeFileSync(join(dir, 'b.mjs'), `import * as a from './a.mjs';\nimport { jcs } from '${receipt}';\ntry { jcs(a); console.log('written'); } catch (e) { console.log(String(e)); }\n`);
+  writeFileSync(join(dir, 'b.mjs'), `import * as a from './a.mjs';\nimport { jcs } from ${JSON.stringify(new URL('../scripts/lab/receipt.ts', import.meta.url).href)};\ntry { jcs(a); console.log('written'); } catch (e) { console.log(String(e)); }\n`);
   const run = spawnSync(process.execPath, [join(dir, 'a.mjs')], { encoding: 'utf8', timeout: 20_000 });
   assert.match(run.stdout, /^Error: jcs: /, run.stdout + run.stderr);
 });
