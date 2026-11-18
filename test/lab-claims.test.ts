@@ -30,6 +30,8 @@ function good(): Observed {
   };
 }
 
+// A revoked Proxy: Array.isArray and Object.hasOwn throw on it.
+const revoked = (): unknown => { const p = Proxy.revocable({}, {}); p.revoke(); return p.proxy; };
 const failing = (o: Observed) => claims(o).filter((c) => !c.pass).map((c) => c.id);
 const other = Buffer.from(`{"text":"Drugi tekst."}`, 'utf8');
 const padded = Buffer.from(`{"text":"${sentence}"} `, 'utf8');
@@ -51,7 +53,8 @@ const cases: [string, (o: Observed) => Observed, string[]][] = [
   ['same pid', (o) => ({ ...o, pidAfter: 100 }), ['L-2']],
   ['no pid', (o) => ({ ...o, pidBefore: null }), ['L-2']],
   // QA 2 on 55f02977: a new PID is a safe integer above 0, before and after.
-  ...[0, -0, -1, NaN, 1.5, Infinity, 2 ** 53, '200', null, undefined, {}, [], JSON.parse('{"toString":null}')].flatMap((pid, i) => [
+  ...[0, -0, -1, NaN, 1.5, Infinity, 2 ** 53, '200', null, undefined, {}, [], JSON.parse('{"toString":null}'),
+    Object.assign(() => 200, { valueOf: () => 200 }), revoked()].flatMap((pid, i) => [
     [`pid after is bad value ${i} (${text(pid)})`, (o: Observed) => ({ ...o, pidAfter: pid }), ['L-2']],
     [`pid before is bad value ${i} (${text(pid)})`, (o: Observed) => ({ ...o, pidBefore: pid }), ['L-2']],
   ] as [string, (o: Observed) => Observed, string[]][]),
@@ -110,8 +113,9 @@ test('the preloader SHA is the checked-out HEAD, and a named SHA must be it', ()
 
 // Review 3 and QA 3 on 55f02977: no value in an answer or in state.json makes
 // the report throw; each is text in a detail, and the claim it feeds fails.
+const hostile = new Proxy({}, { getOwnPropertyDescriptor() { throw new Error('zamka'); }, ownKeys() { throw new Error('zamka'); } });
 const BAD: unknown[] = [null, undefined, 0, -1, '', {}, [], NaN, JSON.parse('{"toString":null}'), JSON.parse('{"valueOf":null,"toString":null}'),
-  JSON.parse('{"__proto__":{"documentId":"d-1","currentRevision":1}}'), Object.create(null)];
+  JSON.parse('{"__proto__":{"documentId":"d-1","currentRevision":1}}'), Object.create(null), revoked(), hostile];
 const FIELDS: [string, (o: Observed, v: unknown) => Observed, string][] = [
   ['commit status code', (o, v) => ({ ...o, commit: { ...o.commit!, status: v as number } }), 'L-1'],
   ['commit.status', (o, v) => ({ ...o, commit: open({ ...o.commit!.body, status: v }) }), 'L-1'],
@@ -182,10 +186,12 @@ test('a set LAB_PRELOADER_SHA that is empty, blank or not exactly HEAD fails the
 test('the report is FAIL when it does not name the preloader and server code', () => {
   const meta = { preloaderSha: 'a'.repeat(40), serverSha: 'b'.repeat(40), serverDirty: false, startedAt: 't0', finishedAt: 't1', error: null };
   assert.equal(report(good(), meta).result, 'PASS');
-  for (const bad of [null, '', ' ', 'a'.repeat(39), 'A'.repeat(40), `${'a'.repeat(40)}\n`, ` ${'a'.repeat(39)}`]) {
+  for (const bad of [null, '', ' ', 'a'.repeat(39), 'a'.repeat(41), 'a'.repeat(64), 'A'.repeat(40), `${'a'.repeat(40)}\n`, ` ${'a'.repeat(39)}`]) {
     assert.equal(report(good(), { ...meta, preloaderSha: bad }).result, 'FAIL', `preloaderSha ${JSON.stringify(bad)}`);
     assert.equal(report(good(), { ...meta, serverSha: bad }).result, 'FAIL', `serverSha ${JSON.stringify(bad)}`);
   }
+  // An error that is empty text is still an error: only null is none.
+  assert.equal(report(good(), { ...meta, error: '' }).result, 'FAIL');
 });
 
 // An empty value is no evidence: '' === '' and includes('') hold for anything.
@@ -224,7 +230,8 @@ const CHECKS: [string, ReceiptCheck, RegExp][] = [
   ['throws an object whose message getter throws', () => { throw odd; }, /provjera potvrde: \[objekt\]/],
   ['throws an Error whose message getter throws', () => { throw Object.defineProperty(new Error('x'), 'message', { get() { throw new Error('getter'); } }); }, /provjera potvrde: -$/],
   ['throws a revoked Proxy', () => { const p = Proxy.revocable({}, {}); p.revoke(); throw p.proxy; }, /provjera potvrde: -$/],
-  ['is not a function', 'nije funkcija' as unknown as ReceiptCheck, /provjera potvrde: /],
+  ['is not a function', 'nije funkcija' as unknown as ReceiptCheck, /potvrda: provjera potvrde: .*not a function$/],
+  ['throws an Error with a blank message', () => { throw new Error(' \t'); }, /provjera potvrde: -$/],
   ...([[undefined, 'undefined'], ['', "''"], [' ', "' '"], ['\u00a0', 'NBSP'], [0, '0'], [false, 'false'], [{}, '{}'], [Symbol('s'), 'Symbol'], [Object.create(null), 'Object.create(null)'],
     [{ toString() { throw new Error('toString'); } }, 'an object whose toString throws']] as const).map(
     ([v, name]): [string, ReceiptCheck, RegExp] => [`returns ${name}`, () => v as unknown as string, /provjera potvrde nije dala razlog/]),
@@ -252,7 +259,7 @@ test('the receipt check gets the commit\'s own receipt, never an inherited one',
   assert.deepEqual(seen, [signed, undefined, undefined]);
 });
 
-test('the fallback report reads nothing that can throw', () => {
+test('the fallback report survives a sentence and a meta that throw when read', () => {
   const trap = { status: 200, get body(): Record<string, unknown> { throw new Error('zamka'); } };
   const o = { ...good(), secondOpen: trap };
   Object.defineProperty(o, 'sentence', { get(): string { throw new Error('rečenica'); } });

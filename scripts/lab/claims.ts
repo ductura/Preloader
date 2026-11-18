@@ -37,17 +37,31 @@ export const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').upd
 
 const claim = (id: string, pass: boolean, detail: string): Claim => ({ id, pass, detail });
 
+/** Whether v is a list; a revoked Proxy, on which Array.isArray throws, is null: neither list nor object. */
+function isList(v: unknown): boolean | null {
+  try {
+    return Array.isArray(v);
+  } catch {
+    return null;
+  }
+}
+
 /** A value of an answer as text for a detail, calling nothing on it (no toString, valueOf or toJSON). */
 export function text(v: unknown): string {
   if (v === null || v === undefined) return '-';
   if (typeof v === 'string') return v;
-  if (typeof v === 'object' || typeof v === 'function') return Array.isArray(v) ? '[niz]' : '[objekt]';
+  if (typeof v === 'object' || typeof v === 'function') return isList(v) === true ? '[niz]' : '[objekt]';
   return String(v);
 }
 
-/** An own field of an answer body; nothing inherited. */
-const own = (body: Record<string, unknown> | null, key: string): unknown =>
-  body !== null && Object.hasOwn(body, key) ? body[key] : undefined;
+/** An own field of an answer body; nothing inherited, and a field that cannot be read is no field. */
+function own(body: Record<string, unknown> | null, key: string): unknown {
+  try {
+    return body !== null && Object.hasOwn(body, key) ? body[key] : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const isPid = (v: unknown): v is number => Number.isSafeInteger(v) && (v as number) > 0;
 
@@ -56,10 +70,11 @@ const filled = (v: unknown): v is string => typeof v === 'string' && v.trim() !=
 
 const isSha = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{40}$/.test(v);
 
-/** A value thrown at us as text, or '-' when even reading it throws. */
+/** A value thrown at us as text, or '-' when it is blank or even reading it throws. */
 function thrown(e: unknown): string {
   try {
-    return e instanceof Error ? text(e.message) : text(e);
+    const why = e instanceof Error ? text(e.message) : text(e);
+    return filled(why) ? why : '-';
   } catch {
     return '-';
   }
@@ -80,7 +95,7 @@ function receiptProblem(check: ReceiptCheck | null, receipt: unknown): string | 
 /** The body of a 200 answer when it is a JSON object, else null: a body of null or a list counts as no answer. */
 function okBody(a: Answer | null): Record<string, unknown> | null {
   const body: unknown = a?.status === 200 ? a.body : null;
-  return typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
+  return typeof body === 'object' && body !== null && isList(body) === false ? (body as Record<string, unknown>) : null;
 }
 
 /** The document of the second open in strict standard base64, decoded here, or null. */
