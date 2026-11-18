@@ -1,5 +1,6 @@
 // Statična stranica preloadera; skripta i stil ugrađuju se pri izgradnji.
 import { defaultConfig, type Config } from './config.ts';
+import { signInHref, signInTarget } from './sign-in/index.ts';
 import { clientText, errorText, PACKAGE_LABELS, text } from './text.ts';
 
 const ENTITIES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -25,6 +26,10 @@ export function renderPage(assets: { script: string; css: string }, config: Conf
 <main class="sheet">
 <h1 class="brand">Ductur<span>a</span></h1>
 <p class="lead">${e(text.lead)}</p>
+<nav id="sign-in" class="sign-in" aria-label="${e(text.signIn)}">
+<a id="sign-in-aai" class="button" href="${e(signInHref(signInTarget(config.signIn.returnTo)))}">${e(text.signInAai)}</a>
+<a id="sign-in-admin" class="button secondary" href="${e(config.signIn.admin)}">${e(text.signInAdmin)}</a>
+</nav>
 <p><a id="open-app" class="button" href="${e(config.frontends.other)}">${e(text.openApp)}</a></p>
 <p id="desktop-offer" hidden><a id="desktop-download" href=""></a></p>
 <section id="choice" class="choice" aria-labelledby="choice-title" hidden>

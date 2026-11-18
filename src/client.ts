@@ -63,6 +63,14 @@ export function applyRoute(
 
   const section = doc.getElementById('choice');
   let cancel = navigate(route.url, REDIRECT_DELAY_MS);
+  const stop = (): void => {
+    cancel?.();
+    cancel = undefined;
+  };
+  // Prijava (#2028 §3.1): fokus ili dodir na njoj otkazuje automatsko preusmjeravanje,
+  // da odlazak na web ne preteče izbor administracije ili AAI@EduHr.
+  const signIn = doc.getElementById('sign-in');
+  for (const type of ['focusin', 'pointerdown'] as const) signIn?.addEventListener(type, stop);
   if (!section) return route;
   section.hidden = false;
   section.addEventListener('click', (event) => {
@@ -72,8 +80,7 @@ export function applyRoute(
     const pkg = button.getAttribute('data-package') as DesktopPackage | null;
     if (!view && !pkg) return;
     // Korisnik bira: automatsko preusmjeravanje više ne smije preteći njegov klik.
-    cancel?.();
-    cancel = undefined;
+    stop();
     manual = view ? { ...manual, view } : { ...manual, package: pkg ?? undefined };
     const saved = writeChoice(store, manual);
     decision = resolveChoice(auto, manual);

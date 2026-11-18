@@ -8,6 +8,8 @@ Ulaz u Ducturu (ductura.org). Statična stranica koja u pregledniku prepoznaje u
 | Mobitel ili tablet (bilo koji preglednik) | `mobile` | – |
 | Firefox, Safari, Edge, Opera i ostali na računalu | `other` | Windows ili macOS |
 
+Prvi ekran nudi i dva ulaza za prijavu (ugovor Ductus #2028 §3.1): **Prijava preko AAI@EduHr** (`/api/v1/auth/login?returnTo=/app/web/`) i **Administracija platforme** (`/admin/prijava`). Fokus ili dodir na njima otkazuje automatsko preusmjeravanje.
+
 Bez JavaScripta stranica nudi sve izbore. Putanje su u `src/config.ts`. Vizualni smjer je „papir i grafit” (Ductus `docs/design/DESIGN-SYSTEM.md`).
 
 ## Naredbe
@@ -19,7 +21,11 @@ pnpm test        # vitest
 pnpm build       # dist/index.html i dist/greska.html (stil i skripta ugrađeni)
 pnpm budget      # gzip proračun iz budget.json; prekoračenje vraća izlazni kod 1
 pnpm e2e         # matrica preglednika (P-0.11): izgradnja + Playwright u Chromiumu, Firefoxu i WebKitu
+pnpm edge        # lokalni edge na http://localhost:8000 (treba dist/)
+pnpm sve         # cijela Ductura lokalno iz susjednih checkouta, iza edgea na :8000
 ```
+
+Cijeli lokalni tok (usluge, portovi, rute edgea, prijava) je u `docs/LOKALNO.md`.
 
 CI poziva `ci-node.yml` iz `ductura/.github` sa skriptama `typecheck test build budget`. Posao `e2e-matrix` radi u službenoj Playwright slici prikovanoj digestom i pokreće `pnpm e2e`. Preglednici i njihovi sistemski paketi dolaze sa slikom, pa posao nema apt ni `playwright install` (DAN-1101). Oznaka slike mora navesti inačicu `@playwright/test` iz `package.json` (`test/e2e-image.test.ts` provjerava samo tekst oznake i oblik digesta). Docker povlači sliku po digestu, pa nova inačica Playwrighta traži novu oznaku i digest te slike. Kriva slika ruši `pnpm e2e`, jer u njoj nema preglednika potrebne revizije. Uz matricu idu axe (bez kršenja razine serious ili critical) i ručni izbor samo tipkovnicom (`e2e/matrix/a11y.spec.ts`). Opera je ručna provjera.
 
