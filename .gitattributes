@@ -1,3 +1,6 @@
 # DAN-922: the vendored Dependabot schema is pinned by sha256 over its bytes, so
 # a CRLF checkout (core.autocrlf=true) must not change them.
 scripts/dependabot/dependabot-2.0.json text eol=lf
+
+# DAN-1097: CI runs the browser install script with bash; a CRLF checkout must not break it.
+scripts/*.sh text eol=lf
