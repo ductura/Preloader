@@ -3,6 +3,9 @@
 // on its own; the run itself is scripts/lab/oporavak.ts.
 import { createHash } from 'node:crypto';
 
+import type { Probe } from './probe.ts';
+import { type ReceiptExpectation, type ReceiptTrust, checkReceipt } from './receipt.ts';
+
 export type Answer = { status: number; body: Record<string, unknown> };
 
 export type Observed = {
@@ -11,8 +14,12 @@ export type Observed = {
   sent: Uint8Array | null;
   firstOpen: Answer | null;
   commit: Answer | null;
-  /** Whether /api/v1/health answered between down and up. */
-  healthBetween: boolean | null;
+  /** The stack's receipt key, from its seed and the key registry (receipt.ts). */
+  trust: ReceiptTrust | null;
+  /** The commit, segment and student the receipt has to name. */
+  expected: ReceiptExpectation | null;
+  /** The server's port between down and up (probe.ts); only 'refused' is down. */
+  healthBetween: Probe | null;
   pidBefore: number | null;
   pidAfter: number | null;
   secondOpen: Answer | null;
@@ -35,19 +42,21 @@ export function claims(o: Observed): Claim[] {
   const doc = reopened(o);
   const own = doc === null ? null : sha256Hex(doc);
   const sent = o.sent === null ? null : sha256Hex(o.sent);
-  const receipt = o.commit?.body['receipt'];
-  const signed = typeof receipt === 'object' && receipt !== null && (receipt as { status?: unknown }).status === 'signed';
+  const why =
+    o.trust === null || o.expected === null
+      ? 'nema ključa stoga ili očekivanog commita'
+      : checkReceipt(o.commit?.body['receipt'], o.trust, o.expected);
   const first = o.firstOpen?.status === 200 ? o.firstOpen.body['documentId'] : undefined;
   return [
     claim(
       'L-1',
-      o.commit?.status === 200 && o.commit.body['status'] === 'committed' && o.commit.body['revision'] === 1 && signed,
-      `commit ${o.commit?.status ?? '-'} ${String(o.commit?.body['status'] ?? '-')}, revizija ${String(o.commit?.body['revision'] ?? '-')}, potvrda ${signed ? 'potpisana' : 'nije potpisana'}`,
+      o.commit?.status === 200 && o.commit.body['status'] === 'committed' && o.commit.body['revision'] === 1 && why === null,
+      `commit ${o.commit?.status ?? '-'} ${String(o.commit?.body['status'] ?? '-')}, revizija ${String(o.commit?.body['revision'] ?? '-')}, potvrda: ${why ?? 'potpis provjeren ključem stoga'}`,
     ),
     claim(
       'L-2',
-      o.healthBetween === false && o.pidBefore !== null && o.pidAfter !== null && o.pidBefore !== o.pidAfter,
-      `health između down i up: ${o.healthBetween === null ? '-' : o.healthBetween ? 'odgovara' : 'ne odgovara'}; PID ${o.pidBefore ?? '-'} -> ${o.pidAfter ?? '-'}`,
+      o.healthBetween === 'refused' && o.pidBefore !== null && o.pidAfter !== null && o.pidBefore !== o.pidAfter,
+      `port servera između down i up: ${o.healthBetween ?? '-'}; PID ${o.pidBefore ?? '-'} -> ${o.pidAfter ?? '-'}`,
     ),
     claim(
       'L-3',
@@ -66,6 +75,20 @@ export function claims(o: Observed): Claim[] {
       `ovdje ${own ?? '-'}, server ${String(second?.['documentHash'] ?? '-')}, poslano ${sent ?? '-'}`,
     ),
   ];
+}
+
+/**
+ * The preloader SHA of the report: always the checked-out HEAD (`git rev-parse
+ * HEAD` output). A SHA the caller names (LAB_PRELOADER_SHA) is only checked
+ * against it, so the report never names code other than what ran.
+ */
+export function preloaderSha(head: string | null, claimed: string | undefined): { sha: string | null; error: string | null } {
+  const sha = head !== null && /^[0-9a-f]{40}\n$/.test(head) ? head.slice(0, 40) : null;
+  if (sha === null) return { sha: null, error: 'HEAD preloadera nije čitljiv' };
+  if (claimed !== undefined && claimed !== '' && claimed !== sha) {
+    return { sha, error: `LAB_PRELOADER_SHA ${claimed} nije izvršeni HEAD ${sha}` };
+  }
+  return { sha, error: null };
 }
 
 export type Meta = {

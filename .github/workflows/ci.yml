@@ -36,21 +36,23 @@ jobs:
       PGBIN: /usr/lib/postgresql/17/bin
       SERVER_SHA: f2d5178f136551eb2ec1d51eac9ea9815c1ff1ba # ductura/server main, DAN-759
     steps:
+      # The PR head itself, not GitHub's merge commit: the report names the code that ran.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
+        with: { ref: "${{ github.event.pull_request.head.sha || github.sha }}", persist-credentials: false }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { repository: ductura/server, ref: "${{ env.SERVER_SHA }}", path: server-src, persist-credentials: false }
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version-file: .nvmrc }
-      # Isti PGDG korak kao u ductura/server ci.yml (DAN-953), bez pgTAP paketa.
+      # PGDG kao u ductura/server ci.yml (DAN-953), bez pgTAP paketa; datoteka ključa
+      # smije sadržavati točno zadani ključ (scripts/ci/pgdg-key.ts).
       - name: Install PostgreSQL 17 (PGDG)
         env:
           PGDG_KEY_FINGERPRINT: B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
         run: |
           pgdg_install() {
             curl -fsSL -o "$RUNNER_TEMP/pgdg.asc" https://www.postgresql.org/media/keys/ACCC4CF8.asc &&
-              gpg --show-keys --with-colons "$RUNNER_TEMP/pgdg.asc" | grep -qx "fpr:::::::::$PGDG_KEY_FINGERPRINT:" &&
+              gpg --show-keys --with-colons "$RUNNER_TEMP/pgdg.asc" | node scripts/ci/pgdg-key.ts "$PGDG_KEY_FINGERPRINT" &&
               sudo install -D -m 0644 "$RUNNER_TEMP/pgdg.asc" /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc &&
               . /etc/os-release &&
               echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main"                 | sudo tee /etc/apt/sources.list.d/pgdg.list &&
@@ -59,12 +61,15 @@ jobs:
           }
           pgdg_install || { echo "::warning::PGDG install failed, retrying once in 30 s"; sleep 30; pgdg_install; }
       - run: pnpm install --frozen-lockfile
+      - name: Vendored receipt vector matches the server
+        run: node scripts/lab/vendored.ts server-src test/fixtures/receipt-v2-golden.json
       - name: Build the server
         working-directory: server-src
         run: pnpm install --frozen-lockfile && pnpm build
       - name: Run the lab
         env:
           SERVER_DIR: ${{ github.workspace }}/server-src
+          # Checked against git rev-parse HEAD; a mismatch fails the lab.
           LAB_PRELOADER_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: PATH="$PGBIN:$PATH" pnpm lab:oporavak
       - if: always()

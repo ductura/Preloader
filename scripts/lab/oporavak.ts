@@ -7,7 +7,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { type Answer, type Observed, report, sha256Hex } from './claims.ts';
+import { type Answer, type Observed, preloaderSha, report, sha256Hex } from './claims.ts';
+import { probePort } from './probe.ts';
+import { type ReceiptTrust, publicKeyFromSeed, registryRow } from './receipt.ts';
 
 type State = {
   repos: { server: { sha: string; dirty: boolean } };
@@ -32,17 +34,35 @@ function stack(cmd: 'up' | 'down'): void {
 
 const readState = (): State => JSON.parse(readFileSync(join(STACK, 'state.json'), 'utf8')) as State;
 
-async function healthAnswers(port: number): Promise<boolean> {
-  try {
-    await fetch(`http://127.0.0.1:${port}/api/v1/health`, { signal: AbortSignal.timeout(2_000) });
-    return true;
-  } catch {
-    return false;
-  }
+const psql = (port: number, input: string, stdout: 'pipe' | 'ignore'): string =>
+  execFileSync('psql', ['-h', STACK, '-p', String(port), '-U', 'ductus', '-d', 'ductus', '-X', '-q', '-t', '-A'], {
+    input,
+    encoding: 'utf8',
+    env: { PATH: process.env['PATH'] ?? '' },
+    stdio: ['pipe', stdout, 'inherit'],
+  }) ?? '';
+
+/**
+ * The receipt key the lab trusts: the public key of the seed the running
+ * server signs with (its own environment, read by the stack's helper), and
+ * that key's label and domain from the key registry. No server response.
+ */
+function stackTrust(port: number, env: Record<string, string>): ReceiptTrust {
+  const file = env['DUCTUS_DEV_SIGNING_KEY_FILE'];
+  if (!file) throw new Error('server stoga nema DUCTUS_DEV_SIGNING_KEY_FILE');
+  const keyBase64Url = publicKeyFromSeed(readFileSync(file));
+  const row = registryRow(
+    psql(port, `\\set key '${keyBase64Url}'
+SELECT key_id || '|' || key_version || '|' || evidence_domain_id FROM evidence.signing_key
+ WHERE key_base64url = :'key' AND purpose = 'receipt' AND algorithm = 'Ed25519' AND revoked_at IS NULL;
+`, 'pipe'),
+  );
+  if (row === null) throw new Error('ključ sjemena nije točno jedan aktivan ključ potvrda u registru');
+  return { keyBase64Url, ...row };
 }
 
 /** Invented student, course and assignment, written through the stack socket; seeding only. */
-function seed(port: number, token: string): string {
+function seed(port: number, token: string): { assignmentId: string; studentId: string } {
   const ids = { student: randomUUID(), teacher: randomUUID(), course: randomUUID(), assignment: randomUUID() };
   const vars = { slug: INSTITUTION, tag: randomBytes(4).toString('hex'), token, ...ids };
   const sets = Object.entries(vars).map(([k, v]) => `\\set ${k} '${v}'`).join('\n');
@@ -70,12 +90,8 @@ INSERT INTO institution.notice_acknowledgment (assignment_id, version_no, studen
 VALUES (:'assignment', 1, :'student', :'inst');
 COMMIT;
 `;
-  execFileSync('psql', ['-h', STACK, '-p', String(port), '-U', 'ductus', '-d', 'ductus', '-X', '-q'], {
-    input: sql,
-    env: { PATH: process.env['PATH'] ?? '' },
-    stdio: ['pipe', 'ignore', 'inherit'],
-  });
-  return ids.assignment;
+  psql(port, sql, 'ignore');
+  return { assignmentId: ids.assignment, studentId: ids.student };
 }
 
 type Segment = Record<string, unknown> & { events: Record<string, unknown>[] };
@@ -109,6 +125,7 @@ function commitRequest(canon: (v: unknown) => string, opened: Record<string, unk
   });
   return {
     sent: Buffer.from(document, 'utf8'),
+    segmentHash: sha256Hex(Buffer.from(segment, 'utf8')),
     body: {
       documentId: opened['documentId'],
       clientTransactionId: tx,
@@ -123,28 +140,49 @@ async function main(): Promise<number> {
   const startedAt = new Date().toISOString();
   const o: Observed = {
     sentence: `Izmišljena rečenica laboratorija ${randomUUID()}.`,
-    sent: null, firstOpen: null, commit: null, healthBetween: null, pidBefore: null, pidAfter: null, secondOpen: null,
+    sent: null, firstOpen: null, commit: null, trust: null, expected: null,
+    healthBetween: null, pidBefore: null, pidAfter: null, secondOpen: null,
   };
-  let error: string | null = null;
+  let head: string | null = null;
+  try {
+    head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
+  } catch {
+    head = null;
+  }
+  const sha = preloaderSha(head, process.env['LAB_PRELOADER_SHA']);
+  let error: string | null = sha.error;
   let state: State | null = null;
   let started = false;
   try {
+    if (error !== null) throw new Error(error);
     if (!process.env['SERVER_DIR']) throw new Error('SERVER_DIR nije zadan');
-    const { post } = await fromServer<{ post: (port: number, path: string, body: unknown, token: string) => Promise<Answer> }>('scripts/stack/vs1-commit-check.ts');
+    type CommitCheck = {
+      post: (port: number, path: string, body: unknown, token: string) => Promise<Answer>;
+      stackServerEnv: (state: State) => Record<string, string>;
+    };
+    const { post, stackServerEnv } = await fromServer<CommitCheck>('scripts/stack/vs1-commit-check.ts');
     const { canonicalizeJcs } = await fromServer<{ canonicalizeJcs: (v: unknown) => string }>('server/domain/index.ts');
     started = true;
     stack('up');
     state = readState();
     const token = randomBytes(32).toString('base64url');
-    const assignmentId = seed(state.ports.postgres, token);
+    const { assignmentId, studentId } = seed(state.ports.postgres, token);
+    o.trust = stackTrust(state.ports.postgres, stackServerEnv(state));
     o.firstOpen = await post(state.ports.server, '/api/v1/evidence/open', { assignmentId, start: true }, token);
     if (o.firstOpen.status !== 200) throw new Error(`prvi open: ${o.firstOpen.status}`);
     const req = commitRequest(canonicalizeJcs, o.firstOpen.body, o.sentence);
     o.sent = req.sent;
+    o.expected = {
+      documentId: String(o.firstOpen.body['documentId']),
+      clientTransactionId: req.body.clientTransactionId,
+      revision: 1,
+      principalId: studentId,
+      segmentHash: req.segmentHash,
+    };
     o.commit = await post(state.ports.server, '/api/v1/evidence/commit', req.body, token);
     o.pidBefore = state.processes.server?.pid ?? null;
     stack('down');
-    o.healthBetween = await healthAnswers(state.ports.server);
+    o.healthBetween = await probePort(state.ports.server);
     stack('up');
     state = readState();
     o.pidAfter = state.processes.server?.pid ?? null;
@@ -160,25 +198,18 @@ async function main(): Promise<number> {
       }
     }
   }
-  let preloaderSha = process.env['LAB_PRELOADER_SHA'] ?? null;
-  if (preloaderSha === null) {
-    try {
-      preloaderSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-    } catch {
-      preloaderSha = null;
-    }
-  }
   const out = report(o, {
-    preloaderSha,
+    preloaderSha: sha.sha,
     serverSha: state?.repos.server.sha ?? null,
     serverDirty: state?.repos.server.dirty ?? null,
     startedAt,
     finishedAt: new Date().toISOString(),
     error,
   });
-  const text = `${JSON.stringify(out, null, 2)}\n`;
-  writeFileSync(OUT, text);
-  process.stdout.write(text);
+  // The report is the file only: pnpm writes its own lines to stdout.
+  writeFileSync(OUT, `${JSON.stringify(out, null, 2)}\n`);
+  const lines = out.claims.map((c) => `${c.id} ${c.pass ? 'PASS' : 'FAIL'}`);
+  process.stdout.write(`lab:oporavak ${out.result} ${OUT}\n${out.error === null ? '' : `greška: ${out.error}\n`}${lines.join('\n')}\n`);
   return out.result === 'PASS' ? 0 : 1;
 }
 
