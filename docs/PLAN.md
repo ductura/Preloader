@@ -2,11 +2,11 @@ Kanonski plan migracije: [PLAN-MIGRACIJE.md](https://github.com/ductura/.github/
 
 # Ductura/preloader: plan repozitorija
 
-Stanje: 14. 11. 2026. · **Samo plan.** Izvori kao u [plan servera](https://github.com/ductura/server/blob/main/docs/PLAN.md) i Ductus `origin/main` 220b5db7. Uključuje vlasnikove odluke 14. 11. (A: jedan web repo, prijenos s testovima, ugovor prvi; B: ugovor kao izvor koda, `ductura/.github`, zajednički paket lažnih zamjena). Ispravak 17. 11.: domena je `ductura.org` (vlasnikova odluka, Ductus#2012 c.6934113245).
+Stanje: 14. 11. 2026. · **Samo plan.** Izvori kao u [plan servera](https://github.com/ductura/Institution_server/blob/main/docs/PLAN.md) i Ductus `origin/main` 220b5db7. Uključuje vlasnikove odluke 14. 11. (A: jedan web repo, prijenos s testovima, ugovor prvi; B: ugovor kao izvor koda, `ductura/.github`, zajednički paket lažnih zamjena). Ispravak 17. 11.: domena je `ductura.org` (vlasnikova odluka, Ductus#2012 c.6934113245).
 
 ## 1. Svrha i granica
 
-**Svrha.** Jedini ulaz na domeni. Provjerava server, prepoznaje okruženje, otvara web (jedan repo `ductura/web`, odluka A1) u pravom prikazu i nudi pravi desktop paket. Drži sve stranice grešaka, traku kolačića i pristanak, ulaz u prijavu, javnu info stranicu (3e), javne pravne tekstove, stranicu za preuzimanje i konfiguraciju proxyja na domeni.
+**Svrha.** Jedini ulaz na domeni. Provjerava server, prepoznaje okruženje, otvara web (jedan repo `ductura/Institution_front_web_chrome`, odluka A1) u pravom prikazu i nudi pravi desktop paket. Drži sve stranice grešaka, traku kolačića i pristanak, ulaz u prijavu, javnu info stranicu (3e), javne pravne tekstove, stranicu za preuzimanje i konfiguraciju proxyja na domeni.
 
 **Posljedica odluke A1:** prva odluka više ne bira jedno od tri web-sučelja nego samo **prikaz** u istom webu (računalo ili mobilno, PRIJEDLOG: kao početnu postavku koju web može promijeniti). Druga odluka (koji paket) ostaje ista. Matrica prvog vala §3 ostaje kao tablica testova, s novim očekivanim ishodom.
 
@@ -90,7 +90,7 @@ Za `critical` zadatke (P-0.6, P-0.7) PRIJEDLOG: gradi se nad lažnim serverom, a
 | **e2e (P-0.11)** | Chromium, Firefox, WebKit uz emulaciju: Desktop Chrome (Windows i Mac UA), Edge, Firefox, Safari, Pixel 7, iPhone, iPad, iPad u desktop načinu, prozor 600 px; za svaki: pravi prikaz, pravi gumb, ručna promjena se pamti; nedostupan paket nudi nastavak u webu. Opera ručno. |
 | **Pristanak i kolačići** | bez pristanka samo nužni kolačić sesije; izbor se pamti i mijenja; nova verzija uvjeta traži ponovni pristanak (`consentRequired: true`); popis kolačića = stvarni `Set-Cookie` (P-0.6). |
 | **Prijava** | gumb vodi samo na AAI@EduHr; za studenta nema drugog puta; mrežni inženjer dobiva FIDO2 korak (P-0.7). |
-| **Proxy** | `/` → preloader, putanja weba → izgradnja `ductura/web`, `/api/v1/` → server, `/preuzimanje/` → server; nepoznata putanja → 404; kolačić `__Host-` na jednom porijeklu; CSP i zaglavlja na svakoj putanji (P-0.10). |
+| **Proxy** | `/` → preloader, putanja weba → izgradnja `ductura/Institution_front_web_chrome`, `/api/v1/` → server, `/preuzimanje/` → server; nepoznata putanja → 404; kolačić `__Host-` na jednom porijeklu; CSP i zaglavlja na svakoj putanji (P-0.10). |
 | **Sistemski e2e** | `e2e/system/`: domena → preloader → web → server kroz pravi proxy (VS-1), noćno i za kandidata izdanja; SHA svakog repoa. |
 | **Vizualni** | prvi ekran, info, greške, traka kolačića na 1440, 768 i 400 px, „papir i grafit” (D-188), usporedba s odobrenom slikom (SESSIONS §6). |
 | **Pristupačnost** | axe na svakoj stranici; tipkovnica kroz traku kolačića i ručni izbor; kontrast D-188. |
