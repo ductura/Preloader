@@ -53,10 +53,11 @@ const PAYLOAD_TYPES: Record<string, Rule> = {
   evidenceDomainId: uuid, principalId: uuid,
 };
 const PAYLOAD = Object.keys(PAYLOAD_TYPES);
-// Key labels as registryRow reads them and the server generates them; narrower than the database CHECK, so it fails closed.
-const keyLabel = match(/^[\x21-\x7e]+$/);
+// Key labels as registryRow reads them and the server generates them, within the contract's lengths (keyId 2048,
+// keyVersion 256); narrower than the database CHECK, so it fails closed.
+const keyLabel = (max: number): Rule => (v) => str(v) && v.length <= max && /^[\x21-\x7e]+$/.test(v);
 const TRUST: Record<keyof ReceiptTrust, Rule> = {
-  keyBase64Url: (v) => base64Url(v, 44)?.subarray(0, 12).equals(SPKI_ED25519) === true, keyId: keyLabel, keyVersion: keyLabel, evidenceDomainId: uuid,
+  keyBase64Url: (v) => base64Url(v, 44)?.subarray(0, 12).equals(SPKI_ED25519) === true, keyId: keyLabel(2048), keyVersion: keyLabel(256), evidenceDomainId: uuid,
 };
 // The same rules as the payload fields they are compared with.
 const EXPECTED = Object.fromEntries(['documentId', 'clientTransactionId', 'revision', 'principalId', 'segmentHash'].map((k) => [k, PAYLOAD_TYPES[k]!]));
@@ -161,6 +162,7 @@ function check(receipt: unknown, trust: ReceiptTrust, expected: ReceiptExpectati
   if (!shaped(signed, SIGNED)) return 'potpisana potvrda nema oblik v2';
   const { payload, signature } = signed;
   if (!shaped(signature, SIGNATURE) || !shaped(payload, PAYLOAD)) return 'potpisana potvrda nema oblik v2';
+  if (![...SIGNATURE.map((k) => signature[k]), signed['payloadDigestSha256']].every(str)) return 'potpisana potvrda nema oblik v2';
   const badType = PAYLOAD.find((k) => !PAYLOAD_TYPES[k]!(payload[k]));
   if (badType !== undefined) return `potpisana potvrda nema oblik v2 (${badType})`;
   if (signature['algorithm'] !== 'Ed25519' || signature['signatureEncoding'] !== 'raw') return 'potpis nije Ed25519';
