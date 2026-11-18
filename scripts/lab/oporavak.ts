@@ -3,7 +3,7 @@
 // student, restarts the server, reopens the work and writes the report.
 import { execFileSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -53,8 +53,10 @@ function stackTrust(port: number, env: Record<string, string>): ReceiptTrust {
   const keyBase64Url = publicKeyFromSeed(readFileSync(file));
   const row = registryRow(
     psql(port, `\\set key '${keyBase64Url}'
-SELECT key_id || '|' || key_version || '|' || evidence_domain_id FROM evidence.signing_key
- WHERE key_base64url = :'key' AND purpose = 'receipt' AND algorithm = 'Ed25519' AND revoked_at IS NULL;
+SELECT k.key_id || '|' || k.key_version || '|' || k.evidence_domain_id || '|' || CASE WHEN k.key_base64url = :'key' AND k.algorithm = 'Ed25519' THEN 't' ELSE 'f' END
+  FROM evidence.signing_key k
+ WHERE k.evidence_domain_id IN (SELECT s.evidence_domain_id FROM evidence.signing_key s WHERE s.key_base64url = :'key')
+   AND k.purpose = 'receipt' AND k.revoked_at IS NULL AND (k.valid_to IS NULL OR k.valid_to > now());
 `, 'pipe'),
   );
   if (row === null) throw new Error('ključ sjemena nije točno jedan aktivan ključ potvrda u registru');
@@ -162,6 +164,8 @@ async function main(): Promise<number> {
     };
     const { post, stackServerEnv } = await fromServer<CommitCheck>('scripts/stack/vs1-commit-check.ts');
     const { canonicalizeJcs } = await fromServer<{ canonicalizeJcs: (v: unknown) => string }>('server/domain/index.ts');
+    // Never down a stack this run did not bring up.
+    if (existsSync(join(STACK, 'state.json'))) throw new Error('stog je već podignut; laboratorij ga ne dira');
     started = true;
     stack('up');
     state = readState();

@@ -74,14 +74,18 @@ export function publicKeyFromSeed(seed: Uint8Array): string {
   return createPublicKey(key).export({ type: 'spki', format: 'der' }).toString('base64url');
 }
 
-/** One registry row `key_id|key_version|evidence_domain_id` (psql -t -A), or null. */
+/**
+ * The active receipt keys of the seed key's domain, one row
+ * `key_id|key_version|evidence_domain_id|is_seed_key` each (psql -t -A):
+ * exactly one row, and it is the seed's key (`t`); otherwise null.
+ */
 export function registryRow(output: string): Omit<ReceiptTrust, 'keyBase64Url'> | null {
   const lines = output.split('\n').filter((line) => line !== '');
   if (lines.length !== 1) return null;
   const fields = lines[0]!.split('|');
-  if (fields.length !== 3 || fields.some((f) => !/^[\x21-\x7e]+$/.test(f))) return null;
-  const [keyId, keyVersion, evidenceDomainId] = fields as [string, string, string];
-  return UUID_V4.test(evidenceDomainId) ? { keyId, keyVersion, evidenceDomainId } : null;
+  if (fields.length !== 4 || fields.some((f) => !/^[\x21-\x7e]+$/.test(f))) return null;
+  const [keyId, keyVersion, evidenceDomainId, seedKey] = fields as [string, string, string, string];
+  return UUID_V4.test(evidenceDomainId) && seedKey === 't' ? { keyId, keyVersion, evidenceDomainId } : null;
 }
 
 /** Null when `receipt` is a signed receipt v2 of exactly `expected` under `trust`; otherwise why not. */

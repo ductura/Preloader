@@ -31,27 +31,37 @@ export const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').upd
 
 const claim = (id: string, pass: boolean, detail: string): Claim => ({ id, pass, detail });
 
-/** The document of the second open, decoded here, or null. */
+/** The body of a 200 answer when it is a JSON object, else null: a body of null or a list counts as no answer. */
+function okBody(a: Answer | null): Record<string, unknown> | null {
+  const body: unknown = a?.status === 200 ? a.body : null;
+  return typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : null;
+}
+
+/** The document of the second open in strict standard base64, decoded here, or null. */
 function reopened(o: Observed): Buffer | null {
-  const doc = o.secondOpen?.status === 200 ? o.secondOpen.body['document'] : undefined;
-  return typeof doc === 'string' ? Buffer.from(doc, 'base64') : null;
+  const doc = okBody(o.secondOpen)?.['document'];
+  if (typeof doc !== 'string') return null;
+  const bytes = Buffer.from(doc, 'base64');
+  // Node skips stray characters; only one spelling of the bytes counts.
+  return bytes.toString('base64') === doc ? bytes : null;
 }
 
 export function claims(o: Observed): Claim[] {
-  const second = o.secondOpen?.status === 200 ? o.secondOpen.body : null;
+  const second = okBody(o.secondOpen);
+  const commit = okBody(o.commit);
   const doc = reopened(o);
   const own = doc === null ? null : sha256Hex(doc);
   const sent = o.sent === null ? null : sha256Hex(o.sent);
   const why =
     o.trust === null || o.expected === null
       ? 'nema ključa stoga ili očekivanog commita'
-      : checkReceipt(o.commit?.body['receipt'], o.trust, o.expected);
-  const first = o.firstOpen?.status === 200 ? o.firstOpen.body['documentId'] : undefined;
+      : checkReceipt(commit?.['receipt'], o.trust, o.expected);
+  const first = okBody(o.firstOpen)?.['documentId'];
   return [
     claim(
       'L-1',
-      o.commit?.status === 200 && o.commit.body['status'] === 'committed' && o.commit.body['revision'] === 1 && why === null,
-      `commit ${o.commit?.status ?? '-'} ${String(o.commit?.body['status'] ?? '-')}, revizija ${String(o.commit?.body['revision'] ?? '-')}, potvrda: ${why ?? 'potpis provjeren ključem stoga'}`,
+      commit?.['status'] === 'committed' && commit['revision'] === 1 && why === null,
+      `commit ${o.commit?.status ?? '-'} ${String(commit?.['status'] ?? '-')}, revizija ${String(commit?.['revision'] ?? '-')}, potvrda: ${why ?? 'potpis provjeren ključem stoga'}`,
     ),
     claim(
       'L-2',
@@ -103,7 +113,7 @@ export type Meta = {
 /** The report; field names of VS-1.12 so a later vs-run.json (DAN-887) can take them over. */
 export function report(o: Observed, meta: Meta) {
   const list = claims(o);
-  const second = o.secondOpen?.status === 200 ? o.secondOpen.body : null;
+  const second = okBody(o.secondOpen);
   const doc = reopened(o);
   return {
     schema: 'ductura.lab.oporavak/1',

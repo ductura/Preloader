@@ -52,4 +52,5 @@ test('the vendored check refuses any drift from its source', () => {
   assert.notEqual(vendoredProblem(source, { ...own, verificationKey: { ...(own.verificationKey as object), keyId: 'x' } }, sha), null);
   assert.notEqual(vendoredProblem(Buffer.concat([source, Buffer.from('\n')]), own, sha), null);
   assert.notEqual(vendoredProblem(source, own, 'f'.repeat(40)), null);
+  assert.notEqual(vendoredProblem(source, { ...own, source: { ...own.source, path: 'server/domain/forensics/golden-vectors/evidence-v3.json' } }, sha), null);
 });

@@ -10,9 +10,9 @@ Ulaz: `SERVER_DIR`, kopija `ductura/server` s instaliranim paketima i `pnpm buil
 
 Tijek:
 
-1. `pnpm stack:vs1 up` u `SERVER_DIR`, s `--env ci` u CI-ju (`CI=true`), inače `--env local`.
+1. `pnpm stack:vs1 up` u `SERVER_DIR`, s `--env ci` u CI-ju (`CI=true`), inače `--env local`. Ako stog već radi (postoji `state.json`), laboratorij ne počinje i taj stog ne gasi.
 2. Izmišljeni student, kolegij i zadatak upisuju se `psql`-om kroz socket stoga (samo priprema, kao `scripts/stack/vs1-commit-check.ts`); sesija je upisani red.
-3. Ključ potvrda kojem laboratorij vjeruje ne dolazi iz odgovora servera. Javni ključ izvodi se ovdje iz sjemena kojim pokrenuti server potpisuje (`DUCTUS_DEV_SIGNING_KEY_FILE` iz okruženja tog procesa, `stackServerEnv` stoga). Oznaka, verzija i domena tog ključa čitaju se iz registra `evidence.signing_key`, gdje mora biti točno jedan aktivan ključ potvrda.
+3. Ključ potvrda kojem laboratorij vjeruje ne dolazi iz odgovora servera. Javni ključ izvodi se ovdje iz sjemena kojim pokrenuti server potpisuje (`DUCTUS_DEV_SIGNING_KEY_FILE` iz okruženja tog procesa, `stackServerEnv` stoga). Oznaka, verzija i domena tog ključa čitaju se iz registra `evidence.signing_key`. U domeni tog ključa mora biti točno jedan aktivan ključ potvrda (nije opozvan, `valid_to` nije prošao), i to upravo ključ sjemena.
 4. Kao student kroz API: `evidence/open` sa `start: true`, zatim `evidence/commit` s jednim segmentom čiji dokument nosi jedinstvenu izmišljenu rečenicu.
 5. `pnpm stack:vs1 down`, provjera da je veza na port servera odbijena, pa `pnpm stack:vs1 up` nad istim direktorijem stoga.
 6. Kao student kroz API: `evidence/open` bez `start` (otvara samo postojeći rad).
@@ -28,7 +28,7 @@ Svaka ima PASS ili FAIL u izvještaju. Ijedan FAIL ili prekid daje izlazni kod r
 | L-2 | Restart je stvaran: između `down` i `up` veza na port servera je odbijena, a PID servera nakon `up` razlikuje se od PID-a prije. Svaki drugi ishod je FAIL: odgovor bilo kojeg statusa, preusmjerenje, prekid nakon spajanja ili isteklo vrijeme. |
 | L-3 | Drugi `open` vraća isti `documentId`. |
 | L-4 | Drugi `open` vraća `currentRevision` 1. |
-| L-5 | Dokument iz drugog `open` bajt po bajt jednak je poslanom i sadrži jedinstvenu rečenicu. |
+| L-5 | Dokument iz drugog `open`, u strogom standardnom base64 (bez znakova izvan abecede, prijeloma redaka i base64url zapisa), bajt po bajt jednak je poslanom i sadrži jedinstvenu rečenicu. |
 | L-6 | SHA-256 dokumenta iz drugog `open`, izračunat ovdje (`node:crypto`), jednak je `documentHash` servera i hashu poslanog dokumenta. |
 
 Čitanje (L-3 do L-6) dokazuje se samo kroz API servera kao student. Administratorska veza na bazu služi samo za pripremu i za oznaku ključa iz registra; ne računa se kao dokaz čitanja.

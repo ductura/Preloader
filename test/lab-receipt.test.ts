@@ -84,6 +84,7 @@ const refused: [string, unknown, ReceiptTrust?][] = [
   ['an own toString in the payload', signed({ ...clone(p), toString: 'x' })],
   ['an inherited field', { ...vector(), signedReceipt: { ...vector().signedReceipt, payload: inherited } }],
   ['a field missing', signed(Object.fromEntries(Object.entries(p).filter(([k]) => k !== 'previousReceiptId')))],
+  ['a wrong digest field next to a good signature', (() => { const r = vector(); r.signedReceipt.payloadDigestSha256 = 'f'.repeat(64); return r; })()],
   ['a payload changed after signing', (() => { const r = vector(); r.signedReceipt.payload['payloadBytes'] = 124; return r; })()],
   ['a digest made again for a changed payload', (() => { const r = signed({ ...clone(p), payloadBytes: 124 }); r.signedReceipt.signature = clone(golden.accepted.signature) as typeof r.signedReceipt.signature; return r; })()],
   ['another key under the same label', signed(clone(p), other)],
@@ -117,10 +118,13 @@ for (const [name, receipt, t] of refused) {
   });
 }
 
-test('the registry row is exactly one key of one v4 domain', () => {
-  const row = 'dev-ed25519-0011|spki-sha256-00ff|d21fe0a3-103c-42e5-a29e-c102f9030af5';
+test('the registry holds exactly one active receipt key in the domain, and it is the seed key', () => {
+  const row = 'dev-ed25519-0011|spki-sha256-00ff|d21fe0a3-103c-42e5-a29e-c102f9030af5|t';
+  const otherKey = 'dev-ed25519-0022|spki-sha256-00ee|d21fe0a3-103c-42e5-a29e-c102f9030af5|f';
   assert.deepEqual(registryRow(`${row}\n`), { keyId: 'dev-ed25519-0011', keyVersion: 'spki-sha256-00ff', evidenceDomainId: 'd21fe0a3-103c-42e5-a29e-c102f9030af5' });
-  for (const bad of ['', '\n', `${row}\n${row}\n`, `${row}\r\n`, row.replace('|', '\t|'), row.replace('0011', '00 11'), row.replace('0011', '00\u007f11'), `${row}|x`, row.replace('42e5', '12e5')]) {
-    assert.equal(registryRow(bad), null, JSON.stringify(bad));
-  }
+  const bad = [
+    '', '\n', `${row}\n${row}\n`, `${row}\n${otherKey}\n`, `${otherKey}\n`, row.replace('|t', '|true'), row.replace('|t', ''),
+    `${row}\r\n`, row.replace('|', '\t|'), row.replace('0011', '00 11'), row.replace('0011', '00\u007f11'), `${row}|x`, row.replace('42e5', '12e5'),
+  ];
+  for (const b of bad) assert.equal(registryRow(b), null, JSON.stringify(b));
 });
