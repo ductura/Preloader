@@ -66,8 +66,10 @@ save_apt_cache() {
   local t part=""
   t=$(window 60)
   [ "$t" -gt 0 ] && cap "$t" sudo apt-get autoclean >/dev/null
+  # Nothing kept means nothing current: stale copies must not be saved again.
   if ! compgen -G "${archives}/*.deb" >/dev/null; then
-    echo "::notice::apt left no .deb files in ${archives}; the apt package cache stays as it is"
+    rm -f "$apt_cache"/*.deb
+    echo "::notice::apt left no .deb files in ${archives}; the apt package cache is emptied"
     return 0
   fi
   t=$(window 60)
@@ -82,8 +84,8 @@ save_apt_cache() {
 
 # use_mirror <host>: points every Ubuntu archive URL (http[s]://host/ubuntu[/]
 # at the line start or after a space, and followed by a space or the line end)
-# at <host>. Lines naming security.ubuntu.com (any case, any port) and
-# mirror+http lists stay as they are.
+# at <host>. URLs of security.ubuntu.com (any case, any port), also on a line
+# with an archive URL, and mirror+http lists stay as they are.
 fallbacks=(archive.ubuntu.com mirrors.edge.kernel.org)
 use_mirror() {
   local f t etc="${PLAYWRIGHT_APT_ROOT:-}/etc/apt" files=()
@@ -92,7 +94,7 @@ use_mirror() {
   done
   [ "${#files[@]}" -gt 0 ] || return 0
   # perl for the lookahead: the space after one URL may start the next one.
-  local edit="next if m{//security\.ubuntu\.com[:/]}i; s{(^|\s)(https?://)[^/\s]+/ubuntu(/?)(?=\s|\$)}{\$1\$2$1/ubuntu\$3}g"
+  local edit="s{(^|\s)(https?://)(?!(?i:security\.ubuntu\.com)[:/])[^/\s]+/ubuntu(/?)(?=\s|\$)}{\$1\$2$1/ubuntu\$3}g"
   t=$(window 20)
   if [ "$t" -gt 0 ] && cap "$t" sudo perl -i -pe "$edit" "${files[@]}"; then
     echo "::warning::the apt sources now use $1 for the Ubuntu archive"

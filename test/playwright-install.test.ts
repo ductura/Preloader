@@ -57,6 +57,7 @@ const LIST = [
   'deb mirror+http://lists.example/ubuntu/ noble main',
   'deb http://ports.ubuntu.com/ubuntu-ports noble main',
   'URIs: http://us-east-2.ec2.archive.ubuntu.com/ubuntu/ http://us-east-2.ec2.archive.ubuntu.com/ubuntu',
+  'URIs: http://us-east-2.ec2.archive.ubuntu.com/ubuntu/ http://Security.Ubuntu.com/ubuntu/ https://us-east-2.ec2.archive.ubuntu.com/ubuntu',
   '',
 ].join('\n');
 const apt = (file: string): string => readFileSync(at('etc/apt', file), 'utf8');
@@ -80,7 +81,8 @@ test('a hanging install is cut off by the budget, not by the job timeout (real t
   const r = run(['hang', 'hang', 'hang'], { PLAYWRIGHT_INSTALL_BUDGET: '3', PLAYWRIGHT_INSTALL_TIMEOUT: '1' }, false);
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /::error::Playwright browsers \(chromium firefox webkit\) could not be installed within 3s/);
-  assert.ok(r.ms < 15_000, `took ${r.ms} ms`);
+  // Contract (d): at most the budget (3 s) plus --kill-after (10 s).
+  assert.ok(r.ms < 13_000, `took ${r.ms} ms`);
 });
 
 test('no attempt gets more than what is left of the budget (fake clock)', () => {
@@ -190,6 +192,15 @@ test('an empty cache and an archive without .deb files are no error', () => {
   assert.equal(r.code, 0, r.out);
   assert.match(r.out, /::notice::apt left no \.deb files/);
   assert.ok(!existsSync(at('missing')));
+});
+
+test('a cache of only stale packages is emptied, not saved again', () => {
+  writeFileSync(at('cache/stale.deb'), 'x');
+  const r = run(['ok'], { PLAYWRIGHT_APT_CACHE_DIR: at('cache') });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.log, /^pnpm exec playwright install .*\| archives: stale\.deb $/m);
+  assert.match(r.out, /::notice::apt left no \.deb files .*emptied/);
+  assert.deepEqual(readdirSync(at('cache')), []);
 });
 
 // The workflow side: e2e-matrix restores both caches, installs through the
