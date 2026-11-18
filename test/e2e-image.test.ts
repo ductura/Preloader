@@ -161,8 +161,10 @@ const DEP_FIELDS = ['dependencies', 'optionalDependencies'];
 const LOCK_TOP = ['importers', 'lockfileVersion', 'packages', 'settings', 'snapshots'];
 const LOCK_SETTINGS = { autoInstallPeers: true, excludeLinksFromLockfile: false };
 // Every packages entry comes from the registry (resolution is exactly
-// { integrity }) except these, pinned whole: a tarball, git or directory
-// entry under another name could carry a `playwright` bin.
+// { integrity }) except these, pinned whole, so no tarball, git or directory
+// entry can bring Playwright under another name. A registry package with
+// another name and its own `playwright` bin (playwright-chromium, a fork) is
+// not checked here: pnpm e2e then fails, as it needs @playwright/test 1.63.0.
 const CONTRACTS = 'https://github.com/ductura/server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz';
 const NON_REGISTRY: Obj = {
   [`@ductura/contracts@${CONTRACTS}`]: {
