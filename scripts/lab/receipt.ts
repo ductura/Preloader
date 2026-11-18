@@ -1,0 +1,68 @@
+// DAN-1096 L-1: a signed receipt v2 (D-92) is signed over the RFC 8785 text of
+// its payload. jcs writes that text for plain JSON values and throws for
+// anything else; publicKeyFromSeed derives the key the lab trusts from the
+// stack's signing seed, never from a server response.
+import { createPrivateKey, createPublicKey } from 'node:crypto';
+import { types } from 'node:util';
+
+const PKCS8_ED25519 = Buffer.from('302e020100300506032b657004220420', 'hex');
+
+type Obj = Record<string, unknown>;
+
+/** Own enumerable data properties only: no getter, whose reads could differ. */
+const data = (value: object, key: PropertyKey): boolean => {
+  const field = Object.getOwnPropertyDescriptor(value, key);
+  return field !== undefined && field.enumerable === true && Object.hasOwn(field, 'value');
+};
+
+/** A plain object holding exactly `keys` as its own data properties: nothing inherited, hidden or extra, no Proxy. */
+function exact(value: unknown, keys: readonly string[]): value is Obj {
+  if (typeof value !== 'object' || value === null || types.isProxy(value) || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return false;
+  const own = Reflect.ownKeys(value);
+  return own.length === keys.length && keys.every((k) => data(value, k));
+}
+
+/** A plain dense array: Array.prototype, no Proxy, own data elements 0..length-1 and nothing else. */
+function dense(value: unknown[]): boolean {
+  if (types.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) return false;
+  const own = Reflect.ownKeys(value);
+  // A hole or an extra key changes the count; every key but length must be an index-held data value.
+  return own.length === value.length + 1 && own.every((k) => k === 'length' || data(value, k));
+}
+
+/** RFC 8785 for the plain JSON values a receipt payload holds; anything else throws `jcs: …`. */
+export const jcs = (value: unknown): string => write(value, new Set());
+
+function write(value: unknown, path: Set<object>): string {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) throw new Error('jcs: only safe integers');
+    return JSON.stringify(value);
+  }
+  if (typeof value !== 'object') throw new Error('jcs: not a JSON value');
+  if (types.isProxy(value)) throw new Error('jcs: a proxy');
+  if (path.has(value)) throw new Error('jcs: a cycle');
+  path.add(value);
+  let text: string;
+  if (Array.isArray(value)) {
+    if (!dense(value)) throw new Error('jcs: not a plain dense array');
+    text = `[${value.map((v) => write(v, path)).join(',')}]`;
+  } else if (exact(value, Object.keys(value))) {
+    // Plain sort compares UTF-16 code units, which is the order of RFC 8785.
+    const keys = Object.keys(value).sort();
+    text = `{${keys.map((k) => `${JSON.stringify(k)}:${write(value[k], path)}`).join(',')}}`;
+  } else {
+    throw new Error('jcs: not a JSON value');
+  }
+  path.delete(value);
+  return text;
+}
+
+/** The Ed25519 public key (SPKI DER, base64url) of a 32-byte seed, as the stack's signer derives it. */
+export function publicKeyFromSeed(seed: Uint8Array): string {
+  if (!(seed instanceof Uint8Array) || seed.byteLength !== 32) throw new Error('sjeme ključa nema 32 bajta');
+  const key = createPrivateKey({ key: Buffer.concat([PKCS8_ED25519, seed]), format: 'der', type: 'pkcs8' });
+  return createPublicKey(key).export({ type: 'spki', format: 'der' }).toString('base64url');
+}
