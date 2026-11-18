@@ -11,24 +11,67 @@ import { pathToFileURL } from 'node:url';
 /** The one source the copy may come from. */
 export const SOURCE_PATH = 'server/domain/forensics/golden-vectors/evidence-v2.json';
 
-type Fixture = { source: { commit: string; path: string; blob: string }; verificationKey: unknown; accepted: unknown };
+type Obj = Record<string, unknown>;
+const SHA = /^[0-9a-f]{40}$/;
+const FIXTURE = ['source', 'verificationKey', 'accepted'];
+const SOURCE = ['repository', 'commit', 'path', 'blob', 'take'];
 
-/** Null when `fixture` holds exactly the source's values and names the source's blob and commit; otherwise why not. */
-export function vendoredProblem(source: Buffer, fixture: Fixture, serverSha: string): string | null {
-  if (fixture.source.path !== SOURCE_PATH) return `kopija nije iz ${SOURCE_PATH}`;
+/** A plain JSON object holding exactly `keys` as its own properties. */
+function exact(value: unknown, keys: readonly string[]): value is Obj {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const own = Object.keys(value);
+  return own.length === keys.length && keys.every((k) => Object.hasOwn(value, k));
+}
+
+/** An own property of a JSON object, or undefined; nothing inherited. */
+const own = (value: unknown, key: string): unknown =>
+  typeof value === 'object' && value !== null && Object.hasOwn(value, key) ? (value as Obj)[key] : undefined;
+
+/**
+ * Null when `fixture` holds exactly the source's values and names the source's
+ * blob and commit; otherwise why not. A SHA is exactly 40 lowercase hex
+ * characters, so an empty or padded one never matches. Never throws.
+ */
+export function vendoredProblem(source: Buffer, fixture: unknown, serverSha: unknown): string | null {
+  if (typeof serverSha !== 'string' || !SHA.test(serverSha)) return 'SERVER_SHA nije puni SHA commita';
+  if (!exact(fixture, FIXTURE) || !exact(fixture['source'], SOURCE)) return 'kopija nema oblik';
+  const from = fixture['source'] as Obj;
+  if (from['repository'] !== 'ductura/server') return 'kopija nije iz ductura/server';
+  if (from['path'] !== SOURCE_PATH) return `kopija nije iz ${SOURCE_PATH}`;
   const blob = createHash('sha1').update(`blob ${source.byteLength}\0`).update(source).digest('hex');
-  if (fixture.source.blob !== blob) return `izvor nije blob ${fixture.source.blob}`;
-  if (fixture.source.commit !== serverSha) return `kopija je iz ${fixture.source.commit}, a CI veže ${serverSha}`;
-  const d = JSON.parse(source.toString('utf8')) as { chain: { verificationKey: unknown }; receiptV2: { accepted: unknown[] } };
-  if (!isDeepStrictEqual(fixture.verificationKey, d.chain.verificationKey)) return 'verificationKey se razlikuje od izvora';
-  if (!isDeepStrictEqual(fixture.accepted, d.receiptV2.accepted[0])) return 'accepted[0] se razlikuje od izvora';
+  if (from['blob'] !== blob) return `izvor nije blob ${String(from['blob'])}`;
+  if (typeof from['commit'] !== 'string' || !SHA.test(from['commit'])) return 'kopija ne navodi puni SHA commita';
+  if (from['commit'] !== serverSha) return `kopija je iz ${from['commit']}, a CI veže ${serverSha}`;
+  let d: unknown;
+  try {
+    d = JSON.parse(source.toString('utf8'));
+  } catch {
+    return 'izvor nije JSON';
+  }
+  const key = own(own(d, 'chain'), 'verificationKey');
+  const accepted = own(own(d, 'receiptV2'), 'accepted');
+  const first = Array.isArray(accepted) ? (accepted[0] as unknown) : undefined;
+  if (key === undefined || first === undefined) return 'izvor nema verificationKey ili accepted[0]';
+  if (!isDeepStrictEqual(fixture['verificationKey'], key)) return 'verificationKey se razlikuje od izvora';
+  if (!isDeepStrictEqual(fixture['accepted'], first)) return 'accepted[0] se razlikuje od izvora';
   return null;
 }
 
+/** The CLI: arguments and SERVER_SHA are checked before any file is read; every failure is one line. */
+function main(args: string[], serverSha: unknown): string | null {
+  const [server, file] = args;
+  if (args.length !== 2 || !server || !file) return 'upotreba: node scripts/lab/vendored.ts <server> <fixture>';
+  if (typeof serverSha !== 'string' || !SHA.test(serverSha)) return 'SERVER_SHA nije puni SHA commita';
+  return vendoredProblem(readFileSync(join(server, SOURCE_PATH)), JSON.parse(readFileSync(file, 'utf8')), serverSha);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [server = '', file = ''] = process.argv.slice(2);
-  const fixture = JSON.parse(readFileSync(file, 'utf8')) as Fixture;
-  const problem = vendoredProblem(readFileSync(join(server, SOURCE_PATH)), fixture, process.env['SERVER_SHA'] ?? '');
+  let problem: string | null;
+  try {
+    problem = main(process.argv.slice(2), process.env['SERVER_SHA']);
+  } catch (error) {
+    problem = error instanceof Error ? error.message : 'nepoznata greška';
+  }
   if (problem !== null) {
     console.error(`Vendorirani vektor: ${problem}`);
     process.exitCode = 1;

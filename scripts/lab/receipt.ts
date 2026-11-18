@@ -3,6 +3,7 @@
 // key, and it names exactly the commit the lab sent. The key comes from the
 // stack's signing seed and the key registry, never from a server response.
 import { createHash, createPrivateKey, createPublicKey, verify } from 'node:crypto';
+import { types } from 'node:util';
 
 /** The receipt key the lab trusts: derived from the seed, labelled by the registry. */
 export type ReceiptTrust = { keyBase64Url: string; keyId: string; keyVersion: string; evidenceDomainId: string };
@@ -51,13 +52,16 @@ const PAYLOAD = Object.keys(PAYLOAD_TYPES);
 
 type Obj = Record<string, unknown>;
 
-/** A plain object holding exactly `keys` as its own properties: nothing inherited, nothing extra. */
+/**
+ * A plain object holding exactly `keys` as its own data properties: nothing
+ * inherited, nothing extra, no getter and no Proxy, whose reads could differ.
+ */
 function exact(value: unknown, keys: readonly string[]): value is Obj {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  if (typeof value !== 'object' || value === null || types.isProxy(value) || Array.isArray(value)) return false;
   const proto: unknown = Object.getPrototypeOf(value);
   if (proto !== Object.prototype && proto !== null) return false;
   const own = Reflect.ownKeys(value);
-  return own.length === keys.length && keys.every((k) => Object.hasOwn(value, k));
+  return own.length === keys.length && keys.every((k) => Object.hasOwn(Object.getOwnPropertyDescriptor(value, k) ?? {}, 'value'));
 }
 
 /** RFC 8785 for the values a receipt payload holds; anything else throws. */
@@ -104,8 +108,29 @@ export function registryRow(output: string): Omit<ReceiptTrust, 'keyBase64Url'> 
   return UUID_V4.test(evidenceDomainId) && seedKey === 't' ? { keyId, keyVersion, evidenceDomainId } : null;
 }
 
-/** Null when `receipt` is a signed receipt v2 of exactly `expected` under `trust`; otherwise why not. */
+const filled = (v: unknown) => str(v) && v.length > 0;
+const TRUST: Record<keyof ReceiptTrust, Rule> = { keyBase64Url: filled, keyId: filled, keyVersion: filled, evidenceDomainId: filled };
+const EXPECTED: Record<keyof ReceiptExpectation, Rule> = {
+  documentId: filled, clientTransactionId: filled, revision: positive, principalId: filled, segmentHash: filled,
+};
+const complete = (value: unknown, rules: Record<string, Rule>) =>
+  exact(value, Object.keys(rules)) && Object.entries(rules).every(([k, rule]) => rule(value[k]));
+
+/**
+ * Null when `receipt` is a signed receipt v2 of exactly `expected` under `trust`;
+ * otherwise why not. Never throws: an empty or incomplete trust or expectation
+ * and any input that cannot be read give a reason.
+ */
 export function checkReceipt(receipt: unknown, trust: ReceiptTrust, expected: ReceiptExpectation): string | null {
+  try {
+    if (!complete(trust, TRUST) || !complete(expected, EXPECTED)) return 'laboratorij nema ključ stoga ili očekivani commit';
+    return check(receipt, trust, expected);
+  } catch {
+    return 'potvrda se ne može pročitati';
+  }
+}
+
+function check(receipt: unknown, trust: ReceiptTrust, expected: ReceiptExpectation): string | null {
   if (!exact(receipt, RECEIPT) || receipt['status'] !== 'signed') return 'potvrda nije potpisana';
   const signed = receipt['signedReceipt'];
   if (!exact(signed, SIGNED)) return 'potpisana potvrda nema oblik v2';

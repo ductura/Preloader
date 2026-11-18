@@ -6,11 +6,15 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import openapi from '@ductura/contracts/openapi/v1.json' with { type: 'json' };
 import { Ajv } from 'ajv';
 
 import { type ReceiptExpectation, type ReceiptTrust, checkReceipt, jcs, publicKeyFromSeed, registryRow } from '../scripts/lab/receipt.ts';
+import { vendoredProblem } from '../scripts/lab/vendored.ts';
 
 type Golden = {
   verificationKey: { keyId: string; keyVersion: string; spkiDerHex: string; signingSeedSha256: string };
@@ -193,4 +197,128 @@ test('text length is counted in UTF-16 units, as the server counts it', () => {
   assert.equal(checkReceipt(signed({ ...clone(p), receiptId: '\u{1F600}'.repeat(128) }), trust, expected), null);
   assert.notEqual(checkReceipt(signed({ ...clone(p), receiptId: '\u{1F600}'.repeat(129) }), trust, expected), null);
   assert.equal(contract({ ...clone(p), receiptId: '\u{1F600}'.repeat(129) }), true, 'ajv counts code points');
+});
+
+// DAN-1096-a1 class fix: the check never throws and never passes an empty or
+// incomplete input (the class review and QA broke on #26 three times).
+const counted = (value: unknown) => {
+  const calls = { n: 0 };
+  return { calls, get: () => { calls.n += 1; return value; } };
+};
+const throwing = () => { throw new Error('getter'); };
+function withGetter(path: 'envelope' | 'signedReceipt' | 'signature' | 'payload', get: () => unknown) {
+  const r = vector() as Record<string, unknown> & ReturnType<typeof vector>;
+  const at = { envelope: r, signedReceipt: r.signedReceipt, signature: r.signedReceipt.signature, payload: r.signedReceipt.payload }[path];
+  const key = { envelope: 'status', signedReceipt: 'payloadDigestSha256', signature: 'keyId', payload: 'revision' }[path];
+  Object.defineProperty(at, key, { get, enumerable: true });
+  return r;
+}
+const revoked = Proxy.revocable({}, {});
+revoked.revoke();
+const trap = (name: 'ownKeys' | 'getPrototypeOf') => new Proxy(vector(), { [name]: throwing });
+const proxiedPayload = (() => { const r = vector(); r.signedReceipt.payload = new Proxy(r.signedReceipt.payload, {}); return r; })();
+const { documentId: _d, ...noDocument } = expected;
+
+const neverThrows: [string, unknown, ReceiptTrust, unknown][] = [
+  ...(['envelope', 'signedReceipt', 'signature', 'payload'] as const).map((at): [string, unknown, ReceiptTrust, unknown] => [`a throwing getter on ${at}`, withGetter(at, throwing), trust, expected]),
+  ['a proxy whose ownKeys throws', trap('ownKeys'), trust, expected],
+  ['a proxy whose getPrototypeOf throws', trap('getPrototypeOf'), trust, expected],
+  ['a revoked proxy', revoked.proxy, trust, expected],
+  ['a harmless proxy around a good receipt', new Proxy(vector(), {}), trust, expected],
+  ['a harmless proxy around the payload', proxiedPayload, trust, expected],
+  ['an empty expectation', vector(), trust, {}],
+  ['an expectation without the document', vector(), trust, noDocument],
+  ['an expectation with an extra field', vector(), trust, { ...expected, extra: 'x' }],
+  ['an empty trusted key id', vector(), { ...trust, keyId: '' }, expected],
+  ['an empty trusted domain', vector(), { ...trust, evidenceDomainId: '' }, expected],
+  ['a trust that is null', vector(), null as unknown as ReceiptTrust, expected],
+];
+
+for (const [name, receipt, t, e] of neverThrows) {
+  test(`gives a reason, never an exception, for ${name}`, () => {
+    let reason: string | null = null;
+    assert.doesNotThrow(() => { reason = checkReceipt(receipt, t, e as ReceiptExpectation); });
+    assert.equal(typeof reason, 'string');
+  });
+}
+
+test('a getter that returns the right value is refused without being called', () => {
+  const g = counted(7);
+  assert.notEqual(checkReceipt(withGetter('payload', g.get), trust, expected), null);
+  assert.equal(g.calls.n, 0);
+});
+
+test('a payload without a prototype passes', () => {
+  const r = vector();
+  r.signedReceipt.payload = Object.assign(Object.create(null) as Record<string, unknown>, r.signedReceipt.payload);
+  assert.equal(checkReceipt(r, trust, expected), null);
+});
+
+// vendored.ts: the copy of the server's vector (moved here from lab-ci.test.ts
+// on edb4664f, whose other tests check ci.yml and belong to part c).
+const vendoredDoc = { chain: { verificationKey: golden.verificationKey }, receiptV2: { accepted: [golden.accepted, { name: 'edges' }] } };
+const vSource = Buffer.from(JSON.stringify(vendoredDoc));
+const vBlob = createHash('sha1').update(`blob ${vSource.byteLength}\0`).update(vSource).digest('hex');
+const vFixture = JSON.parse(readFileSync(new URL('fixtures/receipt-v2-golden.json', import.meta.url), 'utf8')) as { source: Record<string, unknown> } & Record<string, unknown>;
+const SHA = vFixture.source['commit'] as string;
+const vOwn: Record<string, unknown> & { source: Record<string, unknown> } = { ...vFixture, source: { ...vFixture.source, blob: vBlob } };
+
+test('the vendored check refuses any drift from its source', () => {
+  assert.equal(vendoredProblem(vSource, vOwn, SHA), null);
+  const changed = clone(vOwn);
+  (changed['accepted'] as { payload: { revision: number } }).payload.revision = 8;
+  assert.notEqual(vendoredProblem(vSource, changed, SHA), null);
+  assert.notEqual(vendoredProblem(vSource, { ...vOwn, accepted: { ...(vOwn['accepted'] as object), extra: 1 } }, SHA), null);
+  assert.notEqual(vendoredProblem(vSource, { ...vOwn, verificationKey: { ...(vOwn['verificationKey'] as object), keyId: 'x' } }, SHA), null);
+  assert.notEqual(vendoredProblem(Buffer.concat([vSource, Buffer.from('\n')]), vOwn, SHA), null);
+  assert.notEqual(vendoredProblem(vSource, vOwn, 'f'.repeat(40)), null);
+  assert.notEqual(vendoredProblem(vSource, { ...vOwn, source: { ...vOwn.source, path: 'server/domain/forensics/golden-vectors/evidence-v3.json' } }, SHA), null);
+});
+
+const BAD_SHA: unknown[] = ['', ' ', '\t', ' ', `${SHA}\r\n`, `\n${SHA}`, `${SHA}\u007f`, ` ${SHA}`, SHA.slice(1), `${SHA}0`, SHA.toUpperCase(), undefined, null, 40];
+
+test('an empty or malformed SHA is refused, even when both sides are equal', () => {
+  for (const sha of BAD_SHA) {
+    const both = { ...vOwn, source: { ...vOwn.source, commit: sha } };
+    assert.notEqual(vendoredProblem(vSource, vOwn, sha), null, JSON.stringify(sha));
+    assert.notEqual(vendoredProblem(vSource, both, sha), null, JSON.stringify(sha));
+  }
+});
+
+test('a malformed fixture or source gives a reason, never an exception', () => {
+  const { accepted: _a, ...noAccepted } = vOwn;
+  const fixtures: unknown[] = [
+    null, [], {}, 'x', { verificationKey: vOwn['verificationKey'], accepted: vOwn['accepted'] }, { ...vOwn, source: null },
+    { ...vOwn, source: Object.create(vOwn.source) as unknown }, JSON.parse(`{"__proto__":${JSON.stringify(vOwn)}}`),
+    JSON.parse('{"toString":null}'), { ...vOwn, extra: 1 }, noAccepted, { ...vOwn, source: { ...vOwn.source, repository: 'x/y' } },
+  ];
+  for (const f of fixtures) {
+    assert.doesNotThrow(() => vendoredProblem(vSource, f, SHA));
+    assert.notEqual(vendoredProblem(vSource, f, SHA), null, String(JSON.stringify(f)).slice(0, 80));
+  }
+  for (const doc of ['nije json', '{}', JSON.stringify({ chain: vendoredDoc.chain, receiptV2: { accepted: [] } })]) {
+    const src = Buffer.from(doc);
+    const blob = createHash('sha1').update(`blob ${src.byteLength}\0`).update(src).digest('hex');
+    const own = { ...vOwn, source: { ...vOwn.source, blob } };
+    assert.doesNotThrow(() => vendoredProblem(src, own, SHA));
+    assert.notEqual(vendoredProblem(src, own, SHA), null, doc);
+  }
+});
+
+test('the vendored CLI fails with a message, not a stack trace', () => {
+  const cli = fileURLToPath(new URL('../scripts/lab/vendored.ts', import.meta.url));
+  const fixturePath = fileURLToPath(new URL('fixtures/receipt-v2-golden.json', import.meta.url));
+  const { SERVER_SHA: _s, ...env } = process.env;
+  const runs: [string[], Record<string, string>][] = [
+    [[cli, '.', fixturePath], {}],
+    [[cli, '.', fixturePath], { SERVER_SHA: ' ' }],
+    [[cli], { SERVER_SHA: SHA }],
+    [[cli, '.', 'nema-ove-datoteke.json'], { SERVER_SHA: SHA }],
+  ];
+  for (const [args, extra] of runs) {
+    const run = spawnSync(process.execPath, args, { cwd: tmpdir(), env: { ...env, ...extra }, encoding: 'utf8', timeout: 20_000 });
+    assert.equal(run.status, 1, `${args.length} ${JSON.stringify(extra)}`);
+    assert.match(run.stderr, /^Vendorirani vektor: /);
+    assert.doesNotMatch(run.stderr, /^\s+at /m);
+  }
 });
