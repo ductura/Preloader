@@ -270,3 +270,56 @@ test('the fallback report survives a sentence and a meta that throw when read', 
   const last = JSON.parse(reportText(o, hostile)) as { result: string; error: string; claims: { pass: boolean }[] };
   assert.deepEqual([last.result, last.error, last.claims.length, last.claims.some((c) => c.pass)], ['FAIL', 'izvještaj se ne može složiti', 6, false]);
 });
+
+// Review and QA on 438b858: meta was checked, then read again for the file. A
+// value that answers twice must be asked once, everywhere the report reads.
+const flip = <T extends object>(base: T, key: keyof T, first: unknown, then: unknown): T => {
+  let reads = 0;
+  return Object.defineProperty({ ...base }, key, { enumerable: true, get: () => (reads++ === 0 ? first : then) });
+};
+const goodMeta = { preloaderSha: 'a'.repeat(40), serverSha: 'b'.repeat(40), serverDirty: false, startedAt: 't0', finishedAt: 't1', error: null };
+
+test('a meta value that changes between reads is reported as it was checked', () => {
+  for (const key of ['preloaderSha', 'serverSha'] as const) {
+    for (const bad of [null, '', ' ']) {
+      const passed = report(good(), flip(goodMeta, key, 'c'.repeat(40), bad));
+      assert.deepEqual([passed.result, passed[key]], ['PASS', 'c'.repeat(40)], `${key} then ${JSON.stringify(bad)}`);
+      const failed = report(good(), flip(goodMeta, key, bad, 'c'.repeat(40)));
+      assert.deepEqual([failed.result, failed[key]], ['FAIL', bad], `${key} first ${JSON.stringify(bad)}`);
+    }
+  }
+  const late = report(good(), flip(goodMeta, 'error', 'down', null));
+  assert.deepEqual([late.result, late.error], ['FAIL', 'down']);
+});
+
+test('an observed value that changes between reads is reported as it was checked', () => {
+  const o = good();
+  const other = Buffer.from('{"text":"Drugi tekst."}', 'utf8');
+  const swap = { ...o.secondOpen!.body, document: other.toString('base64'), documentHash: sha256Hex(other) };
+  // The second open answers the good document first, another one after: the report hashes what L-5 and L-6 checked.
+  const second = flip(o.secondOpen!, 'body', o.secondOpen!.body, swap);
+  const r = report({ ...o, secondOpen: second }, goodMeta);
+  assert.deepEqual([r.result, r.hash], ['PASS', hash]);
+  const r2 = report(flip(o, 'sentence', sentence, ''), goodMeta);
+  assert.deepEqual([r2.result, r2.sentence], ['PASS', sentence]);
+});
+
+test('the report reads every field of meta, the observation and each answer at most once', () => {
+  const reads = new Map<string, number>();
+  const counted = <T extends object>(name: string, target: T): T => new Proxy(target, {
+    get(t, key, receiver) {
+      reads.set(`${name}.${String(key)}`, (reads.get(`${name}.${String(key)}`) ?? 0) + 1);
+      return Reflect.get(t, key, receiver) as unknown;
+    },
+  });
+  const o = good();
+  const answer = (name: string, a: { status: number; body: Record<string, unknown> }) => counted(name, { ...a, body: counted(`${name}.body`, a.body) });
+  const watched = counted('o', { ...o, firstOpen: answer('first', o.firstOpen!), commit: answer('commit', o.commit!), secondOpen: answer('second', o.secondOpen!) });
+  const r = report(watched, counted('meta', { ...goodMeta }));
+  assert.equal(r.result, 'PASS');
+  const many = [...reads].filter(([, n]) => n > 1);
+  assert.deepEqual(many, []);
+  for (const key of ['o.sentence', 'o.sent', 'o.receipt', 'meta.preloaderSha', 'meta.serverSha', 'meta.error', 'second.body.document', 'commit.body.receipt']) {
+    assert.equal(reads.get(key), 1, key);
+  }
+});

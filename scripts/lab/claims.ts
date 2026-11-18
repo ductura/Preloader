@@ -92,15 +92,58 @@ function receiptProblem(check: ReceiptCheck | null, receipt: unknown): string | 
   return why === null ? null : filled(why) ? why : 'provjera potvrde nije dala razlog';
 }
 
-/** The body of a 200 answer when it is a JSON object, else null: a body of null or a list counts as no answer. */
-function okBody(a: Answer | null): Record<string, unknown> | null {
-  const body: unknown = a?.status === 200 ? a.body : null;
-  return typeof body === 'object' && body !== null && isList(body) === false ? (body as Record<string, unknown>) : null;
+/** An answer read once: its status, and the asked-for own fields of a 200 JSON object body, each read once. */
+type Snap = { status: unknown; body: Record<string, unknown> | null };
+
+/** A body of null or a list counts as no answer. */
+function snap(a: Answer | null, keys: readonly string[]): Snap {
+  if (a === null) return { status: undefined, body: null };
+  const status: unknown = a.status;
+  const raw: unknown = status === 200 ? a.body : null;
+  if (typeof raw !== 'object' || raw === null || isList(raw) !== false) return { status, body: null };
+  const body: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of keys) {
+    const v = own(raw as Record<string, unknown>, key);
+    if (v !== undefined) body[key] = v;
+  }
+  return { status, body };
+}
+
+/**
+ * What one run observed, read once: every claim and the report work on this
+ * copy, so a value checked is the value reported (a getter that answers twice
+ * gets asked once). The sent bytes are copied for the same reason.
+ */
+type Seen = {
+  sentence: unknown;
+  sent: Buffer | null;
+  first: Snap;
+  commit: Snap;
+  receipt: ReceiptCheck | null;
+  healthBetween: unknown;
+  pidBefore: unknown;
+  pidAfter: unknown;
+  second: Snap;
+};
+
+function see(o: Observed): Seen {
+  const sent: unknown = o.sent;
+  return {
+    sentence: o.sentence,
+    sent: sent instanceof Uint8Array ? Buffer.from(sent) : null,
+    first: snap(o.firstOpen, ['documentId']),
+    commit: snap(o.commit, ['status', 'revision', 'receipt']),
+    receipt: o.receipt,
+    healthBetween: o.healthBetween,
+    pidBefore: o.pidBefore,
+    pidAfter: o.pidAfter,
+    second: snap(o.secondOpen, ['documentId', 'currentRevision', 'documentHash', 'document']),
+  };
 }
 
 /** The document of the second open in strict standard base64, decoded here, or null. */
-function reopened(o: Observed): Buffer | null {
-  const doc = own(okBody(o.secondOpen), 'document');
+function reopened(s: Seen): Buffer | null {
+  const doc = own(s.second.body, 'document');
   if (typeof doc !== 'string') return null;
   const bytes = Buffer.from(doc, 'base64');
   // Node skips stray characters; only one spelling of the bytes counts, and no bytes are no document.
@@ -108,36 +151,40 @@ function reopened(o: Observed): Buffer | null {
 }
 
 export function claims(o: Observed): Claim[] {
-  const second = okBody(o.secondOpen);
-  const commit = okBody(o.commit);
-  const doc = reopened(o);
+  return claimsOf(see(o));
+}
+
+function claimsOf(s: Seen): Claim[] {
+  const [second, commit] = [s.second.body, s.commit.body];
+  const doc = reopened(s);
   const mine = doc === null ? null : sha256Hex(doc);
-  const sent = o.sent === null ? null : sha256Hex(o.sent);
-  const why = receiptProblem(o.receipt, own(commit, 'receipt'));
-  const first = own(okBody(o.firstOpen), 'documentId');
+  const sent = s.sent === null ? null : sha256Hex(s.sent);
+  const why = receiptProblem(s.receipt, own(commit, 'receipt'));
+  const first = own(s.first.body, 'documentId');
   const [status, revision] = [own(commit, 'status'), own(commit, 'revision')];
   const [docId, current, docHash] = [own(second, 'documentId'), own(second, 'currentRevision'), own(second, 'documentHash')];
+  const sentence = filled(s.sentence) ? s.sentence : null;
   return [
     claim(
       'L-1',
       status === 'committed' && revision === 1 && why === null,
-      `commit ${text(o.commit?.status)} ${text(status)}, revizija ${text(revision)}, potvrda: ${why ?? 'potpis provjeren ključem stoga'}`,
+      `commit ${text(s.commit.status)} ${text(status)}, revizija ${text(revision)}, potvrda: ${why ?? 'potpis provjeren ključem stoga'}`,
     ),
     claim(
       'L-2',
-      o.healthBetween === 'refused' && isPid(o.pidBefore) && isPid(o.pidAfter) && o.pidBefore !== o.pidAfter,
-      `port servera između down i up: ${text(o.healthBetween)}; PID ${text(o.pidBefore)} -> ${text(o.pidAfter)}`,
+      s.healthBetween === 'refused' && isPid(s.pidBefore) && isPid(s.pidAfter) && s.pidBefore !== s.pidAfter,
+      `port servera između down i up: ${text(s.healthBetween)}; PID ${text(s.pidBefore)} -> ${text(s.pidAfter)}`,
     ),
     claim(
       'L-3',
       filled(first) && docId === first,
-      `drugi open ${text(o.secondOpen?.status)}, documentId ${text(docId)}`,
+      `drugi open ${text(s.second.status)}, documentId ${text(docId)}`,
     ),
     claim('L-4', current === 1, `currentRevision ${text(current)}`),
     claim(
       'L-5',
-      filled(o.sentence) && doc !== null && o.sent !== null && Buffer.compare(doc, o.sent) === 0 && doc.toString('utf8').includes(o.sentence),
-      !filled(o.sentence) ? 'rečenica je prazna' : doc === null ? 'nema dokumenta' : `${doc.byteLength} B, rečenica ${doc.toString('utf8').includes(o.sentence) ? 'je' : 'nije'} u tekstu`,
+      sentence !== null && doc !== null && s.sent !== null && Buffer.compare(doc, s.sent) === 0 && doc.toString('utf8').includes(sentence),
+      sentence === null ? 'rečenica je prazna' : doc === null ? 'nema dokumenta' : `${doc.byteLength} B, rečenica ${doc.toString('utf8').includes(sentence) ? 'je' : 'nije'} u tekstu`,
     ),
     claim(
       'L-6',
@@ -174,27 +221,33 @@ export type Meta = {
 
 /** The report; field names of VS-1.12 so a later vs-run.json (DAN-887) can take them over. */
 export function report(o: Observed, meta: Meta) {
-  const list = claims(o);
-  const second = okBody(o.secondOpen);
-  const doc = reopened(o);
+  // Each field of meta read once, like the observation: what is checked is what is written.
+  const m: Meta = {
+    preloaderSha: meta.preloaderSha, serverSha: meta.serverSha, serverDirty: meta.serverDirty,
+    startedAt: meta.startedAt, finishedAt: meta.finishedAt, error: meta.error,
+  };
+  const s = see(o);
+  const list = claimsOf(s);
+  const second = s.second.body;
+  const doc = reopened(s);
   return {
     schema: 'ductura.lab.oporavak/1',
     ticket: 'DAN-1096',
     covers: 'VS-1.13, samo API dio (bez preglednika)',
     // A PASS names the code that ran: both SHAs, or it proves nothing.
-    result: meta.error === null && isSha(meta.preloaderSha) && isSha(meta.serverSha) && list.every((c) => c.pass) ? 'PASS' : 'FAIL',
-    preloaderSha: meta.preloaderSha,
+    result: m.error === null && isSha(m.preloaderSha) && isSha(m.serverSha) && list.every((c) => c.pass) ? 'PASS' : 'FAIL',
+    preloaderSha: m.preloaderSha,
     webSha: null,
-    serverSha: meta.serverSha,
-    serverDirty: meta.serverDirty,
+    serverSha: m.serverSha,
+    serverDirty: m.serverDirty,
     browser: null,
     documentId: typeof own(second, 'documentId') === 'string' ? own(second, 'documentId') : null,
     revision: Number.isSafeInteger(own(second, 'currentRevision')) ? own(second, 'currentRevision') : null,
     hash: doc === null ? null : sha256Hex(doc),
-    sentence: o.sentence,
-    startedAt: meta.startedAt,
-    finishedAt: meta.finishedAt,
-    error: meta.error,
+    sentence: s.sentence,
+    startedAt: m.startedAt,
+    finishedAt: m.finishedAt,
+    error: m.error,
     claims: list,
     limits: [
       'webSha i browser su null: preglednik nije u v1 (DAN-1022)',
