@@ -62,10 +62,11 @@ const FORBIDDEN = /(?<![\w-])(?:apt|apt-get|aptitude|dpkg|dpkg-deb)(?![\w-])|pla
 // pnpm runs these around install and e2e on its own; `e2e` itself is pinned.
 const LIFECYCLE = /^(?:pre|post)(?:install|e2e)$|^(?:install|prepare|prepublish)$/;
 const E2E_SCRIPT = 'node scripts/build.ts && playwright test -c e2e/matrix/playwright.config.ts';
-// Shell text without quotes, backslashes and line continuations, so that
-// `ap''t-get`, `playwright "install"` and `playwright \<newline>install` are caught.
+// Shell text as the shell joins it: a line continuation (backslash and line
+// end) disappears, as do quotes and backslashes, so that `ap''t-get`,
+// `playwright "install"` and `play\<newline>wright install` are caught.
 const installs = (s: unknown): boolean =>
-  typeof s !== 'string' || FORBIDDEN.test(s.replace(/\\\r?\n/g, ' ').replace(/['"\\]/g, ''));
+  typeof s !== 'string' || FORBIDDEN.test(s.replace(/\\\r?\n/g, '').replace(/['"\\]/g, ''));
 
 // The one version of @playwright/test, playwright and playwright-core in the lockfile.
 function lockVersion(lock: Obj): string {
@@ -173,6 +174,9 @@ const ciCases: [string, string, RegExp][] = [
   ['third job', swap(CI, '  ci-ok:\n', '  extra:\n    runs-on: u\n    steps: [{ run: "pnpm exec playwright install" }]\n  ci-ok:\n'), /jobs: node,e2e-matrix,extra,ci-ok/],
   ['node job changed', swap(CI, 'scripts: typecheck test build budget', 'scripts: typecheck test build budget e2e'), /job node is not/],
   ['ci-ok: line continuation', okStep('run: |\n          pnpm exec playwright \\\n          install --with-deps'), /job ci-ok installs/],
+  ['ci-ok: continuation inside a word', okStep('run: |\n          pnpm exec play\\\n          wright install'), /job ci-ok installs/],
+  ['ci-ok: continuation inside apt-get', okStep('run: |\n          sudo ap\\\n          t-get install -y x'), /job ci-ok installs/],
+  ['ci-ok: CRLF continuation inside a word', okStep('run: "pnpm exec play\\\\\\r\\nwright install"'), /job ci-ok installs/],
   ['ci-ok: quoted install', okStep(`run: playwright "install"`), /job ci-ok installs/],
   ['ci-ok: quotes inside apt-get', okStep(`run: sudo ap''t-get install -y x`), /job ci-ok installs/],
   ['ci-ok: shell runs the install', okStep(`{ shell: "npx playwright install; bash -e {0}", run: "true" }`), /job ci-ok has another shell/],
@@ -217,6 +221,7 @@ const otherCases: [string, string, string, RegExp][] = [
   ['second @playwright/test', swap(LOCK, pw, `  '@playwright/test@1.62.0':\n    resolution: {}\n\n${pw}`), PKG, /@playwright\/test versions/],
   ['pree2e installs browsers', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "pree2e": "playwright install",'), /script pree2e installs/],
   ['pree2e with a line continuation', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "pree2e": "playwright \\\\\\ninstall",'), /script pree2e installs/],
+  ['pree2e with a continuation inside a word', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "pree2e": "play\\\\\\nwright install",'), /script pree2e installs/],
   ['postinstall runs apt', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "postinstall": "apt-get update",'), /script postinstall installs/],
   ['prepare script', LOCK, swap(PKG, '"scripts": {', '"scripts": {\n    "prepare": "node x.js",'), /lifecycle script prepare/],
   ['e2e script changed', LOCK, swap(PKG, '"e2e": "node scripts/build.ts && ', '"e2e": "node scripts/build.ts && playwright ins$()tall && '), /e2e script changed/],
