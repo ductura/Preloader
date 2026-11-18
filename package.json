@@ -23,6 +23,7 @@
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
     "@ductura/contracts": "https://github.com/ductura/server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz",
+    "@ductura/test-fakes": "https://github.com/ductura/server/releases/download/test-fakes-v3.0.1/ductura-test-fakes-3.0.1.tgz",
     "@playwright/test": "1.63.0",
     "@types/node": "^24.19.2",
     "ajv": "8.20.0",
