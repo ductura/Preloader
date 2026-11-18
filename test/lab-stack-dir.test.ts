@@ -45,6 +45,19 @@ test('checkStackPath refuses every unsafe path before it resolves anything', () 
   assert.equal(checkStackPath(`${tmp}/stack`, root, tmp), `${tmp}/stack`);
 });
 
+test('a checkout given through a link is resolved first, and a linked temp root is taken by both spellings', async () => {
+  const f = fixture();
+  const link = join(f.outside, 'server-link');
+  symlinkSync(f.root, link);
+  const dir = await f.run(async (s) => { await s.up(); return s.dir; }, f.command, link);
+  assert.match(dir, new RegExp(`^${f.root}/\\.stack/lab-\\w{6}$`));
+  const tmpLink = join(f.outside, 'tmp-link');
+  symlinkSync(f.tmp, tmpLink);
+  assert.equal(checkStackPath(`${f.tmp}/stack`, f.root, tmpLink), `${f.tmp}/stack`);
+  assert.equal(checkStackPath(`${tmpLink}/stack`, f.root, tmpLink), `${tmpLink}/stack`);
+  assert.throws(() => checkStackPath(`${f.outside}/stack`, f.root, tmpLink), /putanja stoga mora biti apsolutna/);
+});
+
 test('a .stack link leading out is refused, also through withStack, and nothing is written outside', async () => {
   const f = fixture();
   symlinkSync(f.outside, join(f.root, '.stack'));
