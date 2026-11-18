@@ -6,6 +6,7 @@ import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 
 import { type ReceiptExpectation, type ReceiptTrust, checkReceipt, jcs, publicKeyFromSeed } from '../scripts/lab/receipt.ts';
 
@@ -31,7 +32,13 @@ test('the vendored vector is the RFC 8032 key and the canonical text of the serv
   assert.equal(verify(null, digest, key, sig), false);
 });
 
-test.each([new Uint8Array(0), SEED.subarray(1), Buffer.concat([SEED, Buffer.from([0])]), new Uint16Array(16)])(
+test('publicKeyFromSeed takes a 32-byte Uint8Array from another realm (review on f9c1458)', () => {
+  const foreign = runInNewContext('new Uint8Array(32)') as Uint8Array;
+  foreign.set(SEED);
+  assert.equal(publicKeyFromSeed(foreign), publicKeyFromSeed(SEED));
+});
+
+test.each([new Uint8Array(0), SEED.subarray(1), Buffer.concat([SEED, Buffer.from([0])]), new Uint16Array(16), runInNewContext('new Uint16Array(16)')])(
   'publicKeyFromSeed refuses a seed that is not 32 bytes of Uint8Array (%#)',
   (seed) => {
     assert.throws(() => publicKeyFromSeed(seed as Uint8Array), /^Error: sjeme ključa nema 32 bajta$/);
@@ -109,12 +116,15 @@ const refused: [string, unknown][] = [
   ['undefined in an object', { a: undefined }],
   // QA self-check on ce6a78b.
   ['65 levels of nesting', nest(65)],
+  ['an array iterator nested in an object', { a: [Object.setPrototypeOf([1][Symbol.iterator](), Object.prototype) as unknown] }],
   ['a symbol key', { a: 1, [Symbol('x')]: 2 }],
   ['a hidden key', Object.defineProperty({ a: 1 }, 'b', { value: 2 })],
   ['a hidden array element', Object.defineProperty([1, 2], 1, { value: 2, enumerable: false })],
   ...[new Map([['a', 1]]), new Set([1]), new WeakMap(), new Date(5), new Number(7), new Boolean(true), new String('x'),
     new ArrayBuffer(2), new DataView(new ArrayBuffer(2)), new Uint8Array([1, 2]), /x/, new Error('x'), Promise.resolve(),
-    (function* g() {})(), new Map().entries()].map((v): [string, unknown] => [
+    (function* g() {})(), new Map().entries(),
+    // Review on f9c1458: the class is any built-in, so iterators no list names are refused too.
+    [1][Symbol.iterator](), 'ab'[Symbol.iterator](), 'a'.matchAll(/a/g), new WeakRef({}), new FinalizationRegistry(() => {})].map((v): [string, unknown] => [
     `a ${Object.prototype.toString.call(v)} with a plain prototype`, Object.setPrototypeOf(v, Object.prototype) as unknown]),
 ];
 test.each(refused)('jcs refuses %s', (_name, value) => {
