@@ -3,6 +3,9 @@ import { defineConfig, devices } from '@playwright/test';
 import { MATRIX } from './devices.ts';
 
 const VISUAL = 'visual.spec.ts';
+// Osnovne snimke vrijede samo za Linux iz CI-ja (sistemski fontovi): projekt `visual` je u CI-ju
+// (GitHub Actions postavlja CI) ili uz izričit E2E_VISUAL=1, inače bi `pnpm e2e` na Windowsu i macOS-u pao.
+const WITH_VISUAL = !!process.env['CI'] || process.env['E2E_VISUAL'] === '1';
 
 export default defineConfig({
   testDir: '.',
@@ -16,6 +19,6 @@ export default defineConfig({
   expect: { toHaveScreenshot: { threshold: 0, maxDiffPixels: 0, animations: 'disabled', caret: 'hide' } },
   projects: [
     ...MATRIX.map((d) => ({ name: d.name, testIgnore: VISUAL, use: { ...d.use, browserName: d.engine } })),
-    { name: 'visual', testMatch: VISUAL, use: { ...devices['Desktop Chrome'], deviceScaleFactor: 1 } },
+    ...(WITH_VISUAL ? [{ name: 'visual', testMatch: VISUAL, use: { ...devices['Desktop Chrome'], deviceScaleFactor: 1 } }] : []),
   ],
 });

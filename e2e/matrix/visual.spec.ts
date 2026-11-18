@@ -29,19 +29,23 @@ async function open(page: Page, width: number, path: string): Promise<void> {
 }
 
 // Negativni slučaj prvi: jedan token boje pomaknut za jedan korak mora srušiti usporedbu s osnovnom snimkom.
+// Korak se računa iz trenutačne vrijednosti (zadnji bit plave), pa test vrijedi i nakon odobrene promjene boje.
 const ONE_STEP = [
-  { screen: SCREENS[0], token: '--accent', value: '#80652a' },
-  { screen: SCREENS[1], token: '--sheet', value: '#fcfbf9' },
-  { screen: SCREENS[2], token: '--ground', value: '#242423' },
+  { screen: SCREENS[0], token: '--accent' },
+  { screen: SCREENS[1], token: '--sheet' },
+  { screen: SCREENS[2], token: '--ground' },
 ] as const;
 
-for (const { screen, token, value } of ONE_STEP) {
+for (const { screen, token } of ONE_STEP) {
   test(`${screen.name}: ${token} one step off fails the comparison`, async ({ page }) => {
     // Bez osnovne snimke ili uz `-u` usporedba bi zapisala izmijenjenu stranicu kao osnovnu.
     const baseline = `${screen.name}-1440.png`;
     expect(existsSync(test.info().snapshotPath(baseline, { kind: 'screenshot' })), `baseline ${baseline} exists`).toBe(true);
     expect(['none', 'missing'], 'negatives run without --update-snapshots').toContain(test.info().config.updateSnapshots);
     await open(page, 1440, screen.path);
+    const current = await page.evaluate((t) => getComputedStyle(document.documentElement).getPropertyValue(t).trim(), token);
+    expect(current, `${token} is a #rrggbb colour`).toMatch(/^#[0-9a-f]{6}$/i);
+    const value = `#${(parseInt(current.slice(1), 16) ^ 1).toString(16).padStart(6, '0')}`;
     await page.addStyleTag({ content: `:root { ${token}: ${value}; }` });
     // Samo greška razlike u pikselima: istek vremena ili druga greška nije dokaz.
     let error = '';
