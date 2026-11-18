@@ -198,6 +198,7 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
   ['an extra signedReceipt field', at((r) => { Object.assign(r.signedReceipt, { x: 1 }); }), trust, expected, SHAPE],
   ['no signature', at((r) => { delete (r.signedReceipt as Partial<Rec['signedReceipt']>).signature; }), trust, expected, SHAPE],
   ['an inherited signedReceipt field', at((r) => { const { signature, ...rest } = r.signedReceipt; r.signedReceipt = Object.assign(Object.create({ signature }) as Rec['signedReceipt'], rest); }), trust, expected, SHAPE],
+  ['a bad digest before a throwing signature getter (Codex on c620fe8)', at((r) => { r.signedReceipt.payloadDigestSha256 = ''; Object.defineProperty(r.signedReceipt, 'signature', { get: () => { throw new Error('x'); }, enumerable: true }); }), trust, expected, `${SHAPE} (payloadDigestSha256)`],
   ['a getter on signedReceipt', at((r) => { Object.defineProperty(r.signedReceipt, 'payloadDigestSha256', { get: () => { throw new Error('x'); }, enumerable: true }); }), trust, expected, `${SHAPE} (payloadDigestSha256)`],
   ['a proxy signedReceipt', at((r) => { r.signedReceipt = new Proxy(r.signedReceipt, {}); }), trust, expected, SHAPE],
   ['a proxy signature', at((r) => { r.signedReceipt.signature = new Proxy(r.signedReceipt.signature, {}); }), trust, expected, SHAPE],
@@ -236,8 +237,7 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
     ['evidenceDomainId', '0b5e6c1a-7d2f-4e3a-8b9c-0d1e2f3a4b5c'], ['clientTransactionId', `${expected.clientTransactionId}\u00a0`]] as const)
     .map(([k, v]): [string, unknown, ReceiptTrust, unknown, string] => [`another ${k} (${JSON.stringify(v)})`, signed({ [k]: v }), trust, expected, `potvrda ne imenuje ovaj commit (${k})`]),
   ['C1 (U+0085) in the transaction (review c.6988656296)', signed({ clientTransactionId: 'tx\u0085' }), trust, expected, `${SHAPE} (payload.clientTransactionId)`],
-  // routes/evidence.ts:28 refuses it too: in ^(?=.*\S) the dot does not cross U+2028 (pre-check on 82d960d5).
-  ['U+2028 before the transaction', signed({ clientTransactionId: '\u2028tx' }), trust, expected, `${SHAPE} (payload.clientTransactionId)`],
+  ...['\u2028', '\u2029'].map((c): [string, unknown, ReceiptTrust, unknown, string] => [`U+${c.charCodeAt(0).toString(16).toUpperCase()} before the transaction: routes/evidence.ts:28, the dot of ^(?=.*\\S) stops there`, signed({ clientTransactionId: `${c}tx` }), trust, expected, `${SHAPE} (payload.clientTransactionId)`]),
   ['a trusted key that is not Ed25519', vector(), { ...trust, keyBase64Url: Buffer.from(`ff${golden.verificationKey.spkiDerHex.slice(2)}`, 'hex').toString('base64url') }, expected, lab('trust.keyBase64Url')],
   ['a second base64url spelling of the trusted key', vector(), { ...trust, keyBase64Url: `${trust.keyBase64Url.slice(0, -1)}${twin(trust.keyBase64Url.at(-1)!)}` }, expected, lab('trust.keyBase64Url')],
   ['a trusted X25519 key of 44 bytes (QA c.6988462360)', vector(), { ...trust, keyBase64Url: generateKeyPairSync('x25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64url') }, expected, lab('trust.keyBase64Url')],

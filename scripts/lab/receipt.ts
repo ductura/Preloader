@@ -187,9 +187,9 @@ function check(receipt: unknown, trust: ReceiptTrust, expected: ReceiptExpectati
   if (!shaped(receipt, RECEIPT) || receipt['status'] !== 'signed') return 'potvrda nije potpisana';
   const signed = receipt['signedReceipt'];
   const top = bad(signed, SIGNED, 'signedReceipt');
-  if (top !== null && top !== 'signedReceipt.payloadDigestSha256') return 'potpisana potvrda nema oblik v2';
+  if (top !== null) return top === 'signedReceipt.payloadDigestSha256' ? 'potpisana potvrda nema oblik v2 (payloadDigestSha256)' : 'potpisana potvrda nema oblik v2';
   const { payload, signature } = signed as { payload: Obj; signature: Obj };
-  const field = top?.slice(14) ?? bad(payload, PAYLOAD_TYPES, 'payload', across) ?? bad(signature, SIGNATURE_TYPES, 'signature');
+  const field = bad(payload, PAYLOAD_TYPES, 'payload', across) ?? bad(signature, SIGNATURE_TYPES, 'signature');
   if (field !== null) return field === 'payload' || field === 'signature' ? 'potpisana potvrda nema oblik v2' : `potpisana potvrda nema oblik v2 (${field})`;
   if (signature['keyId'] !== trust.keyId || signature['keyVersion'] !== trust.keyVersion) return 'potpis nije ključem stoga';
   const sig = base64Url(signature['signatureBase64Url'], 64);
