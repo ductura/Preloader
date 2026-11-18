@@ -15,24 +15,16 @@ const VERIFICATION_KEY: Shape = all('algorithm keyId keyVersion encoding spkiDer
 const ACCEPTED: Shape = {
   ...all('name note', 'text'),
   payload: {
-    ...all('receiptSchema receiptId evidenceDomainId evidencePackageId documentId', 'text'),
-    revision: 'int',
-    ...all('clientTransactionId principalId sessionId segmentId segmentHash', 'text'),
-    ...all('predecessorSegmentHash previousReceiptId', 'text?'),
-    ...all('evidenceSchema evidenceProfileId', 'text'),
-    ...all('sequenceFrom sequenceTo eventCount payloadBytes', 'int'),
-    acceptedAt: 'text',
+    ...all('receiptSchema receiptId evidenceDomainId evidencePackageId documentId', 'text'), revision: 'int',
+    ...all('clientTransactionId principalId sessionId segmentId segmentHash', 'text'), ...all('predecessorSegmentHash previousReceiptId', 'text?'),
+    ...all('evidenceSchema evidenceProfileId', 'text'), ...all('sequenceFrom sequenceTo eventCount payloadBytes', 'int'), acceptedAt: 'text',
   },
   ...all('canonical canonicalUtf8Hex', 'text'),
   byteLength: 'int',
   ...all('payloadDigestSha256 signingInputHex signatureHex', 'text'),
   signature: all('algorithm keyId keyVersion signatureEncoding signatureBase64Url', 'text'),
 };
-const FIXTURE: Shape = {
-  source: { ...all('repository commit path blob', 'text'), take: ['array', 'text', 2] },
-  verificationKey: VERIFICATION_KEY,
-  accepted: ACCEPTED,
-};
+const FIXTURE: Shape = { source: { ...all('repository commit path blob', 'text'), take: ['array', 'text', 2] }, verificationKey: VERIFICATION_KEY, accepted: ACCEPTED };
 /** The schema path of the first value that does not have its shape; built from schema names only. */
 class Shapeless extends Error {}
 /** Own enumerable data property `key` of `value`, read through its descriptor; else the parent has no shape. */
@@ -49,16 +41,16 @@ function parse(value: unknown, shape: Shape, path: string): unknown {
     throw new Shapeless(path);
   }
   if (typeof value !== 'object' || value === null || types.isProxy(value)) throw new Shapeless(path);
-  const own = Reflect.ownKeys(value);
+  // Prototype and length first: own keys are listed only of a value that may have the shape (QA on d302d06).
   if (Array.isArray(shape)) {
     const [, item, length] = shape as readonly ['array', Shape, number];
     // A dense plain array has exactly its indices and length as own keys.
-    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== length || own.length !== length + 1) throw new Shapeless(path);
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length !== length || Reflect.ownKeys(value).length !== length + 1) throw new Shapeless(path);
     return Array.from({ length }, (_, i) => parse(member(value, String(i), path), item, `${path}[${i}]`));
   }
   const keys = Object.keys(shape);
   // An array has Array.prototype, so it is refused here too.
-  if (Object.getPrototypeOf(value) !== Object.prototype || own.length !== keys.length) throw new Shapeless(path);
+  if (Object.getPrototypeOf(value) !== Object.prototype || Reflect.ownKeys(value).length !== keys.length) throw new Shapeless(path);
   return Object.fromEntries(keys.map((k) => [k, parse(member(value, k, path), (shape as Record<string, Shape>)[k]!, `${path}.${k}`)]));
 }
 /** A member of a plain object of the source whose other members are not read. */
@@ -71,9 +63,7 @@ function inSource(value: unknown, key: string, path: string): unknown {
  * why not. A SHA is exactly 40 lowercase hex characters. Never throws.
  */
 export function vendoredProblem(source: Buffer, fixture: unknown, serverSha: unknown): string | null {
-  try {
-    return problem(source, fixture, serverSha);
-  } catch (error) {
+  try { return problem(source, fixture, serverSha); } catch (error) {
     return error instanceof Shapeless ? `nema oblik (${error.message})` : 'kopija ili izvor se ne mogu pročitati';
   }
 }
@@ -89,11 +79,7 @@ function problem(source: Buffer, fixture: unknown, serverSha: unknown): string |
   if (!SHA.test(from['commit'] as string)) return 'kopija ne navodi puni SHA commita';
   if (from['commit'] !== serverSha) return `kopija je iz ${from['commit'] as string}, a CI veže ${serverSha}`;
   let doc: unknown;
-  try {
-    doc = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(source));
-  } catch {
-    return 'izvor nije JSON';
-  }
+  try { doc = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(source)); } catch { return 'izvor nije JSON'; }
   const key = parse(inSource(inSource(doc, 'chain', 'izvor'), 'verificationKey', 'izvor.chain'), VERIFICATION_KEY, 'izvor.chain.verificationKey');
   const accepted = inSource(inSource(doc, 'receiptV2', 'izvor'), 'accepted', 'izvor.receiptV2');
   if (!Array.isArray(accepted) || accepted.length === 0) throw new Shapeless('izvor.receiptV2.accepted');

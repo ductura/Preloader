@@ -99,18 +99,21 @@ test('a fixture that is not a plain JSON tree at any depth is refused without re
   (cyclic['accepted'] as Record<string, unknown>)['self'] = cyclic['accepted'];
   const withExtra = Object.assign([...(vOwn.source['take'] as string[])], { extra: 1 });
   const sparse = ['chain.verificationKey', , 'receiptV2.accepted[0]'];
-  const nested = (path: string[], value: unknown) => {
-    const f = clone(vOwn);
-    let at = f as Record<string, unknown>;
-    for (const k of path.slice(0, -1)) at = at[k] as Record<string, unknown>;
-    at[path.at(-1)!] = value;
-    return f;
-  };
+  const nested = (path: string[], value: unknown) => { const f = clone(vOwn); setAt(f, path.join('.'), value); return f; };
   const vkey = vOwn['verificationKey'] as Record<string, unknown>;
+  const sig = golden.accepted['signature'] as Obj;
+  // Every getter below returns the right value; none may be read (QA on d302d06: each container counted).
+  let reads = 0;
+  const getter = (value: unknown) => ({ get: () => { reads += 1; return value; }, enumerable: true });
   const fixtures: [string, unknown, string][] = [
     ['a getter in source.take[0]', { ...vOwn, source: { ...vOwn.source, take } }, 'kopija.source.take'],
     ['a proxy in source.take', { ...vOwn, source: { ...vOwn.source, take: new Proxy([...(vOwn.source['take'] as string[])], {}) } }, 'kopija.source.take'],
-    ['a getter in verificationKey', { ...vOwn, verificationKey: Object.defineProperty({ ...vkey }, 'keyId', { get: () => vkey['keyId'], enumerable: true }) }, 'kopija.verificationKey'],
+    ['a getter in verificationKey', { ...vOwn, verificationKey: Object.defineProperty({ ...vkey }, 'keyId', getter(vkey['keyId'])) }, 'kopija.verificationKey'],
+    ['a getter in accepted.payload', nested(['accepted', 'payload'], Object.defineProperty(clone(golden.accepted.payload), 'revision', getter(golden.accepted.payload['revision']))), 'kopija.accepted.payload'],
+    ['a getter in accepted.signature', nested(['accepted', 'signature'], Object.defineProperty(clone(sig), 'keyId', getter(sig['keyId']))), 'kopija.accepted.signature'],
+    ['a proxy verificationKey', { ...vOwn, verificationKey: new Proxy(clone(vkey), {}) }, 'kopija.verificationKey'],
+    ['a proxy in accepted.signature', nested(['accepted', 'signature'], new Proxy(clone(sig), {})), 'kopija.accepted.signature'],
+    ['Array.prototype with a length getter as take', { ...vOwn, source: { ...vOwn.source, take: Object.setPrototypeOf(Object.defineProperty({ ...(vOwn.source['take'] as string[]) }, 'length', getter(2)), Array.prototype) as unknown } }, 'kopija.source.take'],
     ['a proxy in accepted.payload', nested(['accepted', 'payload'], new Proxy(clone(golden.accepted.payload), {})), 'kopija.accepted.payload'],
     ['a revoked proxy in accepted.signature', nested(['accepted', 'signature'], revoked.proxy), 'kopija.accepted.signature'],
     ['a cycle in accepted', cyclic, 'kopija.accepted'],
@@ -133,6 +136,7 @@ test('a fixture that is not a plain JSON tree at any depth is refused without re
     assert.equal(reason, `nema oblik (${path})`, name);
   }
   assert.equal(g.calls.n, 0, 'the getter was read');
+  assert.equal(reads, 0, 'a getter was read');
   assert.equal(vendoredProblem(vSource, clone(vOwn), SHA), null, 'a plain clone still passes');
 });
 // Class 1 (#33 FAILs on 34058fd and 20d0f0d): the copy and the source pass one parser, so a degenerate
@@ -141,26 +145,19 @@ type View = { verificationKey: unknown; accepted: unknown };
 const view = (): View => clone({ verificationKey: golden.verificationKey, accepted: golden.accepted });
 /** The source as the server holds it: more members in chain and a second accepted receipt. */
 const sourceOf = (v: View) => Buffer.from(JSON.stringify({ chain: { verificationKey: v.verificationKey, other: 1 }, receiptV2: { other: 2, accepted: [v.accepted, { name: 'edges' }] } }));
-function check(copy: View, server: View | Buffer): string | null {
-  const src = Buffer.isBuffer(server) ? server : sourceOf(server);
-  const blob = createHash('sha1').update(`blob ${src.byteLength}\0`).update(src).digest('hex');
-  return vendoredProblem(src, { source: { ...vFixture.source, blob }, ...copy }, SHA);
-}
+const blobOf = (src: Buffer) => createHash('sha1').update(`blob ${src.byteLength}\0`).update(src).digest('hex');
+const check = (copy: View, server: View | Buffer) => ((src) => vendoredProblem(src, { source: { ...vFixture.source, blob: blobOf(src) }, ...copy }, SHA))(Buffer.isBuffer(server) ? server : sourceOf(server));
 const payload = (v: View) => (v.accepted as { payload: Obj }).payload;
 const DEGENERATE: [string, (v: View) => void, string][] = [
   ...([null, {}, [], [null]] as unknown[]).map((x): [string, (v: View) => void, string] => [`verificationKey ${JSON.stringify(x)}`, (v) => { v.verificationKey = x; }, 'verificationKey']),
   ['verificationKey without keyId', (v) => { delete (v.verificationKey as Obj)['keyId']; }, 'verificationKey'],
   ['verificationKey with an extra key', (v) => { (v.verificationKey as Obj)['extra'] = 'x'; }, 'verificationKey'],
-  ['an empty keyId', (v) => { (v.verificationKey as Obj)['keyId'] = ''; }, 'verificationKey.keyId'],
-  ['a keyId that is a number', (v) => { (v.verificationKey as Obj)['keyId'] = 7; }, 'verificationKey.keyId'],
   ['accepted null', (v) => { v.accepted = null; }, 'accepted'],
   ['accepted {}', (v) => { v.accepted = {}; }, 'accepted'],
   ['a payload of 19 fields', (v) => { delete payload(v)['previousReceiptId']; }, 'accepted.payload'],
   ['a payload of 21 fields', (v) => { payload(v)['extra'] = 1; }, 'accepted.payload'],
   ['a signature without a field', (v) => { delete (v.accepted as { signature: Obj }).signature['keyId']; }, 'accepted.signature'],
   ...(['7', 1.5, 2 ** 53, NaN, Infinity, true] as unknown[]).map((x): [string, (v: View) => void, string] => [`revision ${String(x)}`, (v) => { payload(v)['revision'] = x; }, 'accepted.payload.revision']),
-  ['a null segmentHash', (v) => { payload(v)['segmentHash'] = null; }, 'accepted.payload.segmentHash'],
-  ['an empty previousReceiptId', (v) => { payload(v)['previousReceiptId'] = ''; }, 'accepted.payload.previousReceiptId'],
 ];
 const inSource = (path: string) => path.replace(/^verificationKey/u, 'chain.verificationKey').replace(/^accepted/u, 'receiptV2.accepted[0]');
 test.each(DEGENERATE)('%s is refused in the copy, in the source and in both', (_name, change, path) => {
@@ -170,6 +167,23 @@ test.each(DEGENERATE)('%s is refused in the copy, in the source and in both', (_
   assert.equal(check(view(), changed()), `nema oblik (izvor.${inSource(path)})`);
   assert.equal(check(changed(), changed()), `nema oblik (kopija.${path})`);
 });
+// Every leaf of the schema (45) with null, "" and 1.5, where its type refuses them (QA on d302d06).
+const leaves = (v: unknown, path: string): string[] => (typeof v === 'object' && v !== null
+  ? Object.entries(v).flatMap(([k, x]) => leaves(x, Array.isArray(v) ? `${path}[${k}]` : `${path}.${k}`)) : [path.slice(1)]);
+const setAt = (o: unknown, path: string, x: unknown) => {
+  const keys = path.replace(/\[(\d+)\]/gu, '.$1').split('.');
+  (keys.slice(0, -1).reduce((at, k) => (at as Obj)[k], o) as Obj)[keys.at(-1)!] = x;
+};
+test('the schema has 45 leaves', () => assert.equal([...leaves(view(), ''), ...leaves({ source: vOwn.source }, '')].length, 45));
+test.each([...leaves(view(), ''), ...leaves({ source: vOwn.source }, '')])('the leaf %s refuses null, "" and 1.5 where its type does', (path) => {
+  for (const x of [null, '', 1.5].filter((y) => !(y === null && /(predecessorSegmentHash|previousReceiptId)$/u.test(path)))) {
+    const changed = () => { const v = path.startsWith('source') ? clone(vOwn) : view(); setAt(v, path, x); return v; };
+    if (path.startsWith('source')) { assert.equal(vendoredProblem(vSource, changed(), SHA), `nema oblik (kopija.${path})`); continue; }
+    assert.equal(check(changed() as View, view()), `nema oblik (kopija.${path})`);
+    assert.equal(check(view(), changed() as View), `nema oblik (izvor.${inSource(path)})`);
+    assert.equal(check(changed() as View, changed() as View), `nema oblik (kopija.${path})`);
+  }
+});
 test('a source without its chain, accepted receipts or valid UTF-8 is refused', () => {
   const v = view();
   const doc = (d: unknown) => Buffer.from(JSON.stringify(d));
@@ -177,12 +191,14 @@ test('a source without its chain, accepted receipts or valid UTF-8 is refused', 
   assert.equal(check(v, doc({ chain: [v.verificationKey], receiptV2: { accepted: [v.accepted] } })), 'nema oblik (izvor.chain)');
   assert.equal(check(v, doc({ chain: { verificationKey: v.verificationKey }, receiptV2: { accepted: [] } })), 'nema oblik (izvor.receiptV2.accepted)');
   assert.equal(check(v, doc({ chain: { verificationKey: v.verificationKey } })), 'nema oblik (izvor.receiptV2)');
+  for (const accepted of [null, { 0: v.accepted }]) assert.equal(check(v, doc({ chain: { verificationKey: v.verificationKey }, receiptV2: { accepted } })), 'nema oblik (izvor.receiptV2.accepted)');
+  // The outer catch is reached by a source that is no buffer (QA on d302d06): a reason, never null.
+  assert.equal(vendoredProblem(null as unknown as Buffer, vOwn, SHA), 'kopija ili izvor se ne mogu pročitati');
   assert.equal(check(v, Buffer.concat([sourceOf(v), Buffer.from([0xff])])), 'izvor nije JSON');
   // A byte that is no UTF-8 inside a text, where a lenient decoder would read U+FFFD and match the copy.
   const replaced = view();
-  (replaced.accepted as Obj)['note'] = '\ufffd';
-  const bytes = sourceOf(replaced);
-  const at = bytes.indexOf(Buffer.from('\ufffd'));
+  setAt(replaced, 'accepted.note', '\ufffd');
+  const [bytes, at] = ((b) => [b, b.indexOf(Buffer.from('\ufffd'))] as const)(sourceOf(replaced));
   assert.equal(check(replaced, Buffer.concat([bytes.subarray(0, at), Buffer.from([0xff]), bytes.subarray(at + 3)])), 'izvor nije JSON');
 });
 test('the real fixture passes against a source built from it, with the other members the server holds', () => {
