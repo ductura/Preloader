@@ -240,6 +240,10 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
     ['evidenceDomainId', '0b5e6c1a-7d2f-4e3a-8b9c-0d1e2f3a4b5c'], ['clientTransactionId', `${expected.clientTransactionId}\u00a0`]] as const)
     .map(([k, v]): [string, unknown, ReceiptTrust, unknown, string] => [`another ${k} (${JSON.stringify(v)})`, signed({ [k]: v }), trust, expected, `potvrda ne imenuje ovaj commit (${k})`]),
   ...CTRL.filter(([n]) => n !== 'NBSP').map(([n, c]): [string, unknown, ReceiptTrust, unknown, string] => [`${n} after the transaction`, signed({ clientTransactionId: `${expected.clientTransactionId}${c}` }), trust, expected, `${SHAPE} (clientTransactionId)`]),
+  ['C1 (U+0085) in the transaction (review c.6988656296)', signed({ clientTransactionId: 'tx\u0085' }), trust, expected, `${SHAPE} (clientTransactionId)`],
+  ['a transaction of 129 characters (review c.6988656296)', signed({ clientTransactionId: 't'.repeat(129) }), trust, expected, `${SHAPE} (clientTransactionId)`],
+  // Signed as it stands: jcs refuses a lone surrogate, so the digest is never computed (QA c.6988665355).
+  ['a lone surrogate in receiptId, which jcs cannot write', at((r) => { r.signedReceipt.payload['receiptId'] = 'r\ud800'; }), trust, expected, SHAPE],
   ['a blank key id in trust and signature', label('keyId', ''), { ...trust, keyId: '' }, expected, lab('trust.keyId')],
   ['a blank key version in trust and signature', label('keyVersion', ' '), { ...trust, keyVersion: ' ' }, expected, lab('trust.keyVersion')],
   ...(['keyId', 'keyVersion'] as const).flatMap((f) => CTRL.map(([n, c]): [string, unknown, ReceiptTrust, unknown, string] =>
