@@ -396,6 +396,10 @@ test.each([
   assert.equal(registryRow(output), null);
 });
 
+test('registryRow refuses what is not text, also a String object or an object that turns into the row (review on 86cecdd7)', () => {
+  for (const v of [null, undefined, 7, new String(ROW), [ROW], { toString: () => ROW }]) assert.equal(registryRow(v as string), null);
+});
+
 test('registryRow agrees with an oracle written from the contract schema (fast-check)', () => {
   const sig = schemaWhere(openapi, (n) => n.properties?.['signatureBase64Url'] !== undefined && n.properties?.['keyId'] !== undefined).properties!;
   const keyIdOk = ajv.compile(sig['keyId']!);
