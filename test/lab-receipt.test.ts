@@ -224,6 +224,7 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
   ['a short signature', sigAs(sig.subarray(1)), trust, expected, `${SHAPE} (signature.signatureBase64Url)`],
   ['a padded signature', sigAs(`${sig.toString('base64url')}==`), trust, expected, `${SHAPE} (signature.signatureBase64Url)`],
   ['a standard base64 signature', sigAs(sig.toString('base64')), trust, expected, `${SHAPE} (signature.signatureBase64Url)`],
+  ['a signature of 86 characters with a +', sigAs(`+${sig.toString('base64url').slice(1)}`), trust, expected, `${SHAPE} (signature.signatureBase64Url)`],
   ['S at or above the group order', sigAs(bigS), trust, expected, 'potpis nije ispravno zapisan'],
   ['S equal to the group order', sigAs(Buffer.concat([sig.subarray(0, 32), Buffer.from(L.toString(16).padStart(64, '0'), 'hex').reverse()])), trust, expected, 'potpis nije ispravno zapisan'],
   ['a second base64url spelling of the signature', sigAs(`${sig.toString('base64url').slice(0, -1)}${twin(sig.toString('base64url').at(-1)!)}`), trust, expected, 'potpis nije ispravno zapisan'],
@@ -235,6 +236,8 @@ const rows: [string, unknown, ReceiptTrust, unknown, string | null][] = [
     ['evidenceDomainId', '0b5e6c1a-7d2f-4e3a-8b9c-0d1e2f3a4b5c'], ['clientTransactionId', `${expected.clientTransactionId}\u00a0`]] as const)
     .map(([k, v]): [string, unknown, ReceiptTrust, unknown, string] => [`another ${k} (${JSON.stringify(v)})`, signed({ [k]: v }), trust, expected, `potvrda ne imenuje ovaj commit (${k})`]),
   ['C1 (U+0085) in the transaction (review c.6988656296)', signed({ clientTransactionId: 'tx\u0085' }), trust, expected, `${SHAPE} (payload.clientTransactionId)`],
+  // routes/evidence.ts:28 refuses it too: in ^(?=.*\S) the dot does not cross U+2028 (pre-check on 82d960d5).
+  ['U+2028 before the transaction', signed({ clientTransactionId: '\u2028tx' }), trust, expected, `${SHAPE} (payload.clientTransactionId)`],
   ['a trusted key that is not Ed25519', vector(), { ...trust, keyBase64Url: Buffer.from(`ff${golden.verificationKey.spkiDerHex.slice(2)}`, 'hex').toString('base64url') }, expected, lab('trust.keyBase64Url')],
   ['a second base64url spelling of the trusted key', vector(), { ...trust, keyBase64Url: `${trust.keyBase64Url.slice(0, -1)}${twin(trust.keyBase64Url.at(-1)!)}` }, expected, lab('trust.keyBase64Url')],
   ['a trusted X25519 key of 44 bytes (QA c.6988462360)', vector(), { ...trust, keyBase64Url: generateKeyPairSync('x25519').publicKey.export({ type: 'spki', format: 'der' }).toString('base64url') }, expected, lab('trust.keyBase64Url')],
