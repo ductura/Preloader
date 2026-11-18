@@ -1,6 +1,5 @@
-// DAN-1096 L-1: the canonical text (RFC 8785) a receipt v2 is signed over, and the key the lab derives
-// from the stack's seed. The contract vector is the server's own (test/fixtures/receipt-v2-golden.json);
-// its key is RFC 8032 test 1.
+// DAN-1096 L-1: the RFC 8785 text a receipt v2 is signed over, and the key the lab derives from the stack's seed.
+// The contract vector is the server's own (test/fixtures/receipt-v2-golden.json); its key is RFC 8032 test 1.
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import fc from 'fast-check';
@@ -8,16 +7,13 @@ import { canonicalJson } from '@ductura/contracts';
 import { createHash, createPublicKey, verify } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-
 import { jcs, jcsText, publicKeyFromSeed } from '../scripts/lab/receipt.ts';
-
 type Golden = {
   verificationKey: { spkiDerHex: string; signingSeedSha256: string };
   accepted: { payload: Record<string, unknown>; canonical: string; payloadDigestSha256: string; signature: { signatureBase64Url: string } };
 };
 const golden = JSON.parse(readFileSync(new URL('fixtures/receipt-v2-golden.json', import.meta.url), 'utf8')) as Golden;
 const SEED = Buffer.from('9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60', 'hex');
-
 test('the vendored vector is the RFC 8032 key and the canonical text of the server', () => {
   const spki = Buffer.from(golden.verificationKey.spkiDerHex, 'hex');
   assert.equal(publicKeyFromSeed(SEED), spki.toString('base64url'));
@@ -29,17 +25,14 @@ test('the vendored vector is the RFC 8032 key and the canonical text of the serv
   const key = createPublicKey({ key: spki, format: 'der', type: 'spki' });
   const sig = Buffer.from(golden.accepted.signature.signatureBase64Url, 'base64url');
   assert.equal(verify(null, Buffer.concat([Buffer.from('ductus-evidence-receipt-v2\n'), digest]), key, sig), true);
-  assert.equal(verify(null, Buffer.from(golden.accepted.canonical), key, sig), false);
-  assert.equal(verify(null, digest, key, sig), false);
+  for (const other of [Buffer.from(golden.accepted.canonical), digest]) assert.equal(verify(null, other, key, sig), false);
 });
-
 // A Uint8Array of another realm, a Buffer view at an offset, and a view whose prototype claims another length.
 const foreign = runInNewContext('new Uint8Array(32)') as Uint8Array;
 foreign.set(SEED);
 const claims = Object.create(Uint8Array.prototype, { length: { get: () => 31 }, byteLength: { get: () => 31 } }) as object;
 test.each([foreign, Buffer.concat([Buffer.from([7]), SEED]).subarray(1), Object.setPrototypeOf(Uint8Array.from(SEED), claims) as Uint8Array])(
   'publicKeyFromSeed takes the 32 bytes the view itself shows (%#)', (seed) => assert.equal(publicKeyFromSeed(seed), publicKeyFromSeed(SEED)));
-
 const shadow = (n: number, key: string, claim: number) => Object.defineProperty(new Uint8Array(n), key, { value: claim });
 const shared = new Uint8Array(new SharedArrayBuffer(32));
 shared.set(SEED);
@@ -53,13 +46,13 @@ const named = (u: Uint8Array, n: number) => { for (let i = 0; i < n; i += 1) Obj
 test.each([new Uint8Array(0), SEED.subarray(1), Buffer.concat([SEED, Buffer.from([0])]), new Uint16Array(16), runInNewContext('new Uint16Array(16)'),
   shadow(32, 'byteLength', 31), shadow(31, 'byteLength', 32), shadow(32, 'length', 31), shadow(31, 'length', 32), { length: 32, byteLength: 32 },
   new DataView(new ArrayBuffer(32)), shared, detach(Uint8Array.from(SEED)), outside, named(detach(Uint8Array.from(SEED)), 32),
-  named(new Uint8Array(31), 1), shadow(32, 'x', 1)])('publicKeyFromSeed refuses a seed that is not 32 bytes of Uint8Array (%#)', (seed) => {
+  named(new Uint8Array(31), 1), shadow(32, 'x', 1), Object.assign(detach(Uint8Array.from(SEED)), Object.fromEntries([...Array(32).keys()].map((i) => [Symbol(i), i]))),
+  // QA self-check: a seed too large for Reflect.ownKeys is refused by its length first.
+  new Uint8Array(2 ** 25)])('publicKeyFromSeed refuses a seed that is not 32 bytes of Uint8Array (%#)', (seed) => {
   assert.throws(() => publicKeyFromSeed(seed as Uint8Array), /^Error: sjeme ključa nema 32 bajta$/);
 });
-
 /** `depth` levels: arrays around one innermost object. */
 const nest = (depth: number): unknown => (depth <= 1 ? { a: 0 } : [nest(depth - 1)]);
-
 // RFC 8785: keys in UTF-16 code unit order, -0 as 0, numbers and escapes as JSON.stringify writes them.
 test.each([
   ['keys by UTF-16 units, not code points', { '�': 1, '\u{1F600}': 2 }, '{"\u{1F600}":2,"�":1}'],
@@ -75,15 +68,16 @@ test.each([
   ['control and blank characters', { 'k\r\n\t\u001f\u007f  ': 'v\r\n\t\u001f\u007f  ' },
     '{"k\\r\\n\\t\\u001f\u007f  ":"v\\r\\n\\t\\u001f\u007f  "}'],
 ] as [string, unknown, string][])('jcs writes RFC 8785: %s', (_name, value, expected) => assert.equal(jcs(value), expected));
-
 test('JSON text goes through jcsText only: "null" is null there and a string in jcs (QA on 2413b3f)', () => {
   assert.equal(jcsText('null'), 'null');
   assert.equal(jcsText(' {"b":1,"a":["null"]} '), '{"a":["null"],"b":1}');
   assert.equal(jcs('null'), canonicalJson('null'));
   for (const bad of ['abc', '{"a":', '"\\ud800"', `${'['.repeat(65)}${']'.repeat(65)}`]) assert.throws(() => jcsText(bad), /^Error: jcs: /, bad);
+  // Pre-check on f1d67668: RFC 8785 §3.1 wants unique member names, also when one is written with an escape.
+  for (const twice of ['{"a":1,"a":2}', '{"a":1,"\\u0061":2}', '{"x":[{"a":1,"b":{},"a":3}]}', '{"a\\"":1,"a\\"":2}']) assert.throws(() => jcsText(twice), /^Error: jcs: /, twice);
+  assert.equal(jcsText('[{"a":1},{"a":2,"b":{"a":"a:"}}]'), '[{"a":1},{"a":2,"b":{"a":"a:"}}]');
   assert.throws(() => jcsText(null as unknown as string), /^Error: jcs: /);
 });
-
 const gotten = Object.defineProperty([1, 2], 0, { get: () => 5, enumerable: true });
 class Sub extends Array<number> {}
 const cycle: Record<string, unknown> = {};
@@ -106,7 +100,6 @@ test.each([
   ['a function', () => 1], ['a symbol', Symbol('x')], ['65 levels of nesting', nest(65)],
   ['a lone high surrogate in a value', { a: 'x\ud800' }], ['a lone low surrogate in a key', { '\udc00': 1 }], ['a lone surrogate alone', '\ud800'],
 ] as [string, unknown][])('jcs refuses %s', (_name, value) => assert.throws(() => jcs(value), /^Error: jcs: /));
-
 // Any JSON value, written as the server's reference canonicalJson writes it. Strings take any UTF-16 code units,
 // so lone surrogates come anywhere; objects are built as JSON.parse builds them, so __proto__ is an own key.
 const units = fc.array(fc.integer({ min: 0, max: 0xffff }), { maxLength: 6 }).map((a) => String.fromCharCode(...a));
@@ -122,15 +115,10 @@ const json = fc.letrec((tie) => ({
     return o;
   }),
 })).value;
-
 test('jcs writes every JSON value as canonicalJson does, and jcsText its JSON text the same', () => {
   fc.assert(fc.property(json, (v) => {
     let reference: string | null = null;
-    try {
-      reference = canonicalJson(v);
-    } catch {
-      // A lone surrogate: canonicalJson throws, and so must jcs and jcsText.
-    }
+    try { reference = canonicalJson(v); } catch { /* a lone surrogate: canonicalJson throws, and so must jcs and jcsText */ }
     for (const write of [() => jcs(v), () => jcs(JSON.parse(JSON.stringify(v))), () => jcsText(JSON.stringify(v))]) {
       if (reference === null) assert.throws(write, /^Error: jcs: /);
       else assert.equal(write(), reference);
