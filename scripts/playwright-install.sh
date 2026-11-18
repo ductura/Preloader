@@ -46,6 +46,9 @@ start=$(date +%s)
 # budget shrinks so that the last cap, --kill-after (10 s) and 5 s more end
 # before it: the ::error:: comes before the job is cancelled.
 deadline="${PLAYWRIGHT_INSTALL_DEADLINE-}"
+if [ -n "${PLAYWRIGHT_INSTALL_DEADLINE+set}" ] && [ -z "$deadline" ]; then
+  echo "::warning::PLAYWRIGHT_INSTALL_DEADLINE is empty; only the ${budget}s budget applies"
+fi
 if [ -n "$deadline" ]; then
   case "$deadline" in
     [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9] | [1-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;

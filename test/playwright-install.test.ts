@@ -26,12 +26,14 @@ beforeEach(() => {
   for (const d of ['bin', 'fake', 'archives', 'cache', 'etc/apt/sources.list.d']) mkdirSync(at(d), { recursive: true });
   writeFileSync(at('log'), '');
   writeFileSync(at('clock'), '1700000000');
-  // One plan line per pnpm call: ok, fail, capped (124), hang (ignores TERM), or ok+deb (apt downloaded new.deb).
+  // One plan line per pnpm call: ok, fail, capped (124), hang (ignores TERM), ok+deb (apt downloaded
+  // new.deb) or ok+late (success that used up the whole default budget).
   stub('bin', 'pnpm', [
     'echo "pnpm $* | archives: $(ls "$PLAYWRIGHT_APT_ARCHIVES" | tr "\\n" " ")" >> "$LOG"',
     'action=$(head -n1 "$PLAN"); sed -i 1d "$PLAN"',
     'case "$action" in ok) exit 0 ;; capped) exit 124 ;; hang) trap "" TERM; exec sleep 30 ;;',
-    '  ok+deb) touch "$PLAYWRIGHT_APT_ARCHIVES/new.deb"; exit 0 ;; *) exit 1 ;; esac',
+    '  ok+deb) touch "$PLAYWRIGHT_APT_ARCHIVES/new.deb"; exit 0 ;;',
+    '  ok+late) echo $(($(cat "$CLOCK") + 660)) > "$CLOCK"; exit 0 ;; *) exit 1 ;; esac',
   ]);
   // autoclean drops the stale*.deb files, as apt drops versions it can no longer download.
   stub('bin', 'sudo', [
@@ -42,14 +44,18 @@ beforeEach(() => {
   ]);
   stub('fake', 'date', ['cat "$CLOCK"']);
   stub('fake', 'timeout', [
-    'shift; secs=$1; shift; echo "cap $secs $*" >> "$LOG"; "$@"; s=$?',
+    'echo "$1" >> "$LOG.kill"; shift; secs=$1; shift; echo "cap $secs $*" >> "$LOG"; "$@"; s=$?',
     '[ "$s" -eq 124 ] && echo $(($(cat "$CLOCK") + secs)) > "$CLOCK"; exit "$s"',
   ]);
 });
 
 // The ubuntu-24.04 format (runner-images configure-apt-sources.sh) with the host of run 44244472136.
 const MIRRORS = 'http://us-east-2.ec2.archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n';
-const SOURCES = 'Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\nSuites: noble\n\nTypes: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: noble-security\n';
+const SOURCES = [
+  'Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\nSuites: noble\n',
+  'Types: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: noble-security\n',
+  'Types: deb\nURIs: http://us-east-2.ec2.archive.ubuntu.com/ubuntu/ http://security.ubuntu.com/ubuntu/\nSuites: noble-updates\n',
+].join('\n');
 const LIST = [
   'deb http://us-east-2.ec2.archive.ubuntu.com/ubuntu noble main',
   'deb [arch=amd64] https://packages.microsoft.com/ubuntu/24.04/prod noble main',
@@ -72,7 +78,10 @@ function run(plan: string[], env: Record<string, string> = {}, fakeClock = true,
     timeout: 25_000,
     env: { PATH, HOME: root, LOG: at('log'), PLAN: at('plan'), CLOCK: at('clock'), PLAYWRIGHT_APT_ROOT: root, PLAYWRIGHT_APT_ARCHIVES: at('archives'), ...env },
   });
-  return { code: r.status, out: r.stdout + r.stderr, log: readFileSync(at('log'), 'utf8'), ms: Date.now() - start };
+  const log = readFileSync(at('log'), 'utf8');
+  // GNU timeout reads 0 as no limit: no step may ever be started with a cap of 0 or less.
+  assert.doesNotMatch(log, /^cap (0|-)/m);
+  return { code: r.status, out: r.stdout + r.stderr, log, ms: Date.now() - start };
 }
 const attemptCaps = (log: string): number[] => [...log.matchAll(/^cap (\d+) pnpm /gm)].map((m) => Number(m[1]));
 
@@ -119,6 +128,29 @@ test('the job deadline shrinks the budget so the error comes before the job is c
   assert.match(r.out, /::error::.*within 285s \(2 of 3 attempts, last exit 124\)/);
 });
 
+test('a budget spent exactly after an attempt starts no cleanup with a cap of 0', () => {
+  writeFileSync(at('etc/apt/apt-mirrors.txt'), MIRRORS);
+  const r = run(['capped', 'capped', 'capped'], { PLAYWRIGHT_INSTALL_BUDGET: '480' });
+  assert.deepEqual(attemptCaps(r.log), [240, 240]);
+  assert.equal(r.log.match(/^sudo dpkg --configure -a$/gm)?.length, 1, r.log);
+  assert.equal(r.code, 1, r.out);
+});
+
+test('a success that used up the budget saves nothing and starts no step with a cap of 0', () => {
+  writeFileSync(at('cache/old.deb'), 'x');
+  const r = run(['ok+late'], { PLAYWRIGHT_APT_CACHE_DIR: at('cache') });
+  assert.equal(r.code, 0, r.out);
+  assert.doesNotMatch(r.log, /autoclean/);
+  assert.match(r.out, /::warning::could not save the apt package cache/);
+  assert.deepEqual(readdirSync(at('cache')), ['old.deb']);
+});
+
+test('an empty deadline warns and keeps the budget', () => {
+  const r = run(['capped', 'capped', 'capped'], { PLAYWRIGHT_INSTALL_DEADLINE: '' });
+  assert.match(r.out, /::warning::PLAYWRIGHT_INSTALL_DEADLINE is empty; only the 660s budget applies/);
+  assert.deepEqual(attemptCaps(r.log), [240, 240, 180]);
+});
+
 test('a deadline that leaves no time stops before any install', () => {
   const r = run(['ok'], { PLAYWRIGHT_INSTALL_DEADLINE: '1700000015' });
   assert.equal(r.code, 1, r.out);
@@ -163,6 +195,10 @@ test('after each failed attempt apt is cleaned up and the archive moves to the n
   ];
   const lines = r.log.split('\n').filter((l) => /^(cap \d+ (pnpm|sudo)|sudo) /.test(l));
   const expected = [install, ...between, install, ...between, install];
+  // Every cap kills 10 s after TERM (contract (d)); the first line is the probe.
+  const kills = readFileSync(`${at('log')}.kill`, 'utf8').trim().split('\n');
+  assert.equal(kills[0], '--kill-after=1');
+  assert.ok(kills.length > 10 && kills.slice(1).every((k) => k === '--kill-after=10'), kills.join(' '));
   assert.equal(lines.length, expected.length, r.log);
   expected.forEach((re, n) => assert.match(lines[n] ?? '', re));
   assert.match(r.out, /attempt 1\/3 timed out after 240s[^]*now use archive\.ubuntu\.com[^]*attempt 2\/3 failed \(exit 1\)[^]*now use mirrors\.edge\.kernel\.org/);
@@ -177,7 +213,7 @@ test('the fallback rewrites only Ubuntu archive URLs and keeps scheme and priori
   const r = run(['capped', 'ok']);
   assert.equal(r.code, 0, r.out);
   assert.equal(apt('apt-mirrors.txt'), MIRRORS.replace('us-east-2.ec2.archive.ubuntu.com', 'archive.ubuntu.com'));
-  assert.equal(apt('sources.list.d/ubuntu.sources'), SOURCES);
+  assert.equal(apt('sources.list.d/ubuntu.sources'), SOURCES.replace('us-east-2.ec2.archive.ubuntu.com', 'archive.ubuntu.com'));
   assert.equal(apt('sources.list'), LIST.replaceAll('us-east-2.ec2.archive.ubuntu.com', 'archive.ubuntu.com'));
 });
 
@@ -248,6 +284,7 @@ test('e2e-matrix restores and saves both caches and installs browsers only throu
   const budget = Number(field(env, 'PLAYWRIGHT_INSTALL_BUDGET'));
   // A slow first mirror must leave time for the fallback.
   const limit = Number(field(env, 'PLAYWRIGHT_INSTALL_TIMEOUT'));
+  assert.deepEqual([field(env, 'PLAYWRIGHT_INSTALL_BUDGET'), field(env, 'PLAYWRIGHT_INSTALL_TIMEOUT')], ['660', '240'], 'contract (b)');
   assert.ok(limit > 0 && 2 * limit < budget, `limit ${limit}s, budget ${budget}s`);
   // The deadline is set first and reaches the script: at most a minute short of the job timeout.
   assert.equal(field(env, 'PLAYWRIGHT_INSTALL_DEADLINE'), '${{ env.JOB_DEADLINE }}');
