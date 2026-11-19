@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { checkBudget, parseBudget } from '../scripts/budget.ts';
+import { checkBudget, checkDir, nextPageSizes, parseBudget } from '../scripts/budget.ts';
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'budget-')); });
@@ -121,5 +121,42 @@ describe('CLI ruši izgradnju kad se proračun prijeđe', () => {
       status = (error as { status: number | null }).status;
     }
     expect(status).toBe(1);
+  });
+});
+
+describe('izgradnja Nexta (.next)', () => {
+  /** `.next` sa stranicom, njezinim skriptama i datotekom koju stranica ne učitava. */
+  function next(html: string, assets: Record<string, number>): string {
+    const root = join(dir, '.next');
+    execFileSync('mkdir', ['-p', join(root, 'server', 'pages'), join(root, 'static', 'chunks')]);
+    writeFileSync(join(root, 'server', 'pages', 'index.html'), html);
+    for (const [name, bytes] of Object.entries(assets)) {
+      let x = bytes;
+      writeFileSync(join(root, 'static', 'chunks', name), Buffer.alloc(bytes, 0).map(() => (x = (x * 1103515245 + 12345) & 0x7fffffff) & 0xff));
+    }
+    return root;
+  }
+  const gz = (path: string) => gzipSync(readFileSync(path), { level: 9 }).length;
+
+  test('stranica je HTML plus svaka skripta i stil koje učita, bez noModule', () => {
+    const html = '<script src="/_next/static/chunks/a.js"></script><link rel="stylesheet" href="/_next/static/chunks/c.css">' +
+      '<script src="/_next/static/chunks/p.js" noModule=""></script><link rel="icon" href="/_next/static/chunks/i.js">';
+    const root = next(html, { 'a.js': 300, 'c.css': 200, 'p.js': 400, 'i.js': 100, 'ostalo.js': 500 });
+    const { sizes, total } = nextPageSizes(root, ['index.html', 'greska.html']);
+    const chunk = (name: string) => gz(join(root, 'static', 'chunks', name));
+    const expected = gz(join(root, 'server', 'pages', 'index.html')) + chunk('a.js') + chunk('c.css');
+    expect([...sizes]).toEqual([['index.html', expected]]);
+    expect(total).toBe(expected);
+    expect(checkDir(root, { total: expected, files: { 'index.html': expected } })).toEqual([]);
+    expect(checkDir(root, { total: expected, files: { 'index.html': expected - 1 } })).toEqual([expect.stringContaining('index.html')]);
+  });
+
+  test('stranica iz proračuna koja ne postoji pada, i skripta koje nema', () => {
+    const root = next('<p>x</p>', {});
+    expect(checkDir(root, { total: 10_000, files: { 'index.html': 10_000, 'greska.html': 10_000 } })).toEqual([
+      expect.stringContaining('greska.html: datoteka iz proračuna ne postoji'),
+    ]);
+    writeFileSync(join(root, 'server', 'pages', 'index.html'), '<script src="/_next/static/chunks/nema.js"></script>');
+    expect(() => nextPageSizes(root, ['index.html'])).toThrow(/nema\.js/);
   });
 });

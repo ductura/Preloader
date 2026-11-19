@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "//": "Iste stroge opcije kao @ductura/tsconfig (ductura/.github packages/tsconfig/base.json), uz DOM za klijent i ono što next build traži (jsx, plugin next, .next/types).",
+  "//": "Iste stroge opcije kao @ductura/tsconfig (ductura/.github packages/tsconfig/base.json), uz DOM za klijent i ono što next build traži (jsx, plugin next, .next/types). Razrješavanje je Bundler, kao u Nextu; relativni uvozi i dalje pišu nastavak .ts. .next/dev je izvan provjere: next dev ondje ostavlja drugi validator.ts s istim globalnim tipovima. src/components/landing je doslovna kopija bez ovisnosti; spaja je sljedeći PR.",
   "compilerOptions": {
     "target": "ES2023",
     "lib": [
@@ -8,8 +8,8 @@
       "DOM",
       "DOM.Iterable"
     ],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "types": [
       "node"
     ],
@@ -38,7 +38,7 @@
   "include": [
     "next-env.d.ts",
     "next.config.ts",
-    "app",
+    "pages",
     "src",
     "scripts",
     "test",
@@ -50,6 +50,7 @@
   ],
   "exclude": [
     "node_modules",
-    "src/components/landing"
+    "src/components/landing",
+    ".next/dev"
   ]
 }

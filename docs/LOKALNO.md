@@ -76,7 +76,7 @@ Sam edge bez ostalih usluga: `pnpm dev` u jednom terminalu i `pnpm edge` u drugo
 - WebSocket (HMR za `next dev`) prolazi kao sirova veza.
 - Ugašena usluga daje `502` sa stranicom greške preloadera (`/greska.html`); kad ne radi ni preloader, kratak tekst. Edge radi dalje.
 - Ciljevi se mijenjaju varijablama `DUCTURA_EDGE_PRELOADER`, `DUCTURA_EDGE_ADMIN`, `DUCTURA_EDGE_API` i `DUCTURA_EDGE_FRONT` (`http://host:port`, bez putanje). Port edgea je `DUCTURA_EDGE_PORT` (zadano 8000), adresa `DUCTURA_EDGE_HOST` (zadano `localhost`).
-- Edge ne dodaje `Content-Security-Policy`: stranice Nexta imaju više ugrađenih skripti, pa politika iz hasheva više ne vrijedi (CSP za Next.js je zaseban korak).
+- Edge ne dodaje `Content-Security-Policy`, jer stranice poslužuje Next (zaseban korak, vidi `docs/DEPLOY.md`).
 - Razlika od Vercela: rewriteovi Nexta (`src/rewrites.ts`) uspoređuju putanju bez obzira na velika i mala slova (`/Admin` ide na `/admin` Aplication_fronta), a edge doslovno. `%2f` i `%61` ni jedan ni drugi ne dekodira.
 
 ## 4. Tok u pregledniku (ugovor §3)

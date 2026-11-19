@@ -1,5 +1,5 @@
 // Prvi ekran u pregledniku: odluke (P-0.2), ručni izbor (P-0.3) i kontekst klijenta (P-0.8).
-// Poziva ga `src/ui/PreloaderScript.tsx` nakon hidracije; uvoz sam ništa ne pokreće.
+// Ugrađena skripta stranice `/` poziva `startPreloader` (scripts/page-assets.ts); uvoz sam ništa ne pokreće.
 import { browserStore } from './choice/store.ts';
 import { applyRoute } from './client.ts';
 import { sendClientContext } from './client-context/index.ts';
@@ -8,7 +8,7 @@ import { signalsFrom } from './detect/index.ts';
 
 let started = false;
 
-/** Jednom po učitavanju stranice, i kad React u razvoju efekt pokrene dvaput. */
+/** Jednom po učitavanju stranice. */
 export function startPreloader(): void {
   if (started) return;
   started = true;
