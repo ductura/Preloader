@@ -34,11 +34,11 @@ Isto radi u PowerShellu, cmd-u i terminalu na macOS-u i Linuxu: skripta ne treba
 
 `pnpm sve`:
 
-1. izgradi preloader (`dist/`);
-2. pokrene usluge iz ugovora §1 (svaka sa svojim portom u `PORT`):
+1. pokrene preloader (`next dev` na :3100) i usluge iz ugovora §1 (svaka sa svojim portom u `PORT`):
 
 | Usluga | Port | Mapa | Naredba |
 |---|---|---|---|
+| preloader (Next.js) | 3100 | ovaj repo | `pnpm run dev` |
 | Aplication_server | 3110 | `Aplication_server` | `pnpm run dev` |
 | Aplication_front (`basePath: "/admin"`) | 3120 | `Aplication_front` | `pnpm run dev` |
 | Institution_server | 4000 | `Institution_server` | `pnpm run dev` |
@@ -46,7 +46,7 @@ Isto radi u PowerShellu, cmd-u i terminalu na macOS-u i Linuxu: skripta ne treba
 | front institucije | 5173 | `Institution_front_web_chrome` | `pnpm run dev` |
 | edge | 8000 | ovaj repo | `node deploy/edge/dev-proxy.mjs` |
 
-3. ispiše koje usluge rade i adresu **http://localhost:8000/**.
+2. ispiše koje usluge rade i adresu **http://localhost:8000/**.
 
 Usluga čiji checkout, `package.json` ili skripta nedostaje preskače se, a razlog se ispiše (na primjer `Aplication_front nema skriptu "dev"`). Ostale rade dalje. Ispis svake usluge ima oznaku (`[institution-server] ...`). Ctrl+C gasi sve usluge s njihovim podprocesima.
 
@@ -59,13 +59,13 @@ Okolina koju skripta postavlja:
 - lažni OIDC: `ISSUER=http://localhost:8090`, `REDIRECT_URI=http://localhost:8000/api/v1/auth/callback`, `POST_LOGOUT_REDIRECT_URI=http://localhost:8000/`, `BACKCHANNEL_LOGOUT_URI=http://localhost:8000/api/v1/auth/backchannel-logout`.
 - Ostalo (npr. `DATABASE_URL`) prolazi iz Vaše okoline nepromijenjeno; `PORT` iz okoline se ne prenosi.
 
-Sam edge bez ostalih usluga: `pnpm build && pnpm edge`.
+Sam edge bez ostalih usluga: `pnpm dev` u jednom terminalu i `pnpm edge` u drugom.
 
 ## 3. Edge (`deploy/edge/dev-proxy.mjs`)
 
 | Putanja | Ide na |
 |---|---|
-| `/`, `/greska.html` i ostala statika | `dist/` preloadera (s CSP-om iz hasheva, `deploy/edge/content-security-policy.ts`) |
+| `/`, `/greska.html`, `/_next/*` i sve ostalo | preloader (Next.js) :3100; drugo od GET i HEAD daje `405` |
 | `/admin`, `/admin/*` | Aplication_front :3120 |
 | `/api/v1`, `/api/v1/*` | Institution_server :4000 |
 | `/app/web`, `/app/web/*`, `/app/chrome`, `/app/chrome/*` | front institucije :5173 |
@@ -74,8 +74,10 @@ Sam edge bez ostalih usluga: `pnpm build && pnpm edge`.
 - Putanja i upit prosljeđuju se nepromijenjeni: front institucije dobiva `/app/web/...`, ne `/...`.
 - `Host` (`localhost:8000`), kolačići, `Location` i svi `Set-Cookie` prolaze nepromijenjeni. Edge dodaje `X-Forwarded-Host`, `X-Forwarded-Proto: http` i `X-Forwarded-For` (vrijednosti iz preglednika se zamjenjuju) i uklanja samo zaglavlja jednog skoka.
 - WebSocket (HMR za `next dev`) prolazi kao sirova veza.
-- Ugašena usluga daje `502` sa stranicom greške; edge radi dalje.
-- Ciljevi se mijenjaju varijablama `DUCTURA_EDGE_ADMIN`, `DUCTURA_EDGE_API` i `DUCTURA_EDGE_FRONT` (`http://host:port`, bez putanje). Port edgea je `DUCTURA_EDGE_PORT` (zadano 8000), adresa `DUCTURA_EDGE_HOST` (zadano `localhost`), mapa `DUCTURA_EDGE_DIST` (zadano `dist/`).
+- Ugašena usluga daje `502` sa stranicom greške preloadera (`/greska.html`); kad ne radi ni preloader, kratak tekst. Edge radi dalje.
+- Ciljevi se mijenjaju varijablama `DUCTURA_EDGE_PRELOADER`, `DUCTURA_EDGE_ADMIN`, `DUCTURA_EDGE_API` i `DUCTURA_EDGE_FRONT` (`http://host:port`, bez putanje). Port edgea je `DUCTURA_EDGE_PORT` (zadano 8000), adresa `DUCTURA_EDGE_HOST` (zadano `localhost`).
+- Edge ne dodaje `Content-Security-Policy`: stranice Nexta imaju više ugrađenih skripti, pa politika iz hasheva više ne vrijedi (CSP za Next.js je zaseban korak).
+- Razlika od Vercela: rewriteovi Nexta (`src/rewrites.ts`) uspoređuju putanju bez obzira na velika i mala slova (`/Admin` ide na `/admin` Aplication_fronta), a edge doslovno. `%2f` i `%61` ni jedan ni drugi ne dekodira.
 
 ## 4. Tok u pregledniku (ugovor §3)
 
@@ -93,7 +95,7 @@ Studenti i svi računi institucije prijavljuju se samo preko AAI@EduHr, lokalno 
 
 ## 5. Provjera da sve radi
 
-- `curl -i http://localhost:8000/` vraća preloader s `Content-Security-Policy`.
+- `curl -i http://localhost:8000/` vraća preloader (stranicu Nexta).
 - `curl -i "http://localhost:8000/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F"` vraća preusmjeravanje na `http://localhost:8090/...`.
 - `curl -i http://localhost:8000/admin/prijava` vraća stranicu prijave administratora.
 - `curl -i http://localhost:8000/app/web/` vraća front institucije.

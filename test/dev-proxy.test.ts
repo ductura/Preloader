@@ -2,9 +2,6 @@
 // prema lažnim uzvodnim poslužiteljima na slučajnim portovima. Mreža izvan računala se ne koristi.
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { connect } from 'node:net';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createEdge, DEFAULT_TARGETS, routeFor, targetsFromEnv } from '../deploy/edge/dev-proxy.mjs';
 
@@ -18,9 +15,9 @@ interface Seen {
 
 const seen: Seen[] = [];
 const servers: Server[] = [];
-let root: string;
 let edgeUrl: string;
 let edgePort: number;
+let preloaderPort: number;
 let wsUpgrades: Seen[] = [];
 
 const sockets = new Set<import('node:net').Socket>();
@@ -38,7 +35,10 @@ async function listen(server: Server): Promise<number> {
   return address.port;
 }
 
-/** Lažni uzvodni: zapisuje zahtjev, vraća dva kolačića i Location, na `/__ws` prihvaća WebSocket. */
+/**
+ * Lažni uzvodni: zapisuje zahtjev, vraća dva kolačića i Location, na `/__ws` prihvaća WebSocket.
+ * Lažni preloader na `/greska.html` vraća stranicu greške.
+ */
 function fakeUpstream(name: string): Server {
   const server = createServer((req, res) => {
     let body = '';
@@ -46,6 +46,10 @@ function fakeUpstream(name: string): Server {
     req.on('data', (chunk: string) => (body += chunk));
     req.on('end', () => {
       seen.push({ upstream: name, method: req.method ?? '', url: req.url ?? '', headers: req.headers, body });
+      if (name === 'preloader' && req.url === '/greska.html') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end('<!doctype html><p>greška</p>');
+        return;
+      }
       res.writeHead(303, [
         'Location', 'http://localhost:8000/app/web/',
         'Set-Cookie', '__Host-ductus_session=s1; Path=/; HttpOnly; Secure; SameSite=Lax',
@@ -66,25 +70,20 @@ function fakeUpstream(name: string): Server {
 }
 
 beforeAll(async () => {
-  root = mkdtempSync(join(tmpdir(), 'edge-'));
-  const dist = join(root, 'dist');
-  mkdirSync(dist);
-  writeFileSync(join(dist, 'index.html'), '<!doctype html><html lang="hr"><title>Ductura</title><style>b{}</style><p>preloader</p><script>1</script></html>');
-  writeFileSync(join(dist, 'greska.html'), '<!doctype html><html lang="hr"><title>Greška</title><style>i{}</style><p>greška</p><script>2</script></html>');
-  writeFileSync(join(root, 'tajna.txt'), 'izvan dist-a');
-  symlinkSync(join(root, 'tajna.txt'), join(dist, 'poveznica.txt'));
-
   const ports = {
+    preloader: await listen(fakeUpstream('preloader')),
     admin: await listen(fakeUpstream('admin')),
     api: await listen(fakeUpstream('api')),
     front: await listen(fakeUpstream('front')),
   };
+  preloaderPort = ports.preloader;
   const targets = targetsFromEnv({
+    DUCTURA_EDGE_PRELOADER: `http://127.0.0.1:${ports.preloader}`,
     DUCTURA_EDGE_ADMIN: `http://127.0.0.1:${ports.admin}`,
     DUCTURA_EDGE_API: `http://127.0.0.1:${ports.api}`,
     DUCTURA_EDGE_FRONT: `http://127.0.0.1:${ports.front}`,
   });
-  const edge = await createEdge({ dist, targets });
+  const edge = await createEdge({ targets });
   edgePort = await listen(edge);
   edgeUrl = `http://127.0.0.1:${edgePort}`;
 });
@@ -95,7 +94,6 @@ afterAll(async () => {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
   }
-  rmSync(root, { recursive: true, force: true });
 });
 
 const get = (path: string, init: RequestInit = {}) => fetch(`${edgeUrl}${path}`, { redirect: 'manual', ...init });
@@ -115,25 +113,25 @@ function rawRequest(path: string): Promise<{ status: number; text: string }> {
 
 describe('routeFor', () => {
   test.each([
-    ['/', 'static'],
-    ['/greska.html', 'static'],
+    ['/', 'preloader'],
+    ['/greska.html', 'preloader'],
     ['/admin', 'admin'],
     ['/admin/', 'admin'],
     ['/admin/prijava', 'admin'],
     ['/admin/_next/webpack-hmr', 'admin'],
-    ['/administracija', 'static'],
-    ['/Admin', 'static'],
-    ['/%61dmin', 'static'],
+    ['/administracija', 'preloader'],
+    ['/Admin', 'preloader'],
+    ['/%61dmin', 'preloader'],
     ['/api/v1', 'api'],
     ['/api/v1/auth/login', 'api'],
     ['/api/v1/client-context', 'api'],
-    ['/api/v2/x', 'static'],
-    ['/api/v1x', 'static'],
+    ['/api/v2/x', 'preloader'],
+    ['/api/v1x', 'preloader'],
     ['/app/web/', 'front'],
     ['/app/web', 'front'],
     ['/app/chrome/index.html', 'front'],
-    ['/app/webx', 'static'],
-    ['/app/mobile/', 'static'],
+    ['/app/webx', 'preloader'],
+    ['/app/mobile/', 'preloader'],
   ] as const)('%s -> %s', (path, route) => {
     expect(routeFor(path)).toBe(route);
   });
@@ -141,9 +139,11 @@ describe('routeFor', () => {
 
 describe('targetsFromEnv', () => {
   test('zadani portovi iz ugovora §1', () => {
-    expect(DEFAULT_TARGETS).toEqual({ admin: 'http://localhost:3120', api: 'http://localhost:4000', front: 'http://localhost:5173' });
+    expect(DEFAULT_TARGETS).toEqual({
+      preloader: 'http://localhost:3100', admin: 'http://localhost:3120', api: 'http://localhost:4000', front: 'http://localhost:5173',
+    });
     const t = targetsFromEnv({});
-    expect([t.admin.port, t.api.port, t.front.port]).toEqual(['3120', '4000', '5173']);
+    expect([t.preloader.port, t.admin.port, t.api.port, t.front.port]).toEqual(['3100', '3120', '4000', '5173']);
   });
 
   test('prazna vrijednost znači zadanu', () => {
@@ -158,40 +158,29 @@ describe('targetsFromEnv', () => {
   );
 });
 
-describe('statika preloadera', () => {
-  test('/ je dist/index.html s CSP-om iz hasheva', async () => {
-    const res = await get('/');
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
-    expect(await res.text()).toContain('<p>preloader</p>');
-    const csp = res.headers.get('content-security-policy') ?? '';
-    expect(csp).toMatch(/script-src 'sha256-[A-Za-z0-9+/]{43}='/);
-    expect(csp).not.toContain('unsafe-inline');
-  });
-
-  test('nepoznata putanja daje 404 sa stranicom greške', async () => {
-    const res = await get('/nema-me');
-    expect(res.status).toBe(404);
-    expect(await res.text()).toContain('<p>greška</p>');
-  });
-
-  test.each(['/../tajna.txt', '/%2e%2e/tajna.txt', '/%2E%2E%2Ftajna.txt', '/..%5ctajna.txt', '/poveznica.txt', '/%00', '/%E0%A4%A'])(
-    'ne izlazi iz dist-a: %s',
+describe('preloader (Next.js)', () => {
+  test.each(['/', '/greska.html?status=404', '/nema-me', '/_next/static/chunks/a.js', '/Admin', '/%61dmin', '/../tajna.txt', '/%2e%2e/tajna.txt'])(
+    '%s ide preloaderu doslovno, s istom putanjom i upitom',
     async (path) => {
+      seen.length = 0;
       const res = await rawRequest(path);
-      expect(res.status).toBe(404);
-      expect(res.text).not.toContain('izvan dist-a');
+      expect(res.text).toContain('odgovor preloader');
+      expect(seen.map((s) => [s.upstream, s.url])).toEqual([['preloader', path]]);
     },
   );
 
-  test('POST na statiku je 405', async () => {
+  test('POST na preloader je 405 i ne ide dalje', async () => {
+    seen.length = 0;
     const res = await get('/', { method: 'POST', body: 'x' });
     expect(res.status).toBe(405);
+    expect(seen).toEqual([]);
   });
 
-  test('WebSocket na statiku se zatvara s 404', async () => {
-    const reply = await rawUpgrade('/');
-    expect(reply).toMatch(/^HTTP\/1\.1 404/);
+  test('WebSocket (HMR za next dev) prolazi do preloadera', async () => {
+    wsUpgrades = [];
+    const reply = await rawUpgrade('/_next/webpack-hmr', 'ping');
+    expect(reply).toContain('preloader:ping');
+    expect(wsUpgrades[0]?.url).toBe('/_next/webpack-hmr');
   });
 });
 
@@ -275,17 +264,20 @@ describe('prosljeđivanje', () => {
 });
 
 describe('uzvodni nije pokrenut', () => {
-  test('502 sa stranicom greške, edge radi dalje', async () => {
-    const dist = join(root, 'dist');
+  test('502 sa stranicom greške preloadera, edge radi dalje', async () => {
     const down = await createEdge({
-      dist,
-      targets: targetsFromEnv({ DUCTURA_EDGE_API: 'http://127.0.0.1:9', DUCTURA_EDGE_ADMIN: 'http://127.0.0.1:9' }),
+      targets: targetsFromEnv({
+        DUCTURA_EDGE_PRELOADER: `http://127.0.0.1:${preloaderPort}`,
+        DUCTURA_EDGE_API: 'http://127.0.0.1:9',
+        DUCTURA_EDGE_ADMIN: 'http://127.0.0.1:9',
+      }),
     });
     const port = await listen(down);
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/me`);
     expect(res.status).toBe(502);
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
     expect(await res.text()).toContain('<p>greška</p>');
-    expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(200);
+    expect(await (await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' })).text()).toBe('odgovor preloader');
     const ws = await rawUpgrade('/admin/_next/webpack-hmr', '', port);
     expect(ws).toMatch(/^HTTP\/1\.1 502/);
   });
@@ -309,7 +301,7 @@ describe('uzvodni nije pokrenut', () => {
     }
     const address = v6.address();
     const v6port = typeof address === 'object' && address ? address.port : 0;
-    const edge = await createEdge({ dist: join(root, 'dist'), targets: targetsFromEnv({ DUCTURA_EDGE_API: `http://[::1]:${v6port}` }) });
+    const edge = await createEdge({ targets: targetsFromEnv({ DUCTURA_EDGE_API: `http://[::1]:${v6port}` }) });
     const port = await listen(edge);
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/me`, { redirect: 'manual' });
     expect(res.headers.get('x-upstream')).toBe('v6');
@@ -317,8 +309,17 @@ describe('uzvodni nije pokrenut', () => {
     expect(ws).toContain('v6:ping');
   });
 
-  test('bez dist-a createEdge baca', async () => {
-    await expect(createEdge({ dist: join(root, 'nema') })).rejects.toThrow();
+  test('bez preloadera 502 s kratkim tekstom, i za stranicu i za uslugu', async () => {
+    const down = await createEdge({
+      targets: targetsFromEnv({ DUCTURA_EDGE_PRELOADER: 'http://127.0.0.1:9', DUCTURA_EDGE_API: 'http://127.0.0.1:9' }),
+    });
+    const port = await listen(down);
+    for (const path of ['/', '/api/v1/me']) {
+      const res = await fetch(`http://127.0.0.1:${port}${path}`);
+      expect(res.status).toBe(502);
+      expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+      expect(await res.text()).toBe('502\n');
+    }
   });
 });
 

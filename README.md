@@ -1,6 +1,6 @@
 # Ductura / preloader
 
-Ulaz u Ducturu (ductura.org). Statična stranica koja u pregledniku prepoznaje uređaj i preglednik, otvara odgovarajuće web-sučelje i nudi desktop paket. Jedini poziv servera je jedan `POST /api/v1/client-context` sa zatvorenim vrijednostima (P-0.8, `src/client-context/`); stranica ne čeka odgovor i radi i kad slanje ne uspije.
+Ulaz u Ducturu (ductura.org). Next.js aplikacija (App Router; next 16.4.6, react 19.3.1) čija stranica u pregledniku prepoznaje uređaj i preglednik, otvara odgovarajuće web-sučelje i nudi desktop paket. Jedini poziv servera je jedan `POST /api/v1/client-context` sa zatvorenim vrijednostima (P-0.8, `src/client-context/`); stranica ne čeka odgovor i radi i kad slanje ne uspije.
 
 | Uređaj / preglednik | Sučelje | Desktop paket |
 |---|---|---|
@@ -10,7 +10,17 @@ Ulaz u Ducturu (ductura.org). Statična stranica koja u pregledniku prepoznaje u
 
 Prvi ekran nudi i dva ulaza za prijavu (ugovor Ductus #2028 §3.1): **Prijava preko AAI@EduHr** (`/api/v1/auth/login?returnTo=/app/web/`) i **Administracija platforme** (`/admin/prijava`). Fokus ili dodir na njima otkazuje automatsko preusmjeravanje.
 
-Bez JavaScripta stranica nudi sve izbore. Putanje su u `src/config.ts`. Vizualni smjer je „papir i grafit” (Ductus `docs/design/DESIGN-SYSTEM.md`).
+Bez JavaScripta stranica nudi sve izbore. Putanje su u `src/config.ts`. Stranice su `app/page.tsx` (`/`) i `app/greska/page.tsx` (`/greska`, i kao `/greska.html`); sadržaj je u `src/ui/`, a logika u pregledniku (`src/main.ts`, `src/errors/main.ts`) radi nakon hidracije.
+
+Ostale usluge su na istom podrijetlu preko Next.js rewriteova (`src/rewrites.ts`, `next.config.ts`), po ugovoru Ductus #2028 §1. Adrese su u varijablama okoline i čitaju se pri `next build`:
+
+| Varijabla | Putanje | Primjer |
+|---|---|---|
+| `APLICATION_FRONT_URL` | `/admin`, `/admin/*` | `https://<host Aplication_fronta>` |
+| `INSTITUTION_SERVER_URL` | `/api/v1`, `/api/v1/*` | `https://<host Institution_servera>` |
+| `INSTITUTION_FRONT_URL` | `/app/web`, `/app/web/*`, `/app/chrome`, `/app/chrome/*` | `https://<host fronta institucije>` |
+
+Vrijednost je samo podrijetlo (`https:`, lokalno i `http://localhost`), bez putanje; inače izgradnja pada. Usluga bez varijable nema rewrite, pa njezine putanje daju 404, a početna stranica radi. Objava je u `docs/DEPLOY.md`. Vizualni smjer je „papir i grafit” (Ductus `docs/design/DESIGN-SYSTEM.md`).
 
 ## Naredbe
 
@@ -18,10 +28,12 @@ Bez JavaScripta stranica nudi sve izbore. Putanje su u `src/config.ts`. Vizualni
 pnpm install
 pnpm typecheck   # strogi TypeScript
 pnpm test        # vitest
-pnpm build       # dist/index.html i dist/greska.html (stil i skripta ugrađeni)
-pnpm budget      # gzip proračun iz budget.json; prekoračenje vraća izlazni kod 1
-pnpm e2e         # matrica preglednika (P-0.11): izgradnja + Playwright u Chromiumu, Firefoxu i WebKitu
-pnpm edge        # lokalni edge na http://localhost:8000 (treba dist/)
+pnpm dev         # next dev na http://localhost:3100
+pnpm build       # next build (.next/)
+pnpm start       # next start na :3100 (nakon build)
+pnpm budget      # gzip proračun iz budget.json nad .next; prekoračenje vraća izlazni kod 1
+pnpm e2e         # matrica preglednika (P-0.11): next build, next start na :3101 + Playwright u Chromiumu, Firefoxu i WebKitu
+pnpm edge        # lokalni edge na http://localhost:8000 (preloader na :3100, npr. pnpm dev)
 pnpm sve         # cijela Ductura lokalno iz susjednih checkouta, iza edgea na :8000
 ```
 
@@ -33,9 +45,11 @@ Vizualni test (`e2e/matrix/visual.spec.ts`, projekt `visual`, samo Chromium): pr
 
 ## Proračun veličine
 
-`budget.json` zadaje gzip granicu za svaku datoteku u `dist` i za zbroj. Pada ako je datoteka iznad granice, zbroj iznad ukupne granice, datoteka iz proračuna nedostaje ili datoteka u `dist` nema granicu.
+`budget.json` zadaje gzip granicu za svaku stranicu (`index.html`, `greska.html`) i za zbroj. `pnpm budget` mjeri izgradnju Nexta: stranica je gzip HTML-a iz `.next/server/app/` plus gzip svake skripte i stila koje učita (bez `noModule`), a zbroj broji svaku datoteku jednom. Pada ako je stranica iznad granice, zbroj iznad ukupne granice ili stranica iz proračuna nedostaje. Mapa bez `server/app` mjeri se kao prije, datoteku po datoteku.
 
-Tekstovi stanja greške nisu na glavnoj stranici: `dist/greska.html?status=<status ili kod>` ima vlastitu granicu (izmjereno plus oko 10 %), pa prvi ekran ne raste (`src/errors/README.md`).
+**Stanje nakon prelaska na Next.js:** granice su ostale iz statične stranice (4030 B, 2122 B, 6152 B). Sa skriptama Nexta i Reacta stranica ima oko 140 KB gzip, pa `pnpm budget` pada dok se ne odluči nova granica ili drukčiji oblik prvog ekrana. Vlastiti kod stranice (HTML, stil i skripta bez Nexta, `test/static-build.ts`) i dalje mora stati u stare granice; to provjeravaju `test/build.test.ts` i `test/detect-decisions.test.ts`.
+
+Tekstovi stanja greške nisu na glavnoj stranici: `/greska.html?status=<status ili kod>` ima vlastitu granicu, pa prvi ekran ne raste (`src/errors/README.md`). Zato je tekst skripte prvog ekrana u `src/client-text.ts`: Turbopack ne izbacuje neiskorištene izvoze iz `src/text.ts`.
 
 ## Otvoreno
 

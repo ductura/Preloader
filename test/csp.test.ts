@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { contentSecurityPolicyFor, pageContentSecurityPolicy, scriptHash } from '../deploy/edge/index.ts';
-import { build } from '../scripts/build.ts';
+import { build } from './static-build.ts';
 
 const sha = (text: string) => `sha256-${createHash('sha256').update(text, 'utf8').digest('base64')}`;
 const HASH = sha('x');

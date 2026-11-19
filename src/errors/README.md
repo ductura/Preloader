@@ -6,6 +6,6 @@ Tablica u `view.ts` prati `errors` iz `@ductura/contracts/errors/catalog.json` (
 
 ## Stranica greške (DAN-935-2)
 
-Izgradnja daje `dist/greska.html` s vlastitom skriptom (`main.ts`). `showError` čita samo `?status=`: točno tri ASCII znamenke su HTTP status, inače niz (`offline`, `session_expired`); sve ostalo prikazuje opći tekst. Bez skripte stranica prikazuje opći tekst i poveznicu na početnu. Tekstovi grešaka nisu u `index.html`, pa glavna stranica ne raste; `greska.html` ima vlastiti redak u `budget.json` (1929 B gzip izmjereno, granica 2122 B).
+Stranica je `/greska` (i `/greska.html`, rewrite u `next.config.ts`) s vlastitom skriptom (`main.ts`, poziva je `src/ui/ErrorScript.tsx`). `showError` čita samo `?status=`: točno tri ASCII znamenke su HTTP status, inače niz (`offline`, `session_expired`); sve ostalo prikazuje opći tekst. Bez skripte stranica prikazuje opći tekst i poveznicu na početnu. Tekstovi grešaka nisu u skriptama prvog ekrana, pa glavna stranica ne raste; `greska.html` ima vlastiti redak u `budget.json` (granica 2122 B; vlastiti kod bez Nexta 1929 B gzip izmjereno, s Nextom vidi README).
 
 Tekst je lokalan. Usklađivanje s `locales/` servera, CSP zaglavlje na rubu i pravilo proxyja koje statusu daje ovu stranicu su zasebni zadaci.

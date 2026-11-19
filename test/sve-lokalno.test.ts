@@ -159,7 +159,8 @@ describe('pnpm sve nad lažnim checkoutima', () => {
     fake('Institution_server', 'lazni-oidc', 'start', 'packages/test-fakes/oidc');
     fake('institution_front_web_chrome', 'front-institucije');
 
-    const env: Record<string, string> = {};
+    // NODE_ENV je u tipovima Nexta obavezan; okolina se i dalje gradi samo od nizova iz process.env.
+    const env = {} as NodeJS.ProcessEnv;
     for (const [k, v] of Object.entries(process.env)) if (typeof v === 'string') env[k] = v;
     delete env['DUCTURA_PROVISIONING_TOKEN'];
     env['DUCTURA_REPOS'] = dir;

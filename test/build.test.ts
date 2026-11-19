@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, test } from 'vitest';
-import { build } from '../scripts/build.ts';
+import { build } from './static-build.ts';
 import { checkBudget, parseBudget } from '../scripts/budget.ts';
 
 let out: string;

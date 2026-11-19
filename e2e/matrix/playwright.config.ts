@@ -1,6 +1,7 @@
-// Matrica preglednika (P-0.11). Stranica je `dist/index.html` (`pnpm e2e` je prvo izgradi).
+// Matrica preglednika (P-0.11). Stranice poslužuje `next start` iz izgradnje (`pnpm e2e` je prvo izgradi).
 import { defineConfig, devices } from '@playwright/test';
 import { MATRIX } from './devices.ts';
+import { PRELOADER_ORIGIN, PRELOADER_PORT } from './server.ts';
 
 const VISUAL = 'visual.spec.ts';
 // Osnovne snimke vrijede samo za Linux iz CI-ja (sistemski fontovi): projekt `visual` je u CI-ju
@@ -14,7 +15,15 @@ export default defineConfig({
   retries: 0,
   reporter: process.env['CI'] ? [['list'], ['html', { open: 'never', outputFolder: '../../playwright-report' }]] : 'list',
   outputDir: '../../test-results',
-  use: { baseURL: 'https://preloader.test', trace: 'off' },
+  use: { baseURL: PRELOADER_ORIGIN, trace: 'off' },
+  // Bez varijabli usluga (src/rewrites.ts): izvan preloadera ništa ne ide na mrežu.
+  webServer: {
+    command: `pnpm exec next start -p ${PRELOADER_PORT}`,
+    cwd: '../..',
+    url: `${PRELOADER_ORIGIN}/greska`,
+    reuseExistingServer: false,
+    timeout: 60_000,
+  },
   // Vizualni test (DAN-1076): stroga usporedba, i promjena boje za jedan korak pada.
   expect: { toHaveScreenshot: { threshold: 0, maxDiffPixels: 0, animations: 'disabled', caret: 'hide' } },
   projects: [

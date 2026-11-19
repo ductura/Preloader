@@ -1,7 +1,7 @@
 // Lokalni edge (ugovor #2028 §1): jedino podrijetlo http://localhost:8000 za preglednik.
 // Samo za razvoj na jednom računalu; pravi rubni proxy u produkciji je P-0.10.
 //
-//   /, statika             -> dist/ preloadera
+//   /, sve ostalo          -> preloader (Next.js, :3100)
 //   /admin, /admin/*       -> Aplication_front (:3120)
 //   /api/v1, /api/v1/*     -> Institution_server (:4000)
 //   /app/web, /app/chrome  -> front institucije (:5173)
@@ -12,17 +12,14 @@
 // zaglavlja jednog skoka (RFC 9110 §7.6.1). WebSocket (HMR) prolazi kao sirovi TCP.
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
-import { readFile, realpath } from 'node:fs/promises';
-import { extname, join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { contentSecurityPolicyFor } from './content-security-policy.ts';
 import { isMain } from '../../scripts/is-main.ts';
 
-/** @typedef {'admin' | 'api' | 'front'} Upstream */
+/** @typedef {'preloader' | 'admin' | 'api' | 'front'} Upstream */
 /** @typedef {Record<Upstream, URL>} Targets */
 
 /** Zadani portovi iz ugovora §1. */
 export const DEFAULT_TARGETS = Object.freeze({
+  preloader: 'http://localhost:3100',
   admin: 'http://localhost:3120',
   api: 'http://localhost:4000',
   front: 'http://localhost:5173',
@@ -30,6 +27,7 @@ export const DEFAULT_TARGETS = Object.freeze({
 
 /** Varijable okoline koje mijenjaju cilj; vrijednost je `http://host:port` bez putanje. */
 export const TARGET_ENV = Object.freeze({
+  preloader: 'DUCTURA_EDGE_PRELOADER',
   admin: 'DUCTURA_EDGE_ADMIN',
   api: 'DUCTURA_EDGE_API',
   front: 'DUCTURA_EDGE_FRONT',
@@ -66,14 +64,14 @@ export function targetsFromEnv(env = process.env) {
 /**
  * Kamo ide zahtjev. `rawPath` je putanja točno kako ju je poslao preglednik (bez upita).
  * @param {string} rawPath
- * @returns {Upstream | 'static'}
+ * @returns {Upstream}
  */
 export function routeFor(rawPath) {
   const under = (/** @type {string} */ prefix) => rawPath === prefix || rawPath.startsWith(`${prefix}/`);
   if (under('/admin')) return 'admin';
   if (under('/api/v1')) return 'api';
   if (under('/app/web') || under('/app/chrome')) return 'front';
-  return 'static';
+  return 'preloader';
 }
 
 /** Ime hosta za spajanje: IPv6 iz URL-a (`[::1]`) bez uglatih zagrada. */
@@ -137,72 +135,38 @@ function upstreamHeaders(req, upgrade) {
   return kept;
 }
 
-const TYPES = /** @type {Record<string, string>} */ ({
-  '.html': 'text/html; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.json': 'application/json',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.txt': 'text/plain; charset=utf-8',
-});
-
-/**
- * Datoteka iz `dist` za putanju, ili null. Odbija `..`, `\`, NUL i sve što bi
- * nakon dekodiranja ili simboličke poveznice izašlo iz `dist`.
- * @param {string} distReal
- * @param {string} rawPath
- */
-async function staticFile(distReal, rawPath) {
-  let path;
-  try {
-    path = decodeURIComponent(rawPath);
-  } catch {
-    return null;
-  }
-  if (path.includes('\0') || path.includes('\\') || path.split('/').includes('..')) return null;
-  const relative = path === '/' ? 'index.html' : path.slice(1);
-  if (relative === '' || relative.endsWith('/')) return null;
-  const candidate = resolve(distReal, relative);
-  try {
-    const real = await realpath(candidate);
-    if (!real.startsWith(distReal + sep)) return null;
-    return { file: real, body: await readFile(real) };
-  } catch {
-    return null;
-  }
-}
-
-/** Stranica greške iz dist-a (`greska.html`) s danim statusom; bez nje kratak tekst. */
-async function sendError(/** @type {string} */ distReal, /** @type {import('node:http').ServerResponse} */ res, /** @type {number} */ status) {
+/** Odgovor kad uzvodni ne odgovori: stranica greške preloadera (`/greska.html`), a bez nje kratak tekst. */
+function sendError(/** @type {URL} */ preloader, /** @type {import('node:http').ServerResponse} */ res, /** @type {number} */ status) {
   if (res.headersSent) {
     res.destroy();
     return;
   }
-  let body;
-  try {
-    body = await readFile(join(distReal, 'greska.html'), 'utf8');
-  } catch {
-    body = '';
-  }
-  const headers = { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' };
-  if (body) {
-    res.writeHead(status, { ...headers, 'Content-Security-Policy': await contentSecurityPolicyFor(body) });
-    res.end(body);
-  } else {
-    res.writeHead(status, { ...headers, 'Content-Type': 'text/plain; charset=utf-8' });
+  const plain = () => {
+    if (res.headersSent) return;
+    res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(`${status}\n`);
-  }
+  };
+  const page = httpRequest({ hostname: connectHost(preloader), port: preloader.port || 80, path: '/greska.html', timeout: 5000 });
+  page.on('response', (incoming) => {
+    if (incoming.statusCode !== 200 || !String(incoming.headers['content-type']).startsWith('text/html')) {
+      incoming.resume();
+      plain();
+      return;
+    }
+    res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    incoming.pipe(res);
+    incoming.on('error', () => res.destroy());
+  });
+  page.on('timeout', () => page.destroy(new Error('timeout')));
+  page.on('error', plain);
+  page.end();
 }
 
 /**
  * Edge kao `http.Server` (još ne sluša).
- * @param {{ dist: string, targets?: Targets, log?: (line: string) => void }} options
+ * @param {{ targets?: Targets, log?: (line: string) => void }} options
  */
-export async function createEdge({ dist, targets = targetsFromEnv({}), log = () => {} }) {
-  const distReal = await realpath(dist);
-
+export async function createEdge({ targets = targetsFromEnv({}), log = () => {} } = {}) {
   const server = createServer(async (req, res) => {
     const target = req.url ?? '/';
     const rawPath = pathOf(target);
@@ -211,22 +175,9 @@ export async function createEdge({ dist, targets = targetsFromEnv({}), log = () 
       return;
     }
     const route = routeFor(rawPath);
-    if (route === 'static') {
-      if (req.method !== 'GET' && req.method !== 'HEAD') {
-        res.writeHead(405, { Allow: 'GET, HEAD' }).end();
-        return;
-      }
-      const found = await staticFile(distReal, rawPath);
-      if (!found) {
-        await sendError(distReal, res, 404);
-        return;
-      }
-      const type = TYPES[extname(found.file)] ?? 'application/octet-stream';
-      /** @type {Record<string, string | number>} */
-      const headers = { 'Content-Type': type, 'Content-Length': found.body.length, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
-      if (type.startsWith('text/html')) headers['Content-Security-Policy'] = await contentSecurityPolicyFor(found.body.toString('utf8'));
-      res.writeHead(200, headers);
-      res.end(req.method === 'HEAD' ? undefined : found.body);
+    // Preloader nema obrazaca ni API-ja: drugo od GET i HEAD ne ide dalje.
+    if (route === 'preloader' && req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { Allow: 'GET, HEAD' }).end();
       return;
     }
 
@@ -246,7 +197,8 @@ export async function createEdge({ dist, targets = targetsFromEnv({}), log = () 
     });
     outgoing.on('error', (error) => {
       log(`${route} ${upstream.host} nije dostupan: ${error.message}`);
-      void sendError(distReal, res, 502);
+      // Kad ne odgovara sam preloader, ni stranice greške nema: kratak tekst.
+      sendError(targets.preloader, res, 502);
     });
     req.on('error', () => outgoing.destroy());
     req.pipe(outgoing);
@@ -256,11 +208,11 @@ export async function createEdge({ dist, targets = targetsFromEnv({}), log = () 
   server.on('upgrade', (req, socket, head) => {
     const target = req.url ?? '/';
     const rawPath = pathOf(target);
-    const route = rawPath ? routeFor(rawPath) : 'static';
-    if (route === 'static') {
-      socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+    if (!rawPath) {
+      socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       return;
     }
+    const route = routeFor(rawPath);
     const upstream = targets[route];
     let connected = false;
     const remote = connect({ host: connectHost(upstream), port: Number(upstream.port || 80) }, () => {
@@ -294,17 +246,10 @@ export async function createEdge({ dist, targets = targetsFromEnv({}), log = () 
 
 /** Pokretanje: `node deploy/edge/dev-proxy.mjs` (ili `pnpm edge`). */
 export async function main(env = process.env) {
-  const root = fileURLToPath(new URL('../../', import.meta.url));
-  const dist = env['DUCTURA_EDGE_DIST'] || join(root, 'dist');
   const port = Number(env['DUCTURA_EDGE_PORT'] || DEFAULT_PORT);
   const host = env['DUCTURA_EDGE_HOST'] || 'localhost';
   const targets = targetsFromEnv(env);
-  let server;
-  try {
-    server = await createEdge({ dist, targets, log: (line) => console.error(`[edge] ${line}`) });
-  } catch {
-    throw new Error(`Nema izgrađenog preloadera u ${dist}. Pokrenite najprije: pnpm build`);
-  }
+  const server = await createEdge({ targets, log: (line) => console.error(`[edge] ${line}`) });
   await new Promise((resolveListen, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => resolveListen(undefined));
