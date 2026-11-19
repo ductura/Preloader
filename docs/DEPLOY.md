@@ -1,6 +1,6 @@
 # Objava: Vercel (ductura.org)
 
-Preloader je jedino javno podrijetlo `https://ductura.org`. Na Vercelu je Next.js aplikacija (`vercel.json`: `"framework": "nextjs"`, instalacija `pnpm install --frozen-lockfile`, gradnja `pnpm build`). Spajanje u `main` ide u produkciju, svaka druga grana dobiva preview.
+Preloader je jedino javno podrijetlo `https://ductura.org`. Na Vercelu je Next.js aplikacija (`vercel.json`: `"framework": "nextjs"`, instalacija `pnpm install --frozen-lockfile`, gradnja `pnpm build`, izlaz `.next`, koji poništava staru postavku projekta `dist`). Spajanje u `main` ide u produkciju, svaka druga grana dobiva preview.
 
 Ostale usluge su na istom podrijetlu preko rewriteova Nexta (`src/rewrites.ts`), po ugovoru Ductus #2028 §1, isto kao lokalni edge (`deploy/edge/dev-proxy.mjs`):
 
