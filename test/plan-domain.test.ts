@@ -1,12 +1,12 @@
 // DAN-955: the product domain is ductura.org (owner decision 17. 11. 2026., Ductus#2012 c.6934113245).
-// The repo plan (docs/PLAN.md, README.md) may name no other ductura.<tld> and
+// The repo documentation (README.md) may name no other ductura.<tld> and
 // no rejected TLD. Text is normalized first, so escapes, lookalike dots and
 // zero-width characters do not hide a finding. Port of ductura/.github
 // scripts/plan-domain.test.mjs without the whole-repo byte scan.
 import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
 
-const PLAN_FILES = ['docs/PLAN.md', 'README.md'];
+const PLAN_FILES = ['README.md'];
 const REJECTED = ['c' + 'fd', 'to' + 'p']; // spelled apart so this file never names them
 
 const normalize = (text: string): string =>
@@ -68,6 +68,8 @@ test.each(PLAN_FILES)('%s names only ductura.org and no rejected TLD', (file) =>
   expect(rejectedTldMentions(text)).toEqual([]);
 });
 
-test('docs/PLAN.md names ductura.org as a code span', () => {
-  expect(readFileSync('docs/PLAN.md', 'utf8')).toMatch(/`(?:[a-z0-9-]+\.)*ductura\.org`/);
+test('README links the canonical plan and names ductura.org', () => {
+  const readme = readFileSync('README.md', 'utf8');
+  expect(readme).toContain('https://github.com/ductura/.github/blob/main/docs/plan/PLAN-MIGRACIJE.md');
+  expect(readme).toMatch(/`(?:[a-z0-9-]+\.)*ductura\.org`/);
 });
