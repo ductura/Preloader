@@ -1,6 +1,6 @@
 // Tekst sučelja (hrvatski, oslovljavanje s „Vi”).
-// Tekst skripte prvog ekrana je u vlastitom modulu: Next.js (Turbopack) ne izbacuje neiskorištene
-// izvoze ovog modula, pa bi skripta prvog ekrana inače nosila i tekstove grešaka (DAN-935-2).
+// Tekst skripte prvog ekrana je u vlastitom modulu, da skripta prvog ekrana ne ovisi o tome
+// izbacuje li alat za pakiranje neiskorištene izvoze (tekstovi grešaka, DAN-935-2).
 export { clientText, PACKAGE_LABELS } from './client-text.ts';
 
 export const text = {

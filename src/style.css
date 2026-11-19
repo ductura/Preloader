@@ -16,6 +16,8 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+/* Omotač Nexta (pages/) ne smije postati stavka rešetke tijela. */
+#__next { display: contents; }
 body {
   margin: 0;
   min-height: 100vh;

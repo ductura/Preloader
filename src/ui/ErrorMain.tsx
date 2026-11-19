@@ -1,5 +1,5 @@
-// Stranica greške (DAN-935-2): bez skripte opći tekst; `ErrorScript` prema `?status=` upisuje tekst stanja.
-// Nepostojeća putanja (`app/(ulaz)/not-found.tsx`) odmah prikazuje `notFound`, bez skripte.
+// Stranica greške (DAN-935-2): bez skripte opći tekst; skripta (`src/errors/main.ts`) prema `?status=`
+// upisuje tekst stanja. 404 (`pages/404.tsx`) odmah prikazuje `notFound`, bez skripte.
 import { errorText, text } from '../text.ts';
 
 export function ErrorMain({ textKey = 'general' }: { textKey?: keyof typeof errorText }) {

@@ -1,11 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "//": "Iste stroge opcije kao @ductura/tsconfig (ductura/.github packages/tsconfig/base.json), uz DOM za klijent i jsx. next build i next dev koriste tsconfig.next.json.",
+  "//": "Iste stroge opcije kao @ductura/tsconfig (ductura/.github packages/tsconfig/base.json), uz DOM za klijent i jsx. Razrješavanje je Bundler, kao u Nextu; relativni uvozi i dalje pišu nastavak .ts. next build i next dev koriste tsconfig.next.json.",
   "compilerOptions": {
     "target": "ES2023",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "types": ["node"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
@@ -24,7 +24,7 @@
     "resolveJsonModule": true,
     "jsx": "react-jsx"
   },
-  "//include": "Doslovna kopija iz Ductusa (početna stranica /ductus) provjerava se s Ductusovim opcijama u tsconfig.next.json.",
-  "include": ["next-env.d.ts", "next.config.ts", "app/(ulaz)", "app/global-not-found.tsx", "src", "scripts", "test", "e2e", "vitest.config.ts"],
+  "//include": "Doslovna kopija iz Ductusa (početna stranica /ductus: app/ i src/components, src/domain, src/editor, src/lib) provjerava se s Ductusovim opcijama u tsconfig.next.json.",
+  "include": ["next-env.d.ts", "next.config.ts", "pages", "src", "scripts", "test", "e2e", "vitest.config.ts"],
   "exclude": ["node_modules", "src/components", "src/domain", "src/editor", "src/lib"]
 }

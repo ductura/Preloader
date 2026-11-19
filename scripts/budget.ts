@@ -43,8 +43,14 @@ export function checkBudget(dir: string, budget: Budget): string[] {
   return checkSizes(sizes, null, budget);
 }
 
+/** Mapa izgrađenih HTML stranica u `.next`: Pages Router (`server/pages`) ili App Router (`server/app`). */
+export function nextPagesDir(nextDir: string): string | null {
+  for (const sub of ['pages', 'app']) if (existsSync(join(nextDir, 'server', sub))) return join(nextDir, 'server', sub);
+  return null;
+}
+
 /**
- * Next.js: stranica `name` je `server/app/<name>`, a njezina veličina je gzip HTML-a plus gzip svake
+ * Next.js: stranica `name` je `server/pages/<name>` (ili `server/app/<name>`), a njezina veličina je gzip HTML-a plus gzip svake
  * skripte i stila koje stranica učita (`/_next/static/...`, bez `noModule`, koji moderan preglednik ne
  * preuzima). Zbroj broji svaku datoteku jednom, i kad je dijele dvije stranice.
  */
@@ -52,7 +58,7 @@ export function nextPageSizes(nextDir: string, names: readonly string[]): { size
   const sizes = new Map<string, number>();
   const all = new Map<string, number>();
   for (const name of names) {
-    const page = join(nextDir, 'server', 'app', name);
+    const page = join(nextPagesDir(nextDir) ?? join(nextDir, 'server', 'app'), name);
     if (!existsSync(page)) continue;
     const html = readFileSync(page, 'utf8');
     const files = new Map([[page, gzipSize(page)]]);
@@ -96,9 +102,9 @@ export function checkSizes(sizes: ReadonlyMap<string, number>, total: number | n
   return problems;
 }
 
-/** `dir` je izgradnja Nexta ako ima `server/app`, inače mapa datoteka. */
+/** `dir` je izgradnja Nexta ako ima `server/pages` ili `server/app`, inače mapa datoteka. */
 export function checkDir(dir: string, budget: Budget): string[] {
-  if (!existsSync(join(dir, 'server', 'app'))) return checkBudget(dir, budget);
+  if (nextPagesDir(dir) === null) return checkBudget(dir, budget);
   const { sizes, total } = nextPageSizes(dir, Object.keys(budget.files));
   for (const [name, size] of sizes) console.log(`${name}: ${size} B gzip (granica ${budget.files[name]} B)`);
   console.log(`ukupno: ${total} B gzip (granica ${budget.total} B)`);

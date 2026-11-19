@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "//": "Za next build (typescript.tsconfigPath) i za doslovnu kopiju iz Ductusa: Ductusove opcije (tsconfig.json na main 0cdb0f1f) i alias @/ -> src/. Preloader kod strože provjerava tsconfig.json; pnpm typecheck pokreće oba.",
+  "//": "Za next build (typescript.tsconfigPath) i za doslovnu kopiju iz Ductusa: Ductusove opcije (tsconfig.json na main 0cdb0f1f) i alias @/ -> src/. Preloader kod strože provjerava tsconfig.json; pnpm typecheck pokreće oba. .next/dev je izvan provjere: next dev ondje ostavlja drugi validator.ts s istim globalnim tipovima.",
   "compilerOptions": {
     "target": "ES2022",
     "lib": [
@@ -35,12 +35,14 @@
     "next-env.d.ts",
     "next.config.ts",
     "app",
+    "pages",
     "src",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     ".next/dev/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    ".next/dev"
   ]
 }

@@ -1,4 +1,4 @@
-// Prvi ekran preloadera; isti sadržaj kao stara statična stranica. Logika u pregledniku je `PreloaderScript`.
+// Prvi ekran preloadera; isti sadržaj kao stara statična stranica. Logiku u pregledniku ugrađuje `pages/index.tsx` (`src/main.ts`).
 import { defaultConfig, type Config } from '../config.ts';
 import { signInHref, signInTarget } from '../sign-in/index.ts';
 import { clientText, PACKAGE_LABELS, text } from '../text.ts';

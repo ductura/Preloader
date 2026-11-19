@@ -1,5 +1,5 @@
-// 404 za svaku putanju koju ne poslužuje ni stranica ni rewrite (src/rewrites.ts). Aplikacija ima dva
-// korijenska layouta, (ulaz) i (ductus), pa 404 ima vlastiti dokument, sa stilom prvog ekrana.
+// 404 za svaku putanju koju ne poslužuje ni stranica ni rewrite (src/rewrites.ts), isti tekst kao pages/404.tsx.
+// Uz app/ (/ductus) Next inače daje vlastitu englesku 404; ovaj dokument ima stil prvog ekrana.
 import type { Metadata } from 'next';
 import '../src/style.css';
 import { errorText } from '../src/text.ts';
