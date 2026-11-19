@@ -1,5 +1,8 @@
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  test: { include: ['test/**/*.test.ts'] },
+  // `@/` kao u Ductusu, za testove doslovne kopije početne stranice (src/components/landing).
+  resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
+  test: { include: ['test/**/*.test.ts', 'src/**/*.test.ts'] },
 });

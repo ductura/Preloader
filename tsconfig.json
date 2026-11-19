@@ -1,18 +1,12 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "//": "Iste stroge opcije kao @ductura/tsconfig (ductura/.github packages/tsconfig/base.json), uz DOM za klijent i ono što next build traži (jsx, plugin next, .next/types).",
+  "//": "Iste stroge opcije kao @ductura/tsconfig (ductura/.github packages/tsconfig/base.json), uz DOM za klijent i jsx. next build i next dev koriste tsconfig.next.json.",
   "compilerOptions": {
     "target": "ES2023",
-    "lib": [
-      "ES2023",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "types": [
-      "node"
-    ],
+    "types": ["node"],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -28,28 +22,9 @@
     "incremental": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
-    "jsx": "react-jsx",
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ]
+    "jsx": "react-jsx"
   },
-  "include": [
-    "next-env.d.ts",
-    "next.config.ts",
-    "app",
-    "src",
-    "scripts",
-    "test",
-    "e2e",
-    "vitest.config.ts",
-    ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts",
-    ".next/dev/dev/types/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "src/components/landing"
-  ]
+  "//include": "Doslovna kopija iz Ductusa (početna stranica /ductus) provjerava se s Ductusovim opcijama u tsconfig.next.json.",
+  "include": ["next-env.d.ts", "next.config.ts", "app/(ulaz)", "app/global-not-found.tsx", "src", "scripts", "test", "e2e", "vitest.config.ts"],
+  "exclude": ["node_modules", "src/components", "src/domain", "src/editor", "src/lib"]
 }

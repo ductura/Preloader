@@ -10,7 +10,9 @@ Ulaz u Ducturu (ductura.org). Next.js aplikacija (App Router; next 16.4.6, react
 
 Prvi ekran nudi i dva ulaza za prijavu (ugovor Ductus #2028 §3.1): **Prijava preko AAI@EduHr** (`/api/v1/auth/login?returnTo=/app/web/`) i **Administracija platforme** (`/admin/prijava`). Fokus ili dodir na njima otkazuje automatsko preusmjeravanje.
 
-Bez JavaScripta stranica nudi sve izbore. Putanje su u `src/config.ts`. Stranice su `app/page.tsx` (`/`) i `app/greska/page.tsx` (`/greska`, i kao `/greska.html`); sadržaj je u `src/ui/`, a logika u pregledniku (`src/main.ts`, `src/errors/main.ts`) radi nakon hidracije.
+Bez JavaScripta stranica nudi sve izbore. Putanje su u `src/config.ts`. Stranice su `app/(ulaz)/page.tsx` (`/`) i `app/(ulaz)/greska/page.tsx` (`/greska`, i kao `/greska.html`); sadržaj je u `src/ui/`, a logika u pregledniku (`src/main.ts`, `src/errors/main.ts`) radi nakon hidracije.
+
+Ductusova javna početna stranica je na `/ductus` (`app/(ductus)/`), s vlastitim korijenskim layoutom, fontovima i stilom. Kod je doslovna kopija iz Ductusa (main `0cdb0f1f`): `src/components/{landing,editor,shell}`, `src/editor`, `src/domain`, `src/lib`, uz alias `@/` → `src/`. Sesija, prijava i ostala logika dolaze kasnije. Kopiju se provjerava s Ductusovim opcijama TypeScripta (`tsconfig.next.json`, koji koristi i `next build`), a preloader strože (`tsconfig.json`). `pnpm typecheck` pokreće oba. Nepostojeća putanja daje 404 iz `app/global-not-found.tsx` (`experimental.globalNotFound`, jer postoje dva korijenska layouta).
 
 Ostale usluge su na istom podrijetlu preko Next.js rewriteova (`src/rewrites.ts`, `next.config.ts`), po ugovoru Ductus #2028 §1. Adrese su u varijablama okoline i čitaju se pri `next build`:
 

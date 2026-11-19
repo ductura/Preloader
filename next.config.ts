@@ -8,6 +8,10 @@ const nextConfig: NextConfig = {
   agentRules: false,
   // Putanja ide usluzi nepromijenjena: `/app/web/` se ne preusmjerava na `/app/web` (kao lokalni edge).
   skipTrailingSlashRedirect: true,
+  // Ductusove opcije i alias @/ za doslovnu kopiju početne stranice; preloader strože provjerava tsconfig.json.
+  typescript: { tsconfigPath: 'tsconfig.next.json' },
+  // Dva korijenska layouta, (ulaz) i (ductus): 404 je app/global-not-found.tsx.
+  experimental: { globalNotFound: true },
   // Čita se pri izgradnji (`next build`): na Vercelu su varijable postavljene u projektu.
   async rewrites() {
     return serviceRewrites(process.env);
