@@ -4,8 +4,9 @@ Ugovor toka prijave i instance je Ductus #2028, komentar 6993786629 (§1 portovi
 
 ## 1. Što treba
 
-- Node.js 24 ili noviji i pnpm (`corepack enable` ili `npm install --global pnpm`).
-- PostgreSQL na `localhost:5432` ili `DATABASE_URL` u okolini. Shemu i migracije podižu poslužitelji (vidi README Aplication_servera i Institution_servera).
+- Node.js 24 ili noviji i pnpm u verziji iz `packageManager` ciljnog repozitorija.
+- Lokalni PostgreSQL. `Institution_server` prima lokalni administratorski `DATABASE_URL` iz okoline ili svoje `.local/database-url`; njegov `pnpm lokalno` provjerava loopback adresu, priprema bazu i vlastite aplikacijske prijave. Vidi njegove lokalne upute.
+- `Aplication_server` ima zasebnu bazu i vlastite migracije te administratorsku tajnu. Pripremite ih prema njegovu README-u; njegov `DATABASE_URL` postavite u njegov `.env.local`. Pokretač mu ne prosljeđuje administratorski `DATABASE_URL` institucionalnog servera.
 - Checkouti svih repozitorija jedan do drugoga, u istoj mapi:
 
 ```text
@@ -19,7 +20,7 @@ ductura/
 
 Ako su checkouti negdje drugdje, postavite `DUCTURA_REPOS` na mapu u kojoj su. Velika i mala slova u imenu mape nisu bitna (`aplication_server` vrijedi kao `Aplication_server`).
 
-U svakom repozitoriju jednom pokrenite `pnpm install` (u `Institution_server` i u `packages/test-fakes/oidc` ako ima vlastiti `package.json`).
+U svakom repozitoriju jednom pokrenite `pnpm install --frozen-lockfile`, s verzijom pnpm-a iz njegova `packageManager`. OIDC pokreće `Institution_server` vlastitom skriptom.
 
 ## 2. Pokretanje
 
@@ -34,30 +35,34 @@ Isto radi u PowerShellu, cmd-u i terminalu na macOS-u i Linuxu: skripta ne treba
 
 `pnpm sve`:
 
-1. pokrene preloader (`next dev` na :3100) i usluge iz ugovora §1 (svaka sa svojim portom u `PORT`):
+1. provjeri da postoje svi obvezni checkouti i skripte te da su portovi iz tablice slobodni;
+2. pokrene `Institution_server` njegovom stvarnom skriptom `lokalno`, koja priprema bazu, postavke `APP_*`, trajni provisioning token i jedini lažni OIDC;
+3. nakon HTTP provjere servera i OIDC-a pročita spremljeni token, pa pokrene preloader, platformu, institucionalni front i edge:
 
 | Usluga | Port | Mapa | Naredba |
 |---|---|---|---|
 | preloader (Next.js) | 3100 | ovaj repo | `pnpm run dev` |
 | Aplication_server | 3110 | `Aplication_server` | `pnpm run dev` |
 | Aplication_front (`basePath: "/admin"`) | 3120 | `Aplication_front` | `pnpm run dev` |
-| Institution_server | 4000 | `Institution_server` | `pnpm run dev` |
-| lažni OIDC (simulator AAI@EduHr) | 8090 | `Institution_server/packages/test-fakes/oidc` | `pnpm run start` |
+| Institution_server | 4000 | `Institution_server` | `pnpm run lokalno` |
+| lažni OIDC (simulator AAI@EduHr) | 8090 | `Institution_server/packages/test-fakes/oidc` | podproces `pnpm run lokalno` |
 | front institucije | 5173 | `Institution_front_web_chrome` | `pnpm run dev` |
 | edge | 8000 | ovaj repo | `node deploy/edge/dev-proxy.mjs` |
 
-2. ispiše koje usluge rade i adresu **http://localhost:8000/**.
+4. provjeri HTTP odgovore preloadera, oba fronta, oba servera, OIDC-a i edgea. Tek tada ispiše **http://localhost:8000/**.
 
-Usluga čiji checkout, `package.json` ili skripta nedostaje preskače se, a razlog se ispiše (na primjer `Aplication_front nema skriptu "dev"`). Ostale rade dalje. Ispis svake usluge ima oznaku (`[institution-server] ...`). Ctrl+C gasi sve usluge s njihovim podprocesima.
+Nedostajući checkout ili skripta prekida pokretanje prije prvog podprocesa. Zauzet port daje grešku i postojeći proces ostaje netaknut. Neuspjela HTTP provjera, greška pokretanja ili završetak bilo koje obvezne usluge zaustavlja cijeli stog i vraća izlazni kod 1. Ctrl+C gasi podprocese koje je pokretač sam pokrenuo. Skripta odbija `NODE_ENV=production`.
 
 Okolina koju skripta postavlja:
 
-- `DUCTURA_PROVISIONING_TOKEN`: zajednička tajna za §2. Ako nije postavljena, generira se nova (32 slučajna bajta) pri svakom pokretanju i dobivaju je samo Aplication_server i Institution_server. Nikad se ne ispisuje ni ne zapisuje.
+- `Institution_server` sam određuje `APP_ORIGIN=http://localhost:8000`, `APP_DATABASE_URL`, `AUTH_DATABASE_URL`, OIDC issuer i povratnu adresu. Njegov `pnpm lokalno` jedini je vlasnik OIDC-a; zaseban OIDC proces se ne pokreće.
+- Provisioning token čita se iz `Institution_server/.local/provisioning-token` tek nakon podizanja servera. Tu trajnu tajnu stvara i čuva serverska lokalna skripta. Isti token dobiva `Aplication_server`; frontovi i edge ga ne nasljeđuju. Token se ne ispisuje. Ako je `DUCTURA_PROVISIONING_TOKEN` već u okolini, mora odgovarati spremljenom tokenu ili se pokretanje prekida.
 - Aplication_server: `INSTITUTION_SERVER_URL=http://localhost:4000`.
 - Aplication_front: `APLICATION_SERVER_URL=http://localhost:3110`, `PUBLIC_ORIGIN=http://localhost:8000`.
-- Institution_server: `OIDC_ISSUER=http://localhost:8090`, `OIDC_REDIRECT_URI=http://localhost:8000/api/v1/auth/callback`, `PUBLIC_ORIGIN=http://localhost:8000`.
-- lažni OIDC: `ISSUER=http://localhost:8090`, `REDIRECT_URI=http://localhost:8000/api/v1/auth/callback`, `POST_LOGOUT_REDIRECT_URI=http://localhost:8000/`, `BACKCHANNEL_LOGOUT_URI=http://localhost:8000/api/v1/auth/backchannel-logout`.
-- Ostalo (npr. `DATABASE_URL`) prolazi iz Vaše okoline nepromijenjeno; `PORT` iz okoline se ne prenosi.
+- `DATABASE_URL` iz okoline prosljeđuje se samo institucionalnoj lokalnoj skripti. `APP_DATABASE_URL` i `AUTH_DATABASE_URL` iz roditeljske okoline ne prelaze u druge procese.
+- Portovi i ciljevi edgea za `pnpm sve` fiksirani su prema tablici; ne nasljeđuju slučajna odredišta iz roditeljske okoline. Za samostalan edge postoje varijable iz sljedećeg odjeljka.
+
+HTTP spremnost potvrđuje pokrenute usluge. Cijeli tok prijave, potvrđenog spremanja i ponovnog otvaranja iste revizije dokazuje zaseban VS-1 run u DAN-887. Institucionalni front mora sadržavati stvarni editor u svojem zadanom `dev` ulazu.
 
 Sam edge bez ostalih usluga: `pnpm dev` u jednom terminalu i `pnpm edge` u drugom.
 
@@ -104,8 +109,8 @@ Studenti i svi računi institucije prijavljuju se samo preko AAI@EduHr, lokalno 
 
 | Simptom | Uzrok i rješenje |
 |---|---|
-| `502` na `/admin`, `/api/v1` ili `/app/...` | Ta usluga ne radi. Pogledajte ispis `pnpm sve` (redak `NE ODGOVARA` ili `PRESKOČENO`). |
-| `EADDRINUSE` | Port iz tablice već koristi drugi proces. Ugasite ga ili promijenite cilj edgea varijablom. |
+| Preflight greška ili neuspjela HTTP provjera | Provjerite navedeni checkout, skriptu, port ili izlaz usluge. `pnpm sve` ne ostavlja djelomično pokrenut stog. |
+| Zauzet port | Port iz tablice već koristi drugi proces. Pokretač ga ne gasi; zaustavite vlastitu prethodnu instancu prije novog pokretanja. |
 | Nakon prijave nema kolačića | `__Host-` kolačić traži `Secure`. Chrome i Firefox ga na `http://localhost` prihvaćaju; drugi preglednici možda ne. Za lokalni rad koristite Chrome ili Firefox. |
 | Na Windowsu „Na Windowsu pokrenite kroz pnpm” | Pokrenite `pnpm sve`, ne `node scripts/sve-lokalno.mjs`. |
 | `/app/mobile/` daje 404 | Ugovor §1 zasad nema rutu za mobilno sučelje; preloader ga nudi na mobitelu. Otvoreno pitanje za orkestratora. |
@@ -113,5 +118,5 @@ Studenti i svi računi institucije prijavljuju se samo preko AAI@EduHr, lokalno 
 ## 7. Testovi
 
 - `test/dev-proxy.test.ts`: rute, zaglavlja, kolačići, `Location`, WebSocket i ugašen uzvodni, s lažnim uzvodnim poslužiteljima.
-- `test/sve-lokalno.test.ts`: plan usluga, pokretanje bez ljuske i cijeli `pnpm sve` nad lažnim checkoutima (koristi stvarne portove iz tablice, pa ne smije raditi uz pokrenut `pnpm sve`).
+- `test/sve-lokalno.test.ts`: preflight, stvarna serverska skripta i jedan OIDC, trajni zajednički token bez prosljeđivanja frontovima, HTTP spremnost te prekid i gašenje pri kvaru usluge. Cijeli launcher koristi pravi Next i edge sa sintetičkim susjednim servisima, bez baze. Test zauzima stvarne portove iz tablice, pa ne smije raditi uz pokrenut `pnpm sve`.
 - `test/functional.test.ts` i `e2e/matrix/*.spec.ts`: dva ulaza za prijavu na preloaderu.
