@@ -54,7 +54,7 @@ describe("public try-out imports (DAN-354)", () => {
   const files = [...reachable(ENTRY)].map((file) => relative(ROOT, file).split(sep).join("/"));
 
   it("reaches the shared toolbar", () => {
-    expect(files).toContain("src/components/editor/EditorToolbarFor.tsx");
+    expect(files).toContain("src/components/landing/editor/EditorToolbarFor.tsx");
   });
 
   it("never loads the local document, journal, sync or sign-out code", () => {

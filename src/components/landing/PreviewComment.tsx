@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 
-import { useSheetTheme } from "@/components/shell/useSheetTheme";
+import { useSheetTheme } from "@/components/landing/shell/useSheetTheme";
 
 import styles from "./Landing.module.css";
 
