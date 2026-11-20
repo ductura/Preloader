@@ -1,5 +1,4 @@
-// 404 za svaku putanju koju ne poslužuje ni stranica ni rewrite (src/rewrites.ts), isti tekst kao pages/404.tsx.
-// Uz app/ (/ductus) Next inače daje vlastitu englesku 404; ovaj dokument ima stil prvog ekrana.
+// Hrvatski 404 za zahtjeve koje App Router obrađuje izvan lokalnog statičnog dokumenta.
 import type { Metadata } from 'next';
 import '../src/style.css';
 import { errorText } from '../src/text.ts';
