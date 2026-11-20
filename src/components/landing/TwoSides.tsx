@@ -3,8 +3,8 @@
 import { EditorContent, useEditor } from "@tiptap/react";
 import { useLayoutEffect, useRef } from "react";
 
-import EditorToolbarFor from "@/components/editor/EditorToolbarFor";
-import { useSheetTheme } from "@/components/shell/useSheetTheme";
+import EditorToolbarFor from "@/components/landing/editor/EditorToolbarFor";
+import { useSheetTheme } from "@/components/landing/shell/useSheetTheme";
 import { createEditorExtensions } from "@/editor";
 import { messagesHr as t } from "@/lib/i18n/messages.hr";
 

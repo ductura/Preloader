@@ -1,0 +1,12 @@
+{
+  "extends": "../../../tsconfig.json",
+  "exclude": [
+    "../../../node_modules",
+    ".",
+    "../../domain",
+    "../../editor",
+    "../../lib",
+    "../../../.next/dev",
+    "../../../.next/types"
+  ]
+}

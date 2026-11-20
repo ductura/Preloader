@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import SheetFrame from "@/components/shell/SheetFrame";
+import SheetFrame from "@/components/landing/shell/SheetFrame";
 import { messagesHr as t } from "@/lib/i18n/messages.hr";
 
 import AccessExplorer from "./AccessExplorer";
