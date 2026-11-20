@@ -4,3 +4,7 @@ coverage/
 dist/
 playwright-report/
 test-results/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+.next-proba-*/

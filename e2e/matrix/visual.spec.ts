@@ -1,11 +1,9 @@
 // Vizualni test (DAN-1076, docs/PLAN.md §6, red „Vizualni”): prvi ekran i dvije stranice greške iz kataloga
-// na 1440, 768 i 400 px u Chromiumu. Stranice poslužuje lažni server iz `page.route`; mreže nema.
+// na 1440, 768 i 400 px u Chromiumu. Stranice poslužuje lokalni `next start`; ostalo je 404, mreže nema.
 // Osnovne snimke nastaju u CI-ju (`ubuntu-24.04`): fontovi su sistemski, pa drugi OS daje druge piksele.
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
-
-const dist = (file: string): string => readFileSync(new URL(`../../dist/${file}`, import.meta.url), 'utf8');
-const PAGES: Readonly<Record<string, string>> = { '/': dist('index.html'), '/greska.html': dist('greska.html') };
+import { fromPreloader } from './server.ts';
 const CLOCK_START = Date.UTC(2026, 0, 1);
 
 const SCREENS = [
@@ -17,10 +15,9 @@ const WIDTHS = [1440, 768, 400] as const;
 
 async function open(page: Page, width: number, path: string): Promise<void> {
   await page.setViewportSize({ width, height: 900 });
-  await page.route('https://preloader.test/**', (route) => {
-    const body = PAGES[new URL(route.request().url()).pathname];
-    return body === undefined ? route.fulfill({ status: 404, body: '' }) : route.fulfill({ contentType: 'text/html; charset=utf-8', body });
-  });
+  await page.route('**/*', (route) =>
+    fromPreloader(new URL(route.request().url()), ['/', '/greska.html']) ? route.continue() : route.fulfill({ status: 404, body: '' }),
+  );
   // Sat stoji prije učitavanja: prvi ekran se ne preusmjerava i ništa ne ovisi o vremenu.
   await page.clock.install({ time: CLOCK_START });
   await page.clock.pauseAt(CLOCK_START + 1000);

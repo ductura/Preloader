@@ -1,14 +1,7 @@
 // Tekst sučelja (hrvatski, oslovljavanje s „Vi”).
-import type { DesktopPackage } from './detect.ts';
-
-export const PACKAGE_LABELS: Record<DesktopPackage, string> = { windows: 'Windows', macos: 'macOS' };
-
-/** Tekst koji treba skripta u pregledniku; odvojen da izgradnja ne ugrađuje ostatak (proračun P-0.1). */
-export const clientText = {
-  download: (pkg: DesktopPackage) => `Preuzmi Ducturu za ${PACKAGE_LABELS[pkg]}`,
-  choiceSaved: 'Izbor je zapamćen u ovom pregledniku.',
-  choiceNotSaved: 'Preglednik ne pamti izbor; vrijedi samo na ovoj stranici.',
-} as const;
+// Tekst skripte prvog ekrana je u vlastitom modulu, da skripta prvog ekrana ne ovisi o tome
+// izbacuje li alat za pakiranje neiskorištene izvoze (tekstovi grešaka, DAN-935-2).
+export { clientText, PACKAGE_LABELS } from './client-text.ts';
 
 export const text = {
   title: 'Ductura',

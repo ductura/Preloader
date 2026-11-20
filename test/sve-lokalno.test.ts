@@ -159,7 +159,8 @@ describe('pnpm sve nad lažnim checkoutima', () => {
     fake('Institution_server', 'lazni-oidc', 'start', 'packages/test-fakes/oidc');
     fake('institution_front_web_chrome', 'front-institucije');
 
-    const env: Record<string, string> = {};
+    // NODE_ENV je u tipovima Nexta obavezan; okolina se i dalje gradi samo od nizova iz process.env.
+    const env = {} as NodeJS.ProcessEnv;
     for (const [k, v] of Object.entries(process.env)) if (typeof v === 'string') env[k] = v;
     delete env['DUCTURA_PROVISIONING_TOKEN'];
     env['DUCTURA_REPOS'] = dir;
@@ -189,6 +190,8 @@ describe('pnpm sve nad lažnim checkoutima', () => {
       expect(front).toMatchObject({ name: 'front-institucije', url: '/app/web/' });
       const page = await fetch('http://localhost:8000/');
       expect(await page.text()).toContain('Prijava preko AAI@EduHr');
+      // Izgrađen preloader (`next start`) iza edgea: CSP iz hasheva, ne stroga zamjenska politika.
+      expect(page.headers.get('content-security-policy')).toMatch(/script-src 'sha256-[A-Za-z0-9+/]{43}='/);
       // Isti token na oba poslužitelja, generiran pri pokretanju i nigdje ispisan.
       const server = await (await fetch('http://localhost:3110/')).json();
       expect(server.token).toBe(api.token);

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, test } from 'vitest';
-import { build } from '../scripts/build.ts';
+import { build } from './static-build.ts';
 import { contentSecurityPolicyFor } from '../deploy/edge/index.ts';
 import { errorText, text } from '../src/text.ts';
 

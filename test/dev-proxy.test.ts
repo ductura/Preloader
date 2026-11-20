@@ -1,12 +1,11 @@
 // Lokalni edge (deploy/edge/dev-proxy.mjs, ugovor #2028 §1): rute, zaglavlja i WebSocket
 // prema lažnim uzvodnim poslužiteljima na slučajnim portovima. Mreža izvan računala se ne koristi.
+import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { connect } from 'node:net';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { createEdge, DEFAULT_TARGETS, routeFor, targetsFromEnv } from '../deploy/edge/dev-proxy.mjs';
+import { createEdge, DEFAULT_TARGETS, FALLBACK_CSP, routeFor, targetsFromEnv } from '../deploy/edge/dev-proxy.mjs';
 
 interface Seen {
   upstream: string;
@@ -18,9 +17,9 @@ interface Seen {
 
 const seen: Seen[] = [];
 const servers: Server[] = [];
-let root: string;
 let edgeUrl: string;
 let edgePort: number;
+let preloaderPort: number;
 let wsUpgrades: Seen[] = [];
 
 const sockets = new Set<import('node:net').Socket>();
@@ -38,7 +37,29 @@ async function listen(server: Server): Promise<number> {
   return address.port;
 }
 
-/** Lažni uzvodni: zapisuje zahtjev, vraća dva kolačića i Location, na `/__ws` prihvaća WebSocket. */
+const sha = (text: string) => `sha256-${createHash('sha256').update(text, 'utf8').digest('base64')}`;
+const policy = (script: string, style: string) =>
+  `default-src 'none'; script-src ${script}; style-src '${sha(style)}'; ` +
+  "img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/** Stranice lažnog preloadera u obliku koji daje Next (`<style data-next-head="">`). */
+const nextPage = (body: string, script?: string) =>
+  `<!doctype html><html lang="hr"><head><title data-next-head="">Ductura</title><style data-next-head="">b{}</style></head>` +
+  `<body><div id="__next">${body}</div>${script === undefined ? '' : `<script>${script}</script>`}</body></html>`;
+const PAGES: Record<string, { status: number; body: string | Buffer; headers?: Record<string, string> }> = {
+  '/greska.html': { status: 200, body: nextPage('<p>greška</p>', 'greska()') },
+  '/html/stranica': { status: 200, body: nextPage('<p>preloader</p>', 'prvi()'), headers: { 'Content-Security-Policy': "script-src 'unsafe-inline'" } },
+  '/html/404': { status: 404, body: nextPage('<p>Stranica ne postoji</p>') },
+  '/html/304': { status: 304, body: '', headers: { ETag: '"v1"' } },
+  '/html/dev': { status: 200, body: nextPage('<p>dev</p>', 'prvi()').replace('</body>', '<script src="/_next/static/chunks/a.js" defer=""></script></body>') },
+  '/html/gzip': { status: 200, body: gzipSync(nextPage('<p>gzip</p>', 'prvi()')), headers: { 'Content-Encoding': 'gzip' } },
+  '/html/velika': { status: 200, body: nextPage(`<p>${'x'.repeat(1024 * 1024)}</p>`, 'prvi()') },
+};
+
+/**
+ * Lažni uzvodni: zapisuje zahtjev, vraća dva kolačića i Location, na `/__ws` prihvaća WebSocket.
+ * Lažni preloader na `/greska.html` i `/html/*` vraća HTML iz `PAGES`.
+ */
 function fakeUpstream(name: string): Server {
   const server = createServer((req, res) => {
     let body = '';
@@ -46,6 +67,11 @@ function fakeUpstream(name: string): Server {
     req.on('data', (chunk: string) => (body += chunk));
     req.on('end', () => {
       seen.push({ upstream: name, method: req.method ?? '', url: req.url ?? '', headers: req.headers, body });
+      const page = name === 'preloader' ? PAGES[req.url ?? ''] : undefined;
+      if (page) {
+        res.writeHead(page.status, { 'Content-Type': 'text/html; charset=utf-8', ...page.headers }).end(page.body);
+        return;
+      }
       res.writeHead(303, [
         'Location', 'http://localhost:8000/app/web/',
         'Set-Cookie', '__Host-ductus_session=s1; Path=/; HttpOnly; Secure; SameSite=Lax',
@@ -66,25 +92,20 @@ function fakeUpstream(name: string): Server {
 }
 
 beforeAll(async () => {
-  root = mkdtempSync(join(tmpdir(), 'edge-'));
-  const dist = join(root, 'dist');
-  mkdirSync(dist);
-  writeFileSync(join(dist, 'index.html'), '<!doctype html><html lang="hr"><title>Ductura</title><style>b{}</style><p>preloader</p><script>1</script></html>');
-  writeFileSync(join(dist, 'greska.html'), '<!doctype html><html lang="hr"><title>Greška</title><style>i{}</style><p>greška</p><script>2</script></html>');
-  writeFileSync(join(root, 'tajna.txt'), 'izvan dist-a');
-  symlinkSync(join(root, 'tajna.txt'), join(dist, 'poveznica.txt'));
-
   const ports = {
+    preloader: await listen(fakeUpstream('preloader')),
     admin: await listen(fakeUpstream('admin')),
     api: await listen(fakeUpstream('api')),
     front: await listen(fakeUpstream('front')),
   };
+  preloaderPort = ports.preloader;
   const targets = targetsFromEnv({
+    DUCTURA_EDGE_PRELOADER: `http://127.0.0.1:${ports.preloader}`,
     DUCTURA_EDGE_ADMIN: `http://127.0.0.1:${ports.admin}`,
     DUCTURA_EDGE_API: `http://127.0.0.1:${ports.api}`,
     DUCTURA_EDGE_FRONT: `http://127.0.0.1:${ports.front}`,
   });
-  const edge = await createEdge({ dist, targets });
+  const edge = await createEdge({ targets });
   edgePort = await listen(edge);
   edgeUrl = `http://127.0.0.1:${edgePort}`;
 });
@@ -95,7 +116,6 @@ afterAll(async () => {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
   }
-  rmSync(root, { recursive: true, force: true });
 });
 
 const get = (path: string, init: RequestInit = {}) => fetch(`${edgeUrl}${path}`, { redirect: 'manual', ...init });
@@ -115,25 +135,25 @@ function rawRequest(path: string): Promise<{ status: number; text: string }> {
 
 describe('routeFor', () => {
   test.each([
-    ['/', 'static'],
-    ['/greska.html', 'static'],
+    ['/', 'preloader'],
+    ['/greska.html', 'preloader'],
     ['/admin', 'admin'],
     ['/admin/', 'admin'],
     ['/admin/prijava', 'admin'],
     ['/admin/_next/webpack-hmr', 'admin'],
-    ['/administracija', 'static'],
-    ['/Admin', 'static'],
-    ['/%61dmin', 'static'],
+    ['/administracija', 'preloader'],
+    ['/Admin', 'preloader'],
+    ['/%61dmin', 'preloader'],
     ['/api/v1', 'api'],
     ['/api/v1/auth/login', 'api'],
     ['/api/v1/client-context', 'api'],
-    ['/api/v2/x', 'static'],
-    ['/api/v1x', 'static'],
+    ['/api/v2/x', 'preloader'],
+    ['/api/v1x', 'preloader'],
     ['/app/web/', 'front'],
     ['/app/web', 'front'],
     ['/app/chrome/index.html', 'front'],
-    ['/app/webx', 'static'],
-    ['/app/mobile/', 'static'],
+    ['/app/webx', 'preloader'],
+    ['/app/mobile/', 'preloader'],
   ] as const)('%s -> %s', (path, route) => {
     expect(routeFor(path)).toBe(route);
   });
@@ -141,9 +161,11 @@ describe('routeFor', () => {
 
 describe('targetsFromEnv', () => {
   test('zadani portovi iz ugovora §1', () => {
-    expect(DEFAULT_TARGETS).toEqual({ admin: 'http://localhost:3120', api: 'http://localhost:4000', front: 'http://localhost:5173' });
+    expect(DEFAULT_TARGETS).toEqual({
+      preloader: 'http://localhost:3100', admin: 'http://localhost:3120', api: 'http://localhost:4000', front: 'http://localhost:5173',
+    });
     const t = targetsFromEnv({});
-    expect([t.admin.port, t.api.port, t.front.port]).toEqual(['3120', '4000', '5173']);
+    expect([t.preloader.port, t.admin.port, t.api.port, t.front.port]).toEqual(['3100', '3120', '4000', '5173']);
   });
 
   test('prazna vrijednost znači zadanu', () => {
@@ -158,40 +180,92 @@ describe('targetsFromEnv', () => {
   );
 });
 
-describe('statika preloadera', () => {
-  test('/ je dist/index.html s CSP-om iz hasheva', async () => {
-    const res = await get('/');
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
-    expect(await res.text()).toContain('<p>preloader</p>');
-    const csp = res.headers.get('content-security-policy') ?? '';
-    expect(csp).toMatch(/script-src 'sha256-[A-Za-z0-9+/]{43}='/);
-    expect(csp).not.toContain('unsafe-inline');
-  });
-
-  test('nepoznata putanja daje 404 sa stranicom greške', async () => {
-    const res = await get('/nema-me');
-    expect(res.status).toBe(404);
-    expect(await res.text()).toContain('<p>greška</p>');
-  });
-
-  test.each(['/../tajna.txt', '/%2e%2e/tajna.txt', '/%2E%2E%2Ftajna.txt', '/..%5ctajna.txt', '/poveznica.txt', '/%00', '/%E0%A4%A'])(
-    'ne izlazi iz dist-a: %s',
+describe('preloader (Next.js)', () => {
+  test.each(['/', '/greska.html?status=404', '/nema-me', '/_next/static/chunks/a.js', '/Admin', '/%61dmin', '/../tajna.txt', '/%2e%2e/tajna.txt'])(
+    '%s ide preloaderu doslovno, s istom putanjom i upitom',
     async (path) => {
+      seen.length = 0;
       const res = await rawRequest(path);
-      expect(res.status).toBe(404);
-      expect(res.text).not.toContain('izvan dist-a');
+      expect(res.text).toContain('odgovor preloader');
+      expect(seen.map((s) => [s.upstream, s.url])).toEqual([['preloader', path]]);
     },
   );
 
-  test('POST na statiku je 405', async () => {
-    const res = await get('/', { method: 'POST', body: 'x' });
-    expect(res.status).toBe(405);
+  test('HTML preloadera dobiva CSP iz hasheva skripte i stila; zaglavlje uzvodnog se zamjenjuje', async () => {
+    seen.length = 0;
+    const res = await get('/html/stranica', { headers: { 'Accept-Encoding': 'gzip, br' } });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toBe(PAGES['/html/stranica']?.body);
+    expect(res.headers.get('content-length')).toBe(String(Buffer.byteLength(body)));
+    const csp = res.headers.get('content-security-policy');
+    expect(csp).toBe(policy(`'${sha('prvi()')}'`, 'b{}'));
+    expect(csp).not.toMatch(/unsafe|nonce|strict-dynamic|\*/);
+    // Preloader odgovara nekomprimirano, da se tijelo može hashirati.
+    expect(seen[0]?.headers['accept-encoding']).toBeUndefined();
   });
 
-  test('WebSocket na statiku se zatvara s 404', async () => {
-    const reply = await rawUpgrade('/');
-    expect(reply).toMatch(/^HTTP\/1\.1 404/);
+  test('HEAD daje isti CSP bez tijela; preloaderu ide kao GET', async () => {
+    seen.length = 0;
+    const res = await get('/html/stranica', { method: 'HEAD' });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-security-policy')).toBe(policy(`'${sha('prvi()')}'`, 'b{}'));
+    expect(await res.text()).toBe('');
+    expect(seen.map((s) => s.method)).toEqual(['GET']);
+  });
+
+  test("404 Nexta bez skripte dobiva script-src 'none'", async () => {
+    const res = await get('/html/404');
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-security-policy')).toBe(policy("'none'", 'b{}'));
+    expect(await res.text()).toContain('Stranica ne postoji');
+  });
+
+  test.each(['/html/dev', '/html/gzip'])('%s: bez CSP-a iz hasheva ide stroga politika', async (path) => {
+    const res = await get(path);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-security-policy')).toBe(FALLBACK_CSP);
+  });
+
+  test('304 prolazi bez tijela i bez zamjenske politike (ostaje spremljeni CSP)', async () => {
+    const res = await get('/html/304', { headers: { 'If-None-Match': '"v1"' } });
+    expect(res.status).toBe(304);
+    expect(res.headers.get('content-security-policy')).toBeNull();
+    expect(res.headers.get('etag')).toBe('"v1"');
+  });
+
+  test('Range ne ide preloaderu: HTML stiže cijel za hash', async () => {
+    seen.length = 0;
+    const res = await get('/html/stranica', { headers: { Range: 'bytes=0-10', 'If-Range': '"v1"' } });
+    expect(res.headers.get('content-security-policy')).toBe(policy(`'${sha('prvi()')}'`, 'b{}'));
+    expect(seen[0]?.headers['range']).toBeUndefined();
+    expect(seen[0]?.headers['if-range']).toBeUndefined();
+  });
+
+  test('prevelik HTML se ne šalje bez CSP-a: 502', async () => {
+    const res = await get('/html/velika');
+    expect(res.status).toBe(502);
+    expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+  });
+
+  test('ostalo od preloadera (ne HTML) prolazi bez CSP-a i nepromijenjeno', async () => {
+    const res = await get('/_next/static/chunks/a.js');
+    expect(res.headers.get('content-security-policy')).toBeNull();
+    expect(await res.text()).toBe('odgovor preloader');
+  });
+
+  test('POST na preloader je 405 i ne ide dalje', async () => {
+    seen.length = 0;
+    const res = await get('/', { method: 'POST', body: 'x' });
+    expect(res.status).toBe(405);
+    expect(seen).toEqual([]);
+  });
+
+  test('WebSocket (HMR za next dev) prolazi do preloadera', async () => {
+    wsUpgrades = [];
+    const reply = await rawUpgrade('/_next/webpack-hmr', 'ping');
+    expect(reply).toContain('preloader:ping');
+    expect(wsUpgrades[0]?.url).toBe('/_next/webpack-hmr');
   });
 });
 
@@ -275,17 +349,21 @@ describe('prosljeđivanje', () => {
 });
 
 describe('uzvodni nije pokrenut', () => {
-  test('502 sa stranicom greške, edge radi dalje', async () => {
-    const dist = join(root, 'dist');
+  test('502 sa stranicom greške preloadera, edge radi dalje', async () => {
     const down = await createEdge({
-      dist,
-      targets: targetsFromEnv({ DUCTURA_EDGE_API: 'http://127.0.0.1:9', DUCTURA_EDGE_ADMIN: 'http://127.0.0.1:9' }),
+      targets: targetsFromEnv({
+        DUCTURA_EDGE_PRELOADER: `http://127.0.0.1:${preloaderPort}`,
+        DUCTURA_EDGE_API: 'http://127.0.0.1:9',
+        DUCTURA_EDGE_ADMIN: 'http://127.0.0.1:9',
+      }),
     });
     const port = await listen(down);
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/me`);
     expect(res.status).toBe(502);
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(res.headers.get('content-security-policy')).toBe(policy(`'${sha('greska()')}'`, 'b{}'));
     expect(await res.text()).toContain('<p>greška</p>');
-    expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(200);
+    expect(await (await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' })).text()).toBe('odgovor preloader');
     const ws = await rawUpgrade('/admin/_next/webpack-hmr', '', port);
     expect(ws).toMatch(/^HTTP\/1\.1 502/);
   });
@@ -309,7 +387,7 @@ describe('uzvodni nije pokrenut', () => {
     }
     const address = v6.address();
     const v6port = typeof address === 'object' && address ? address.port : 0;
-    const edge = await createEdge({ dist: join(root, 'dist'), targets: targetsFromEnv({ DUCTURA_EDGE_API: `http://[::1]:${v6port}` }) });
+    const edge = await createEdge({ targets: targetsFromEnv({ DUCTURA_EDGE_API: `http://[::1]:${v6port}` }) });
     const port = await listen(edge);
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/me`, { redirect: 'manual' });
     expect(res.headers.get('x-upstream')).toBe('v6');
@@ -317,8 +395,17 @@ describe('uzvodni nije pokrenut', () => {
     expect(ws).toContain('v6:ping');
   });
 
-  test('bez dist-a createEdge baca', async () => {
-    await expect(createEdge({ dist: join(root, 'nema') })).rejects.toThrow();
+  test('bez preloadera 502 s kratkim tekstom, i za stranicu i za uslugu', async () => {
+    const down = await createEdge({
+      targets: targetsFromEnv({ DUCTURA_EDGE_PRELOADER: 'http://127.0.0.1:9', DUCTURA_EDGE_API: 'http://127.0.0.1:9' }),
+    });
+    const port = await listen(down);
+    for (const path of ['/', '/api/v1/me']) {
+      const res = await fetch(`http://127.0.0.1:${port}${path}`);
+      expect(res.status).toBe(502);
+      expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+      expect(await res.text()).toBe('502\n');
+    }
   });
 });
 

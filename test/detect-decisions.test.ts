@@ -5,7 +5,7 @@ import { gzipSync } from 'node:zlib';
 import { build } from 'esbuild';
 import { describe, expect, test } from 'vitest';
 import { parseBudget } from '../scripts/budget.ts';
-import { build as buildPage } from '../scripts/build.ts';
+import { build as buildPage } from './static-build.ts';
 import { choosePackage, chooseView, resolvePlatform, signalsFrom, type Signals } from '../src/detect/index.ts';
 import { UA } from './user-agents.ts';
 

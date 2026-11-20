@@ -4,7 +4,7 @@ import { readChoice, writeChoice, type Choice, type ChoiceStore } from './choice
 import type { Config } from './config.ts';
 import { detectBrowser, type DesktopPackage, type Frontend, type Route } from './detect.ts';
 import { choosePackage, chooseView, type Signals, type View } from './detect/index.ts';
-import { clientText as text } from './text.ts';
+import { clientText as text } from './client-text.ts';
 
 /** Zakazuje odlazak na web; može vratiti funkciju koja ga otkazuje. */
 export type Navigate = (url: string, delayMs: number) => (() => void) | void;

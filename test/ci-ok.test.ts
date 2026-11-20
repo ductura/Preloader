@@ -63,7 +63,7 @@ const step = steps.find((s) => typeof s['run'] === 'string' && s['run'].includes
 const script = typeof step?.['run'] === 'string' ? step['run'] : '';
 
 const run = (value: string): { code: number | null; out: string } => {
-  const r = spawnSync('bash', ['-c', script], { env: { PATH: process.env.PATH, NEEDS: value }, encoding: 'utf8' });
+  const r = spawnSync('bash', ['-c', script], { env: { PATH: process.env.PATH, NEEDS: value } as unknown as NodeJS.ProcessEnv, encoding: 'utf8' });
   return { code: r.status, out: r.stdout + r.stderr };
 };
 const needs = (o: Record<string, string>): string => JSON.stringify(Object.fromEntries(Object.entries(o).map(([k, v]) => [k, { result: v, outputs: {} }])));

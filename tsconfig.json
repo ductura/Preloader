@@ -1,12 +1,18 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "//": "Iste stroge opcije kao @ductura/tsconfig (ductura/.github packages/tsconfig/base.json), uz DOM za klijent.",
+  "//": "Iste stroge opcije kao @ductura/tsconfig (ductura/.github packages/tsconfig/base.json), uz DOM za klijent i ono što next build traži (jsx, plugin next, .next/types). Razrješavanje je Bundler, kao u Nextu; relativni uvozi i dalje pišu nastavak .ts. .next/dev je izvan provjere: next dev ondje ostavlja drugi validator.ts s istim globalnim tipovima. src/components/landing je doslovna kopija bez ovisnosti; spaja je sljedeći PR.",
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "types": ["node"],
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -18,7 +24,33 @@
     "allowJs": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "incremental": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
   },
-  "include": ["src", "scripts", "test", "e2e", "vitest.config.ts"]
+  "include": [
+    "next-env.d.ts",
+    "next.config.ts",
+    "pages",
+    "src",
+    "scripts",
+    "test",
+    "e2e",
+    "vitest.config.ts",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
+    ".next/dev/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "src/components/landing",
+    ".next/dev"
+  ]
 }
