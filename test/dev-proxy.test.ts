@@ -157,6 +157,17 @@ describe('routeFor', () => {
   ] as const)('%s -> %s', (path, route) => {
     expect(routeFor(path)).toBe(route);
   });
+
+  test('razvojne putanje next dev idu usluzi stranice iz Referera (LOK-2)', () => {
+    expect(routeFor('/__nextjs_font/geist-latin.woff2', 'http://localhost:8000/admin/_next/static/chunks/a.css')).toBe('admin');
+    expect(routeFor('/__nextjs_original-stack-frames', 'http://localhost:8000/app/web/zadaci')).toBe('front');
+    expect(routeFor('/__nextjs_font/x.woff2', 'http://localhost:8000/')).toBe('preloader');
+    expect(routeFor('/__nextjs_font/x.woff2', 'http://localhost:8000/__nextjs_font/y')).toBe('preloader');
+    expect(routeFor('/__nextjs_font/x.woff2', 'nije url')).toBe('preloader');
+    expect(routeFor('/__nextjs_font/x.woff2')).toBe('preloader');
+    // Referer ne mijenja ništa drugo.
+    expect(routeFor('/greska.html', 'http://localhost:8000/admin')).toBe('preloader');
+  });
 });
 
 describe('targetsFromEnv', () => {

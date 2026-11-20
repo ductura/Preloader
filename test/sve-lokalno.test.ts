@@ -1,15 +1,19 @@
 // `pnpm sve` (scripts/sve-lokalno.mjs): plan usluga iz ugovora #2028 §1 i pokretanje bez ljuske.
 // Cjeloviti test pokreće skriptu nad lažnim checkoutima (mali Node poslužitelji) i ide kroz edge na :8000.
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import {
+  adminDatabaseUrl,
+  ADMIN_PASSWORD_FILE,
   childEnv,
-  EDGE_ORIGIN,
+  databaseUrlFor,
+  DATABASES,
+  ensureAdminPassword,
   findRepo,
   OIDC_ISSUER,
   plan,
@@ -17,6 +21,7 @@ import {
   REPOS,
   reposDir,
   services,
+  waitForLine,
   waitForPort,
 } from '../scripts/sve-lokalno.mjs';
 
@@ -36,31 +41,69 @@ function fakeRepo(dir: string, scripts: Record<string, string>, files: Record<st
 }
 
 describe('usluge iz ugovora §1', () => {
-  const list = services(TOKEN);
+  const list = services();
   const by = (name: string) => list.find((s) => s.name === name);
 
-  test('portovi i repozitoriji', () => {
-    expect(list.map((s) => [s.name, s.repo, s.port])).toEqual([
-      ['aplication-server', 'Aplication_server', 3110],
-      ['aplication-front', 'Aplication_front', 3120],
-      ['institution-server', 'Institution_server', 4000],
-      ['lazni-oidc', 'Institution_server', 8090],
-      ['front-institucije', 'Institution_front_web_chrome', 5173],
+  test('portovi, repozitoriji i skripte', () => {
+    expect(list.map((s) => [s.name, s.repo, s.script, s.listens])).toEqual([
+      ['aplication-server', 'Aplication_server', 'dev', [['aplication-server', 3110]]],
+      ['aplication-front', 'Aplication_front', 'dev', [['aplication-front', 3120]]],
+      // `pnpm lokalno` Institution_servera podiže server i lažni OIDC (simulator AAI@EduHr).
+      ['institution-server', 'Institution_server', 'lokalno', [['institution-server', 4000], ['lazni-oidc', 8090]]],
+      ['front-institucije', 'Institution_front_web_chrome', 'dev', [['front-institucije', 5173]]],
     ]);
-    for (const s of list) expect(s.env['PORT']).toBe(String(s.port));
+    for (const s of list) if (s.script === 'dev') expect(s.env['PORT']).toBe(String(s.listens[0]?.[1]));
   });
 
-  test('isti token provisioninga ide samo na oba poslužitelja (§2)', () => {
-    const holders = list.filter((s) => Object.values(s.env).includes(TOKEN)).map((s) => s.name);
-    expect(holders).toEqual(['aplication-server', 'institution-server']);
-    expect(by('aplication-server')?.env['INSTITUTION_SERVER_URL']).toBe('http://localhost:4000');
-  });
-
-  test('OIDC: issuer :8090, povratak preko edgea', () => {
+  test('Aplication_server: Institution_server, issuer simulatora i vlastita baza', () => {
     expect(OIDC_ISSUER).toBe('http://localhost:8090');
-    expect(by('institution-server')?.env).toMatchObject({ OIDC_ISSUER, OIDC_REDIRECT_URI: `${EDGE_ORIGIN}/api/v1/auth/callback` });
-    expect(by('lazni-oidc')).toMatchObject({ subdir: 'packages/test-fakes/oidc', script: 'start' });
-    expect(by('lazni-oidc')?.env).toMatchObject({ ISSUER: OIDC_ISSUER, REDIRECT_URI: `${EDGE_ORIGIN}/api/v1/auth/callback` });
+    expect(by('aplication-server')?.env).toMatchObject({ INSTITUTION_SERVER_URL: 'http://127.0.0.1:4000', AAI_OIDC_ISSUER: OIDC_ISSUER });
+    expect(by('aplication-server')?.database).toBe('ductura');
+    expect(by('institution-server')).toMatchObject({ env: {}, database: 'ductus' });
+    expect(DATABASES).toEqual({ institution: 'ductus', aplication: 'ductura' });
+  });
+
+  test('nijedna usluga nema token ni tajnu u planu', () => {
+    for (const s of list) expect(Object.keys(s.env)).not.toContain('DUCTURA_PROVISIONING_TOKEN');
+  });
+});
+
+describe('baza', () => {
+  test('superkorisnik samo na ovom računalu; svaka usluga dobiva svoju bazu', () => {
+    const admin = adminDatabaseUrl('postgres://postgres:tajna@127.0.0.1:54320/postgres?sslmode=disable&x=1');
+    expect(databaseUrlFor(admin, 'ductus')).toBe('postgres://postgres:tajna@127.0.0.1:54320/ductus?sslmode=disable');
+    expect(databaseUrlFor(adminDatabaseUrl('postgresql://p@localhost'), 'ductura')).toBe('postgresql://p@localhost/ductura');
+    expect(() => adminDatabaseUrl('postgres://p:tajna@db.example.invalid/ductus')).toThrow(/localhost/);
+    expect(() => adminDatabaseUrl('mysql://p@localhost/x')).toThrow(/postgres/);
+    expect(() => adminDatabaseUrl('postgres://localhost/x')).toThrow(/korisnika/);
+    expect(() => adminDatabaseUrl('nije url')).toThrow(/URL/);
+    for (const bad of ['postgres://p:tajna@db.example.invalid/ductus']) {
+      try {
+        adminDatabaseUrl(bad);
+      } catch (error) {
+        expect(String(error)).not.toContain('tajna');
+      }
+    }
+  });
+
+  test('lozinka administratora: stvara se jednom, 0600, i ostaje', () => {
+    const repo = join(base, 'admin-lozinka');
+    mkdirSync(repo);
+    const first = ensureAdminPassword(repo);
+    expect(first.file).toBe(join(repo, ADMIN_PASSWORD_FILE));
+    expect(first.password.length).toBeGreaterThanOrEqual(12);
+    expect(readFileSync(first.file, 'utf8')).toBe(`${first.password}\n`);
+    if (process.platform !== 'win32') expect(statSync(first.file).mode & 0o777).toBe(0o600);
+    expect(ensureAdminPassword(repo).password).toBe(first.password);
+    writeFileSync(first.file, 'kratko\n');
+    expect(ensureAdminPassword(repo).password).not.toBe('kratko');
+  });
+
+  test('waitForLine: prvi neprazan redak ili null', async () => {
+    const file = join(base, 'redak');
+    expect(await waitForLine(file, 300)).toBeNull();
+    setTimeout(() => writeFileSync(file, 'abc\nxyz\n'), 100);
+    expect(await waitForLine(file, 3000)).toBe('abc');
   });
 });
 
@@ -83,18 +126,20 @@ describe('susjedni checkouti', () => {
     const dir = join(base, 'plan');
     fakeRepo(join(dir, 'Aplication_server'), { dev: 'x' });
     fakeRepo(join(dir, 'Aplication_front'), { build: 'x' });
+    // Institution_server bez `lokalno` (npr. stara grana sa skriptom dev) se preskače.
     fakeRepo(join(dir, 'Institution_server'), { dev: 'x' });
-    const result = plan(dir, services(TOKEN));
+    mkdirSync(join(dir, 'Institution_front_web_chrome'));
+    const result = plan(dir, services());
     expect(result.map((p) => [p.service.name, p.missing === null])).toEqual([
       ['aplication-server', true],
       ['aplication-front', false],
-      ['institution-server', true],
-      ['lazni-oidc', false],
+      ['institution-server', false],
       ['front-institucije', false],
     ]);
     expect(result[1]?.missing).toContain('nema skriptu "dev"');
+    expect(result[2]?.missing).toContain('nema skriptu "lokalno"');
     expect(result[3]?.missing).toContain('package.json');
-    expect(result[4]?.missing).toContain('nema checkouta Institution_front_web_chrome');
+    expect(plan(join(base, 'nema'), services())[3]?.missing).toContain('nema checkouta Institution_front_web_chrome');
     expect(REPOS).toHaveLength(4);
   });
 });
@@ -120,9 +165,11 @@ describe('pokretanje bez ljuske (Windows)', () => {
     expect(pnpmInvocation({}, ['run', 'dev'], 'linux')).toEqual({ command: 'pnpm', args: ['run', 'dev'] });
   });
 
-  test('port iz roditeljske okoline ne preteče ugovor', () => {
+  test('port, baza i tajne iz roditeljske okoline ne prelaze na usluge', () => {
     expect(childEnv({ PORT: '9999', PATH: '/bin', PRAZNO: undefined }, { PORT: '4000' })).toEqual({ PORT: '4000', PATH: '/bin' });
-    expect(childEnv({ PORT: '9999' }, {})).toEqual({});
+    const parent = { PORT: '9999', DATABASE_URL: 'postgres://p@localhost/x', DUCTURA_PROVISIONING_TOKEN: TOKEN, DUCTURA_ADMIN_TOKEN_SECRET: TOKEN };
+    expect(childEnv(parent, {})).toEqual({});
+    expect(childEnv(parent, { DATABASE_URL: 'postgres://p@localhost/ductus' })).toEqual({ DATABASE_URL: 'postgres://p@localhost/ductus' });
   });
 
   test('waitForPort: otvoren i zatvoren port', async () => {
@@ -141,28 +188,45 @@ const FAKE_SERVER = `
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 const token = process.env.DUCTURA_PROVISIONING_TOKEN ?? '';
-createServer((req, res) => {
+const answer = (name) => (req, res) => {
   res.setHeader('content-type', 'application/json');
-  res.end(JSON.stringify({ name: process.env.LAZNI_NAZIV, url: req.url, host: req.headers.host,
-    token: token ? createHash('sha256').update(token).digest('hex') : null, tokenLength: token.length }));
-}).listen(Number(process.env.PORT), 'localhost');
+  res.end(JSON.stringify({ name, url: req.url, host: req.headers.host, issuer: process.env.AAI_OIDC_ISSUER ?? null,
+    token: token ? createHash('sha256').update(token).digest('hex') : null, tokenLength: token.length,
+    secret: (process.env.DUCTURA_ADMIN_TOKEN_SECRET ?? '').length }));
+};
+const ports = process.env.LAZNI_PORTOVI ? JSON.parse(process.env.LAZNI_PORTOVI) : [[process.env.LAZNI_NAZIV, Number(process.env.PORT)]];
+for (const [name, port] of ports) createServer(answer(name)).listen(port, '127.0.0.1');
+`;
+
+// Lažni `pnpm lokalno` Institution_servera: zapiše token u .local/ kao pravi (§2), pa podigne server i OIDC.
+const FAKE_LOKALNO = `
+import { mkdirSync, writeFileSync } from 'node:fs';
+mkdirSync('.local', { recursive: true });
+writeFileSync('.local/provisioning-token', ${JSON.stringify(`${TOKEN}
+`)});
+process.env.LAZNI_PORTOVI = JSON.stringify([['institution-server', 4000], ['lazni-oidc', 8090]]);
+process.env.DUCTURA_PROVISIONING_TOKEN = ${JSON.stringify(TOKEN)};
+await import('./server.mjs');
 `;
 
 describe('pnpm sve nad lažnim checkoutima', () => {
   test('pokreće usluge i edge; /admin, /api/v1 i /app/web stižu do svojih usluga', { timeout: 90_000 }, async () => {
     const dir = join(base, 'sve');
-    const fake = (repo: string, name: string, script = 'dev', subdir = '') =>
-      fakeRepo(join(dir, repo, subdir), { [script]: `node server.mjs` }, { 'server.mjs': `process.env.LAZNI_NAZIV=${JSON.stringify(name)};\n${FAKE_SERVER}` });
+    const fake = (repo: string, name: string, script = 'dev') =>
+      fakeRepo(join(dir, repo), { [script]: `node ${script === 'lokalno' ? 'lokalno.mjs' : 'server.mjs'}` }, {
+        'server.mjs': `process.env.LAZNI_NAZIV=${JSON.stringify(name)};\n${FAKE_SERVER}`,
+        'lokalno.mjs': FAKE_LOKALNO,
+      });
     fake('Aplication_server', 'aplication-server');
     fake('Aplication_front', 'aplication-front');
-    fake('Institution_server', 'institution-server');
-    fake('Institution_server', 'lazni-oidc', 'start', 'packages/test-fakes/oidc');
+    fake('Institution_server', 'institution-server', 'lokalno');
     fake('institution_front_web_chrome', 'front-institucije');
 
     // NODE_ENV je u tipovima Nexta obavezan; okolina se i dalje gradi samo od nizova iz process.env.
     const env = {} as NodeJS.ProcessEnv;
     for (const [k, v] of Object.entries(process.env)) if (typeof v === 'string') env[k] = v;
     delete env['DUCTURA_PROVISIONING_TOKEN'];
+    delete env['DATABASE_URL'];
     env['DUCTURA_REPOS'] = dir;
     const child = spawn(process.execPath, [join(root, 'scripts', 'sve-lokalno.mjs')], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
@@ -192,11 +256,12 @@ describe('pnpm sve nad lažnim checkoutima', () => {
       expect(await page.text()).toContain('Prijava preko AAI@EduHr');
       // Izgrađen preloader (`next start`) iza edgea: CSP iz hasheva, ne stroga zamjenska politika.
       expect(page.headers.get('content-security-policy')).toMatch(/script-src 'sha256-[A-Za-z0-9+/]{43}='/);
-      // Isti token na oba poslužitelja, generiran pri pokretanju i nigdje ispisan.
-      const server = await (await fetch('http://localhost:3110/')).json();
-      expect(server.token).toBe(api.token);
+      // Aplication_server dobiva token koji je Institution_server zapisao, issuer simulatora i tajnu kolačića.
+      const server = await (await fetch('http://127.0.0.1:3110/')).json();
+      expect(server).toMatchObject({ token: api.token, issuer: OIDC_ISSUER, secret: 43 });
       expect(out).toMatch(/radi {2}lazni-oidc :8090/);
-      expect(out).not.toMatch(/[A-Za-z0-9_-]{43}/);
+      expect(out).toMatch(/Nema baze/);
+      expect(out).not.toContain(TOKEN);
     } finally {
       child.kill('SIGTERM');
       await new Promise((resolve) => (child.exitCode !== null ? resolve(null) : child.once('exit', resolve)));

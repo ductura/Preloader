@@ -74,14 +74,26 @@ export function targetsFromEnv(env = process.env) {
 
 /**
  * Kamo ide zahtjev. `rawPath` je putanja točno kako ju je poslao preglednik (bez upita).
+ * `referer` služi samo za razvojne putanje `next dev` (`/__nextjs_font/*`, `/__nextjs_original-stack-frames`):
+ * Next ih traži bez basePatha, pa idu usluzi čija ih je stranica tražila. Samo lokalno (LOK-2).
  * @param {string} rawPath
+ * @param {string} [referer]
  * @returns {Upstream}
  */
-export function routeFor(rawPath) {
+export function routeFor(rawPath, referer) {
   const under = (/** @type {string} */ prefix) => rawPath === prefix || rawPath.startsWith(`${prefix}/`);
   if (under('/admin')) return 'admin';
   if (under('/api/v1')) return 'api';
   if (under('/app/web') || under('/app/chrome')) return 'front';
+  if (rawPath.startsWith('/__nextjs') && referer) {
+    let from = '';
+    try {
+      from = new URL(referer).pathname;
+    } catch {
+      // Neispravan Referer: preloader.
+    }
+    if (from && !from.startsWith('/__nextjs')) return routeFor(from);
+  }
   return 'preloader';
 }
 
@@ -262,7 +274,7 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       res.writeHead(400).end();
       return;
     }
-    const route = routeFor(rawPath);
+    const route = routeFor(rawPath, req.headers.referer);
     // Preloader nema obrazaca ni API-ja: drugo od GET i HEAD ne ide dalje.
     if (route === 'preloader' && req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' }).end();
