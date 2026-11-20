@@ -1,5 +1,7 @@
 // `pnpm sve`: cijela Ductura lokalno iza jednog podrijetla http://localhost:8000 (ugovor #2028 §1).
-// Pokreće preloader (`next dev` na :3100), usluge iz susjednih checkouta i lokalni edge (deploy/edge/dev-proxy.mjs).
+// Izgradi i pokrene preloader (`next build`, `next start` na :3100), usluge iz susjednih checkouta i lokalni edge
+// (deploy/edge/dev-proxy.mjs). Preloader nije `next dev`: edge na njegov HTML stavlja CSP iz hasheva, a `next dev`
+// dodaje vlastite skripte (docs/LOKALNO.md §3).
 // Radi i na Windowsu: bez basha i bez `shell: true`; pnpm se pokreće kroz Node (`npm_execpath`).
 import { randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
@@ -13,7 +15,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 
 export const EDGE_ORIGIN = 'http://localhost:8000';
 export const OIDC_ISSUER = 'http://localhost:8090';
-/** Preloader iz ovog repoa (`pnpm dev`), iza edgea. */
+/** Preloader iz ovog repoa (`pnpm build`, pa `pnpm start`), iza edgea. */
 export const PRELOADER_PORT = 3100;
 
 /** Susjedni repozitoriji; ime mape se traži bez obzira na velika i mala slova. */
@@ -240,6 +242,11 @@ export async function main(env = process.env) {
   }
   if (!env['DATABASE_URL']) console.log('  ! DATABASE_URL nije postavljen: poslužitelji koriste svoje zadane lokalne baze (PostgreSQL :5432).');
 
+  console.log('Gradim preloader (next build) ...');
+  const build = pnpmInvocation(env, ['run', 'build']);
+  const built = spawnSync(build.command, build.args, { cwd: root, env: childEnv(env, {}), stdio: 'inherit', windowsHide: true });
+  if (built.status !== 0) throw new Error('Izgradnja preloadera nije uspjela.');
+
   /** @type {import('node:child_process').ChildProcess[]} */
   const children = [];
   let stopping = false;
@@ -273,7 +280,7 @@ export async function main(env = process.env) {
     return child;
   };
 
-  const preloader = pnpmInvocation(env, ['run', 'dev']);
+  const preloader = pnpmInvocation(env, ['run', 'start']);
   start('preloader', preloader.command, preloader.args, root, { PORT: String(PRELOADER_PORT) });
   for (const p of planned) {
     if (p.missing || !p.cwd) continue;

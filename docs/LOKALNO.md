@@ -34,11 +34,12 @@ Isto radi u PowerShellu, cmd-u i terminalu na macOS-u i Linuxu: skripta ne treba
 
 `pnpm sve`:
 
-1. pokrene preloader (`next dev` na :3100) i usluge iz ugovora §1 (svaka sa svojim portom u `PORT`):
+1. izgradi preloader (`pnpm run build`);
+2. pokrene preloader (`next start` na :3100) i usluge iz ugovora §1 (svaka sa svojim portom u `PORT`):
 
 | Usluga | Port | Mapa | Naredba |
 |---|---|---|---|
-| preloader (Next.js) | 3100 | ovaj repo | `pnpm run dev` |
+| preloader (Next.js) | 3100 | ovaj repo | `pnpm run start` |
 | Aplication_server | 3110 | `Aplication_server` | `pnpm run dev` |
 | Aplication_front (`basePath: "/admin"`) | 3120 | `Aplication_front` | `pnpm run dev` |
 | Institution_server | 4000 | `Institution_server` | `pnpm run dev` |
@@ -46,7 +47,7 @@ Isto radi u PowerShellu, cmd-u i terminalu na macOS-u i Linuxu: skripta ne treba
 | front institucije | 5173 | `Institution_front_web_chrome` | `pnpm run dev` |
 | edge | 8000 | ovaj repo | `node deploy/edge/dev-proxy.mjs` |
 
-2. ispiše koje usluge rade i adresu **http://localhost:8000/**.
+3. ispiše koje usluge rade i adresu **http://localhost:8000/**.
 
 Usluga čiji checkout, `package.json` ili skripta nedostaje preskače se, a razlog se ispiše (na primjer `Aplication_front nema skriptu "dev"`). Ostale rade dalje. Ispis svake usluge ima oznaku (`[institution-server] ...`). Ctrl+C gasi sve usluge s njihovim podprocesima.
 
@@ -59,7 +60,7 @@ Okolina koju skripta postavlja:
 - lažni OIDC: `ISSUER=http://localhost:8090`, `REDIRECT_URI=http://localhost:8000/api/v1/auth/callback`, `POST_LOGOUT_REDIRECT_URI=http://localhost:8000/`, `BACKCHANNEL_LOGOUT_URI=http://localhost:8000/api/v1/auth/backchannel-logout`.
 - Ostalo (npr. `DATABASE_URL`) prolazi iz Vaše okoline nepromijenjeno; `PORT` iz okoline se ne prenosi.
 
-Sam edge bez ostalih usluga: `pnpm dev` u jednom terminalu i `pnpm edge` u drugom.
+Sam edge bez ostalih usluga: `pnpm build && pnpm start` u jednom terminalu i `pnpm edge` u drugom. Preloader iza edgea nije `next dev`: ondje Next dodaje vlastite skripte, pa stranica dobiva strogu zamjensku politiku i vidi se bez stila (§3).
 
 ## 3. Edge (`deploy/edge/dev-proxy.mjs`)
 
@@ -70,13 +71,13 @@ Sam edge bez ostalih usluga: `pnpm dev` u jednom terminalu i `pnpm edge` u drugo
 | `/api/v1`, `/api/v1/*` | Institution_server :4000 |
 | `/app/web`, `/app/web/*`, `/app/chrome`, `/app/chrome/*` | front institucije :5173 |
 
-- Putanja se uspoređuje doslovno: bez dekodiranja i bez promjene velikih slova. `/Admin`, `/%61dmin`, `/administracija` i `/api/v2/...` nisu prosljeđeni nego ih poslužuje statika (404).
+- Putanja se uspoređuje doslovno: bez dekodiranja i bez promjene velikih slova. `/Admin`, `/%61dmin`, `/administracija` i `/api/v2/...` nisu prosljeđeni nego idu preloaderu (404 Nexta).
 - Putanja i upit prosljeđuju se nepromijenjeni: front institucije dobiva `/app/web/...`, ne `/...`.
 - `Host` (`localhost:8000`), kolačići, `Location` i svi `Set-Cookie` prolaze nepromijenjeni. Edge dodaje `X-Forwarded-Host`, `X-Forwarded-Proto: http` i `X-Forwarded-For` (vrijednosti iz preglednika se zamjenjuju) i uklanja samo zaglavlja jednog skoka.
-- WebSocket (HMR za `next dev`) prolazi kao sirova veza.
-- Ugašena usluga daje `502` sa stranicom greške preloadera (`/greska.html`); kad ne radi ni preloader, kratak tekst. Edge radi dalje.
+- WebSocket (HMR razvojnih poslužitelja) prolazi kao sirova veza.
+- Ugašena usluga daje `502` sa stranicom greške preloadera (`/greska.html`, s CSP-om kao ispod); kad ne radi ni preloader, kratak tekst. Edge radi dalje.
 - Ciljevi se mijenjaju varijablama `DUCTURA_EDGE_PRELOADER`, `DUCTURA_EDGE_ADMIN`, `DUCTURA_EDGE_API` i `DUCTURA_EDGE_FRONT` (`http://host:port`, bez putanje). Port edgea je `DUCTURA_EDGE_PORT` (zadano 8000), adresa `DUCTURA_EDGE_HOST` (zadano `localhost`).
-- Edge ne dodaje `Content-Security-Policy`, jer stranice poslužuje Next (zaseban korak, vidi `docs/DEPLOY.md`).
+- HTML preloadera dobiva `Content-Security-Policy` iz hasheva jedine ugrađene skripte i stila (`deploy/edge/content-security-policy.ts`, DAN-995); stranica bez skripte (404) dobiva `script-src 'none'`. Zaglavlje preloadera se zamjenjuje, a preloader odgovara cijelim i nekomprimiranim tijelom (edge mu ne šalje `Accept-Encoding` ni `Range`); `304` prolazi nepromijenjen. HEAD ide preloaderu kao GET, da zaglavlja budu ista. HTML koji ne prolazi provjeru (npr. iz `next dev`) dobiva strogu politiku `default-src 'none'` i redak u ispisu edgea; HTML veći od 1 MiB daje `502`.
 - Razlika od Vercela: rewriteovi Nexta (`src/rewrites.ts`) uspoređuju putanju bez obzira na velika i mala slova (`/Admin` ide na `/admin` Aplication_fronta), a edge doslovno. `%2f` i `%61` ni jedan ni drugi ne dekodira.
 
 ## 4. Tok u pregledniku (ugovor §3)
@@ -95,7 +96,7 @@ Studenti i svi računi institucije prijavljuju se samo preko AAI@EduHr, lokalno 
 
 ## 5. Provjera da sve radi
 
-- `curl -i http://localhost:8000/` vraća preloader (stranicu Nexta).
+- `curl -i http://localhost:8000/` vraća preloader s `Content-Security-Policy` (`script-src 'sha256-…'`).
 - `curl -i "http://localhost:8000/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F"` vraća preusmjeravanje na `http://localhost:8090/...`.
 - `curl -i http://localhost:8000/admin/prijava` vraća stranicu prijave administratora.
 - `curl -i http://localhost:8000/app/web/` vraća front institucije.

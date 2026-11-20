@@ -1,9 +1,11 @@
 // Lokalni edge (deploy/edge/dev-proxy.mjs, ugovor #2028 §1): rute, zaglavlja i WebSocket
 // prema lažnim uzvodnim poslužiteljima na slučajnim portovima. Mreža izvan računala se ne koristi.
+import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { connect } from 'node:net';
+import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { createEdge, DEFAULT_TARGETS, routeFor, targetsFromEnv } from '../deploy/edge/dev-proxy.mjs';
+import { createEdge, DEFAULT_TARGETS, FALLBACK_CSP, routeFor, targetsFromEnv } from '../deploy/edge/dev-proxy.mjs';
 
 interface Seen {
   upstream: string;
@@ -35,9 +37,28 @@ async function listen(server: Server): Promise<number> {
   return address.port;
 }
 
+const sha = (text: string) => `sha256-${createHash('sha256').update(text, 'utf8').digest('base64')}`;
+const policy = (script: string, style: string) =>
+  `default-src 'none'; script-src ${script}; style-src '${sha(style)}'; ` +
+  "img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/** Stranice lažnog preloadera u obliku koji daje Next (`<style data-next-head="">`). */
+const nextPage = (body: string, script?: string) =>
+  `<!doctype html><html lang="hr"><head><title data-next-head="">Ductura</title><style data-next-head="">b{}</style></head>` +
+  `<body><div id="__next">${body}</div>${script === undefined ? '' : `<script>${script}</script>`}</body></html>`;
+const PAGES: Record<string, { status: number; body: string | Buffer; headers?: Record<string, string> }> = {
+  '/greska.html': { status: 200, body: nextPage('<p>greška</p>', 'greska()') },
+  '/html/stranica': { status: 200, body: nextPage('<p>preloader</p>', 'prvi()'), headers: { 'Content-Security-Policy': "script-src 'unsafe-inline'" } },
+  '/html/404': { status: 404, body: nextPage('<p>Stranica ne postoji</p>') },
+  '/html/304': { status: 304, body: '', headers: { ETag: '"v1"' } },
+  '/html/dev': { status: 200, body: nextPage('<p>dev</p>', 'prvi()').replace('</body>', '<script src="/_next/static/chunks/a.js" defer=""></script></body>') },
+  '/html/gzip': { status: 200, body: gzipSync(nextPage('<p>gzip</p>', 'prvi()')), headers: { 'Content-Encoding': 'gzip' } },
+  '/html/velika': { status: 200, body: nextPage(`<p>${'x'.repeat(1024 * 1024)}</p>`, 'prvi()') },
+};
+
 /**
  * Lažni uzvodni: zapisuje zahtjev, vraća dva kolačića i Location, na `/__ws` prihvaća WebSocket.
- * Lažni preloader na `/greska.html` vraća stranicu greške.
+ * Lažni preloader na `/greska.html` i `/html/*` vraća HTML iz `PAGES`.
  */
 function fakeUpstream(name: string): Server {
   const server = createServer((req, res) => {
@@ -46,8 +67,9 @@ function fakeUpstream(name: string): Server {
     req.on('data', (chunk: string) => (body += chunk));
     req.on('end', () => {
       seen.push({ upstream: name, method: req.method ?? '', url: req.url ?? '', headers: req.headers, body });
-      if (name === 'preloader' && req.url === '/greska.html') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end('<!doctype html><p>greška</p>');
+      const page = name === 'preloader' ? PAGES[req.url ?? ''] : undefined;
+      if (page) {
+        res.writeHead(page.status, { 'Content-Type': 'text/html; charset=utf-8', ...page.headers }).end(page.body);
         return;
       }
       res.writeHead(303, [
@@ -169,6 +191,69 @@ describe('preloader (Next.js)', () => {
     },
   );
 
+  test('HTML preloadera dobiva CSP iz hasheva skripte i stila; zaglavlje uzvodnog se zamjenjuje', async () => {
+    seen.length = 0;
+    const res = await get('/html/stranica', { headers: { 'Accept-Encoding': 'gzip, br' } });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toBe(PAGES['/html/stranica']?.body);
+    expect(res.headers.get('content-length')).toBe(String(Buffer.byteLength(body)));
+    const csp = res.headers.get('content-security-policy');
+    expect(csp).toBe(policy(`'${sha('prvi()')}'`, 'b{}'));
+    expect(csp).not.toMatch(/unsafe|nonce|strict-dynamic|\*/);
+    // Preloader odgovara nekomprimirano, da se tijelo može hashirati.
+    expect(seen[0]?.headers['accept-encoding']).toBeUndefined();
+  });
+
+  test('HEAD daje isti CSP bez tijela; preloaderu ide kao GET', async () => {
+    seen.length = 0;
+    const res = await get('/html/stranica', { method: 'HEAD' });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-security-policy')).toBe(policy(`'${sha('prvi()')}'`, 'b{}'));
+    expect(await res.text()).toBe('');
+    expect(seen.map((s) => s.method)).toEqual(['GET']);
+  });
+
+  test("404 Nexta bez skripte dobiva script-src 'none'", async () => {
+    const res = await get('/html/404');
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-security-policy')).toBe(policy("'none'", 'b{}'));
+    expect(await res.text()).toContain('Stranica ne postoji');
+  });
+
+  test.each(['/html/dev', '/html/gzip'])('%s: bez CSP-a iz hasheva ide stroga politika', async (path) => {
+    const res = await get(path);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-security-policy')).toBe(FALLBACK_CSP);
+  });
+
+  test('304 prolazi bez tijela i bez zamjenske politike (ostaje spremljeni CSP)', async () => {
+    const res = await get('/html/304', { headers: { 'If-None-Match': '"v1"' } });
+    expect(res.status).toBe(304);
+    expect(res.headers.get('content-security-policy')).toBeNull();
+    expect(res.headers.get('etag')).toBe('"v1"');
+  });
+
+  test('Range ne ide preloaderu: HTML stiže cijel za hash', async () => {
+    seen.length = 0;
+    const res = await get('/html/stranica', { headers: { Range: 'bytes=0-10', 'If-Range': '"v1"' } });
+    expect(res.headers.get('content-security-policy')).toBe(policy(`'${sha('prvi()')}'`, 'b{}'));
+    expect(seen[0]?.headers['range']).toBeUndefined();
+    expect(seen[0]?.headers['if-range']).toBeUndefined();
+  });
+
+  test('prevelik HTML se ne šalje bez CSP-a: 502', async () => {
+    const res = await get('/html/velika');
+    expect(res.status).toBe(502);
+    expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+  });
+
+  test('ostalo od preloadera (ne HTML) prolazi bez CSP-a i nepromijenjeno', async () => {
+    const res = await get('/_next/static/chunks/a.js');
+    expect(res.headers.get('content-security-policy')).toBeNull();
+    expect(await res.text()).toBe('odgovor preloader');
+  });
+
   test('POST na preloader je 405 i ne ide dalje', async () => {
     seen.length = 0;
     const res = await get('/', { method: 'POST', body: 'x' });
@@ -276,6 +361,7 @@ describe('uzvodni nije pokrenut', () => {
     const res = await fetch(`http://127.0.0.1:${port}/api/v1/me`);
     expect(res.status).toBe(502);
     expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
+    expect(res.headers.get('content-security-policy')).toBe(policy(`'${sha('greska()')}'`, 'b{}'));
     expect(await res.text()).toContain('<p>greška</p>');
     expect(await (await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' })).text()).toBe('odgovor preloader');
     const ws = await rawUpgrade('/admin/_next/webpack-hmr', '', port);

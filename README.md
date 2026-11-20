@@ -33,7 +33,7 @@ pnpm build       # next build (.next/)
 pnpm start       # next start na :3100 (nakon build)
 pnpm budget      # gzip proračun iz budget.json nad .next; prekoračenje vraća izlazni kod 1
 pnpm e2e         # matrica preglednika (P-0.11): next build, next start na :3101 + Playwright u Chromiumu, Firefoxu i WebKitu
-pnpm edge        # lokalni edge na http://localhost:8000 (preloader na :3100, npr. pnpm dev)
+pnpm edge        # lokalni edge na http://localhost:8000 (preloader na :3100: pnpm build && pnpm start)
 pnpm sve         # cijela Ductura lokalno iz susjednih checkouta, iza edgea na :8000
 ```
 

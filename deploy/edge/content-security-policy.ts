@@ -27,10 +27,15 @@ export async function scriptHash(text: string): Promise<string> {
 export function pageContentSecurityPolicy({ scriptHash: script, styleHash: style }: PolicyHashes): string {
   // typeof first: an object's toString could pass the test and then return something else.
   if (typeof script !== 'string' || !HASH.test(script)) throw new Error('CSP script hash must be a sha256 source');
+  return policyOf(`'${script}'`, style);
+}
+
+/** Politika sa zadanim izvorom skripte (hash ili `'none'`); hash stila se provjerava. */
+function policyOf(scriptSource: string, style: string): string {
   if (typeof style !== 'string' || !HASH.test(style)) throw new Error('CSP style hash must be a sha256 source');
   return [
     "default-src 'none'",
-    `script-src '${script}'`,
+    `script-src ${scriptSource}`,
     `style-src '${style}'`,
     "img-src 'self'",
     "connect-src 'self'",
@@ -42,18 +47,27 @@ export function pageContentSecurityPolicy({ scriptHash: script, styleHash: style
 }
 
 /**
- * Tekst jedinog elementa `tag` kako ga preglednik hashira. Element mora biti
- * točno `<tag>` bez atributa; drugi otvarajući tag bilo gdje (i u tekstu
- * skripte) baca, jer bi preglednik mogao drukčije podijeliti stranicu.
+ * Jedini atribut koji smije stajati na tagu: oznaka kojom `next/head` označava svoje elemente.
+ * Ne mijenja ni tekst ni izvršavanje elementa.
  */
-function onlyElementText(html: string, tag: 'script' | 'style'): string {
+const NEXT_HEAD = ' data-next-head="">';
+
+/**
+ * Tekst jedinog elementa `tag` kako ga preglednik hashira, ili null kad ga nema i `optional`.
+ * Element mora biti točno `<tag>` bez atributa (ili samo s oznakom `next/head`); drugi otvarajući
+ * tag bilo gdje (i u tekstu skripte) baca, jer bi preglednik mogao drukčije podijeliti stranicu.
+ */
+function onlyElementText(html: string, tag: 'script' | 'style', optional = false): string | null {
   // Svaki `<script`/`<style` iza kojeg ne slijedi slovo, broj, `_` ili crtica broji se kao tag.
   const opens = [...html.matchAll(new RegExp(`<${tag}(?![\\w-])`, 'gi'))];
+  if (opens.length === 0 && optional) return null;
   const open = opens[0];
-  if (opens.length !== 1 || open === undefined || html[open.index + open[0].length] !== '>') {
+  const after = open === undefined ? -1 : open.index + open[0].length;
+  const rest = html[after] === '>' ? '>' : html.startsWith(NEXT_HEAD, after) ? NEXT_HEAD : '';
+  if (opens.length !== 1 || rest === '') {
     throw new Error(`CSP page must have exactly one <${tag}> without attributes`);
   }
-  const start = open.index + open[0].length + 1;
+  const start = after + rest.length;
   // Kraj je pravi završni tag (`</style>`, `</style >`), ne `</stylesheet>` u tekstu.
   const end = html.slice(start).search(new RegExp(`</${tag}[\\t\\n\\f />]`, 'i'));
   if (end < 0) throw new Error(`CSP page <${tag}> is not closed`);
@@ -69,17 +83,18 @@ function onlyElementText(html: string, tag: 'script' | 'style'): string {
 const FOREIGN = /<(svg|math|template|textarea|xmp|plaintext|noembed|noframes|iframe)(?![\w-])/i;
 
 /**
- * Politika za izgrađeni index.html. CRLF i sami CR postaju LF, kao u HTML
+ * Politika za izgrađenu stranicu. CRLF i sami CR postaju LF, kao u HTML
  * parseru prije hashiranja. Komentar, NUL ili strani omotač bacaju: mijenjaju
- * ono što preglednik vidi kao tekst elementa.
+ * ono što preglednik vidi kao tekst elementa. Uz `scriptOptional` stranica bez
+ * ijedne skripte (404 Nexta) dobiva `script-src 'none'`.
  */
-export async function contentSecurityPolicyFor(html: string): Promise<string> {
+export async function contentSecurityPolicyFor(html: string, { scriptOptional = false } = {}): Promise<string> {
   const text = html.replace(/\r\n?/g, '\n');
   if (text.includes('<!--')) throw new Error('CSP page must not contain an HTML comment');
   if (text.includes('\u0000')) throw new Error('CSP page must not contain NUL');
   if (FOREIGN.test(text)) throw new Error('CSP page must not wrap content in a foreign or raw-text element');
-  return pageContentSecurityPolicy({
-    scriptHash: await scriptHash(onlyElementText(text, 'script')),
-    styleHash: await scriptHash(onlyElementText(text, 'style')),
-  });
+  const script = onlyElementText(text, 'script', scriptOptional);
+  const style = await scriptHash(onlyElementText(text, 'style') ?? '');
+  if (script === null) return policyOf("'none'", style);
+  return pageContentSecurityPolicy({ scriptHash: await scriptHash(script), styleHash: style });
 }

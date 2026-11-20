@@ -72,6 +72,43 @@ describe('stranica koja nije točno jedna skripta i jedan stil se odbija', () =>
   });
 });
 
+describe('stranica Nexta (lokalni edge)', () => {
+  it('oznaka next/head na stilu i skripti ne mijenja hash', async () => {
+    const html = page('1', 'a{}').replace('<style>', '<style data-next-head="">').replace('<script>', '<script data-next-head="">');
+    expect(await contentSecurityPolicyFor(html)).toBe(await contentSecurityPolicyFor(page('1', 'a{}')));
+  });
+
+  it.each([
+    ['druga vrijednost oznake', '<style data-next-head="x">'],
+    ['oznaka i još jedan atribut', '<style data-next-head="" media="print">'],
+    ['oznaka bez vrijednosti', '<style data-next-head>'],
+    ['velika slova oznake', '<style DATA-NEXT-HEAD="">'],
+  ])('%s se odbija', async (_, open) => {
+    await expect(contentSecurityPolicyFor(page('1', 'a{}').replace('<style>', open))).rejects.toThrow();
+  });
+
+  it("uz scriptOptional stranica bez skripte dobiva script-src 'none'", async () => {
+    const html = '<!doctype html><style data-next-head="">a{}</style><p>404</p>';
+    await expect(contentSecurityPolicyFor(html)).rejects.toThrow(/<script>/);
+    expect(await contentSecurityPolicyFor(html, { scriptOptional: true })).toBe(
+      `default-src 'none'; script-src 'none'; style-src '${sha('a{}')}'; ` +
+        "img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    );
+  });
+
+  it.each([
+    ['vanjska skripta', '<script src="/_next/a.js"></script>'],
+    ['dvije skripte', '<script>1</script><script>2</script>'],
+    ['skripta s atributom', '<script defer="">1</script>'],
+  ])('uz scriptOptional se i dalje odbija: %s', async (_, scripts) => {
+    await expect(contentSecurityPolicyFor(`<style>a{}</style>${scripts}`, { scriptOptional: true })).rejects.toThrow();
+  });
+
+  it('uz scriptOptional stil je i dalje obavezan', async () => {
+    await expect(contentSecurityPolicyFor('<p>x</p>', { scriptOptional: true })).rejects.toThrow(/<style>/);
+  });
+});
+
 describe('hash je hash teksta kako ga vidi preglednik', () => {
   it('scriptHash je sha256 UTF-8 teksta (ASCII i hrvatska slova)', async () => {
     for (const text of ['', 'console.log(1)', 'Šđčćž ŠĐČĆŽ']) expect(await scriptHash(text)).toBe(sha(text));

@@ -25,5 +25,5 @@ Adrese nisu u repou. Upisuju se u projekt na Vercelu (Settings → Environment V
 
 ## Poznato
 
-- Stranice nemaju zaglavlje `Content-Security-Policy` (ni dosad ga na Vercelu nisu imale). Kao i prije imaju po jednu ugrađenu skriptu i stil, pa bi politika iz hasheva (`deploy/edge/content-security-policy.ts`) opet vrijedila. Ipak, `<style>` sada nosi Nextov atribut `data-next-head`, pa je to zaseban zadatak.
+- Stranice nemaju zaglavlje `Content-Security-Policy` (ni dosad ga na Vercelu nisu imale). Kao i prije imaju po jednu ugrađenu skriptu i stil, pa bi politika iz hasheva (`deploy/edge/content-security-policy.ts`) opet vrijedila. Graditelj sada prihvaća Nextov atribut `data-next-head` i lokalni edge politiku opet stavlja (`docs/LOKALNO.md` §3); zaglavlje na Vercelu je zaseban zadatak.
 - Rewriteovi Nexta uspoređuju putanju bez obzira na velika i mala slova (`/Admin` ide na `/admin` Aplication_fronta), a lokalni edge doslovno.

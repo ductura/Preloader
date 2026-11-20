@@ -10,8 +10,10 @@
 // src/sign-in/README.md): `/%61dmin` ili `/Admin` nisu administracija. Host, kolačići,
 // Location i ostala zaglavlja prolaze nepromijenjeni u oba smjera; uklanjaju se samo
 // zaglavlja jednog skoka (RFC 9110 §7.6.1). WebSocket (HMR) prolazi kao sirovi TCP.
+// HTML preloadera (i stranica greške uz 502) dobiva CSP iz hasheva svoje skripte i stila (DAN-995).
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
+import { contentSecurityPolicyFor } from './content-security-policy.ts';
 import { isMain } from '../../scripts/is-main.ts';
 
 /** @typedef {'preloader' | 'admin' | 'api' | 'front'} Upstream */
@@ -34,6 +36,15 @@ export const TARGET_ENV = Object.freeze({
 });
 
 export const DEFAULT_PORT = 8000;
+
+/**
+ * Politika za HTML preloadera koji nema CSP-a iz hasheva (npr. `next dev` sa svojim skriptama ili
+ * komprimiran odgovor): ništa se ne izvršava ni ne učitava. Stranica se tada vidi bez stila.
+ */
+export const FALLBACK_CSP = "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+/** Najveća HTML stranica preloadera koju edge pročita da bi izračunao CSP. */
+const MAX_HTML_BYTES = 1024 * 1024;
 
 /**
  * Ciljevi iz okoline, sa zadanim vrijednostima. Prihvaća se samo `http:` bez
@@ -112,20 +123,28 @@ function endToEnd(raw, keepUpgrade = false) {
   return out;
 }
 
+/** Sirova zaglavlja bez navedenih imena (mala slova). */
+function without(/** @type {string[]} */ raw, /** @type {string[]} */ names) {
+  const drop = new Set(names);
+  const kept = [];
+  for (let i = 0; i < raw.length; i += 2) {
+    if (!drop.has((raw[i] ?? '').toLowerCase())) kept.push(raw[i] ?? '', raw[i + 1] ?? '');
+  }
+  return kept;
+}
+
 /**
- * Zaglavlja prema uzvodnom: izvorna (s Hostom preglednika) plus X-Forwarded-*.
+ * Zaglavlja prema uzvodnom: izvorna (s Hostom preglednika) plus X-Forwarded-*. Preloaderu bez
+ * `Accept-Encoding` i `Range`, da HTML stigne cijel i nekomprimiran i edge može izračunati CSP.
  * @param {import('node:http').IncomingMessage} req
  * @param {boolean} upgrade
+ * @param {boolean} identity
  */
-function upstreamHeaders(req, upgrade) {
-  const headers = endToEnd(req.rawHeaders, upgrade);
+function upstreamHeaders(req, upgrade, identity = false) {
   const forwardedFor = req.socket.remoteAddress ?? '';
   const host = req.headers.host ?? '';
-  const drop = new Set(['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto']);
-  const kept = [];
-  for (let i = 0; i < headers.length; i += 2) {
-    if (!drop.has((headers[i] ?? '').toLowerCase())) kept.push(headers[i] ?? '', headers[i + 1] ?? '');
-  }
+  const drop = ['x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', ...(identity ? ['accept-encoding', 'range', 'if-range'] : [])];
+  const kept = without(endToEnd(req.rawHeaders, upgrade), drop);
   kept.push('X-Forwarded-For', forwardedFor, 'X-Forwarded-Host', host, 'X-Forwarded-Proto', 'http');
   // Tijelo bez duljine (chunked) mora i prema uzvodnom imati okvir: Node ga sam ne
   // dodaje za svaku metodu (npr. DELETE), pa bi bajtovi tijela prošli bez okvira.
@@ -135,27 +154,96 @@ function upstreamHeaders(req, upgrade) {
   return kept;
 }
 
-/** Odgovor kad uzvodni ne odgovori: stranica greške preloadera (`/greska.html`), a bez nje kratak tekst. */
-function sendError(/** @type {URL} */ preloader, /** @type {import('node:http').ServerResponse} */ res, /** @type {number} */ status) {
+const isHtml = (/** @type {string | undefined} */ type) => String(type).toLowerCase().startsWith('text/html');
+
+/** Kratak tekstualni odgovor (bez HTML-a, pa bez CSP-a). */
+function sendPlain(/** @type {import('node:http').ServerResponse} */ res, /** @type {number} */ status) {
+  if (res.headersSent) return;
+  res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(`${status}\n`);
+}
+
+/** Cijelo tijelo odgovora, ili null kad je veće od `limit` (tada se veza prekida). */
+function readBody(/** @type {import('node:http').IncomingMessage} */ incoming, /** @type {number} */ limit) {
+  return new Promise((resolveBody, reject) => {
+    /** @type {Buffer[]} */
+    const chunks = [];
+    let size = 0;
+    incoming.on('data', (/** @type {Buffer} */ chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        incoming.destroy();
+        resolveBody(null);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    incoming.on('end', () => resolveBody(Buffer.concat(chunks)));
+    incoming.on('error', reject);
+  });
+}
+
+/**
+ * HTML preloadera s CSP-om iz hasheva njegove jedine skripte i stila; stranica bez skripte (404)
+ * dobiva `script-src 'none'`. Kad se politika ne da izračunati, ide stroga `FALLBACK_CSP`.
+ * Odgovor na HEAD Node šalje bez tijela, s istim zaglavljima kao GET.
+ * @param {import('node:http').ServerResponse} res
+ * @param {number} status
+ * @param {string[]} headers zaglavlja odgovora (sirova)
+ * @param {import('node:http').IncomingMessage} incoming
+ * @param {(line: string) => void} log
+ */
+async function sendHtml(res, status, headers, incoming, log) {
+  let body;
+  try {
+    body = await readBody(incoming, MAX_HTML_BYTES);
+  } catch {
+    res.destroy();
+    return;
+  }
+  if (body === null) {
+    log(`preloader: HTML veći od ${MAX_HTML_BYTES} B, bez CSP-a se ne šalje`);
+    sendPlain(res, 502);
+    return;
+  }
+  let policy = FALLBACK_CSP;
+  const encoding = String(incoming.headers['content-encoding'] ?? 'identity').toLowerCase();
+  if (encoding !== 'identity') {
+    log(`preloader: komprimiran HTML (${encoding}), stroga politika`);
+  } else {
+    try {
+      policy = await contentSecurityPolicyFor(body.toString('utf8'), { scriptOptional: true });
+    } catch (error) {
+      log(`preloader: stranica nema CSP iz hasheva (${error instanceof Error ? error.message : error}), stroga politika`);
+    }
+  }
+  if (res.headersSent) return;
+  const kept = without(headers, ['content-security-policy', 'content-length']);
+  kept.push('Content-Security-Policy', policy, 'Content-Length', String(body.length));
+  res.writeHead(status, kept);
+  res.end(body);
+}
+
+/** Odgovor kad uzvodni ne odgovori: stranica greške preloadera (`/greska.html`) s CSP-om, a bez nje kratak tekst. */
+function sendError(
+  /** @type {URL} */ preloader,
+  /** @type {import('node:http').ServerResponse} */ res,
+  /** @type {number} */ status,
+  /** @type {(line: string) => void} */ log,
+) {
   if (res.headersSent) {
     res.destroy();
     return;
   }
-  const plain = () => {
-    if (res.headersSent) return;
-    res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(`${status}\n`);
-  };
+  const plain = () => sendPlain(res, status);
   const page = httpRequest({ hostname: connectHost(preloader), port: preloader.port || 80, path: '/greska.html', timeout: 5000 });
   page.on('response', (incoming) => {
-    if (incoming.statusCode !== 200 || !String(incoming.headers['content-type']).startsWith('text/html')) {
+    if (incoming.statusCode !== 200 || !isHtml(incoming.headers['content-type'])) {
       incoming.resume();
       plain();
       return;
     }
-    res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    incoming.pipe(res);
-    incoming.on('error', () => res.destroy());
+    void sendHtml(res, status, ['Content-Type', 'text/html; charset=utf-8', 'Cache-Control', 'no-store'], incoming, log);
   });
   page.on('timeout', () => page.destroy(new Error('timeout')));
   page.on('error', plain);
@@ -182,23 +270,31 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
     }
 
     const upstream = targets[route];
+    const preloader = route === 'preloader';
     const outgoing = httpRequest({
       hostname: connectHost(upstream),
       port: upstream.port || 80,
-      method: req.method,
+      // HEAD na preloader ide kao GET: CSP se računa iz tijela, a Node odgovor na HEAD šalje bez njega.
+      method: preloader && req.method === 'HEAD' ? 'GET' : req.method,
       path: target,
-      headers: upstreamHeaders(req, false),
+      headers: upstreamHeaders(req, false, preloader),
       setHost: false,
     });
     outgoing.on('response', (incoming) => {
-      res.writeHead(incoming.statusCode ?? 502, incoming.statusMessage, endToEnd(incoming.rawHeaders));
+      const status = incoming.statusCode ?? 502;
+      // 304 nema tijela: preglednik zadržava spremljenu stranicu i njezin CSP.
+      if (preloader && status !== 304 && isHtml(incoming.headers['content-type'])) {
+        void sendHtml(res, status, endToEnd(incoming.rawHeaders), incoming, log);
+        return;
+      }
+      res.writeHead(status, incoming.statusMessage, endToEnd(incoming.rawHeaders));
       incoming.pipe(res);
       incoming.on('error', () => res.destroy());
     });
     outgoing.on('error', (error) => {
       log(`${route} ${upstream.host} nije dostupan: ${error.message}`);
       // Kad ne odgovara sam preloader, ni stranice greške nema: kratak tekst.
-      sendError(targets.preloader, res, 502);
+      sendError(targets.preloader, res, 502, log);
     });
     req.on('error', () => outgoing.destroy());
     req.pipe(outgoing);
