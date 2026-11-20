@@ -19,10 +19,27 @@ export type ServiceEnv = Readonly<Record<string, string | undefined>>;
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /**
+ * Autoritet i ostatak iza njega u vrijednosti kako je napisana, ili null ako vrijednost nije `shema://…`.
+ * Autoritet završava na `/`, `\`, `?` ili `#` (WHATWG URL za `http:` i `https:`).
+ */
+function splitAuthority(value: string): { authority: string; rest: string } | null {
+  const match = /^[a-z][a-z\d+.-]*:\/\/([^/\\?#]*)([^]*)$/i.exec(value);
+  return match ? { authority: match[1] ?? '', rest: match[2] ?? '' } : null;
+}
+
+/**
  * Podrijetlo usluge bez završne kose crte. `https:`, a `http:` samo lokalno; bez putanje, upita,
  * fragmenta i korisničkih podataka, da se putanja prosljeđuje nepromijenjena. Inače baca.
+ * Vrijednost se provjerava kako je napisana, prije nego što je `new URL()` normalizira
+ * (`/gateway/..` bi postao `/`, a prazan korisnik u `https://@host` nestao); razmaci i kontrolni
+ * znakovi, koje URL parser tiho briše, se odbijaju.
  */
 export function serviceOrigin(name: string, value: string): string {
+  if (/[\u0000-\u0020\u007f]/.test(value)) throw new Error(`${name} must not contain spaces or control characters`);
+  const parts = splitAuthority(value);
+  if (parts === null) throw new Error(`${name} must be an absolute URL with //host`);
+  if (parts.authority.includes('@')) throw new Error(`${name} must not contain credentials`);
+  if (parts.rest !== '' && parts.rest !== '/') throw new Error(`${name} must be an origin without a path, query or fragment`);
   let url: URL;
   try {
     url = new URL(value);

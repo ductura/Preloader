@@ -56,6 +56,37 @@ describe('serviceOrigin odbija adresu koja bi promijenila putanju ili otišla ne
     'ftp://api.example.test',
     'api.example.test',
     'nije url',
+    // Putanja koju `new URL()` normalizira u `/`, pa bi bez provjere napisane vrijednosti prošla.
+    'https://api.example.test/gateway/..',
+    'https://api.example.test/..',
+    'https://api.example.test/.',
+    'https://api.example.test/%2e%2e',
+    'https://api.example.test/./',
+    'https://api.example.test//',
+    'https://api.example.test/x',
+    'https://api.example.test\\',
+    'https://api.example.test\\..',
+    // Upit i fragment, i prazni.
+    'https://api.example.test?q',
+    'https://api.example.test/?q',
+    'https://api.example.test#f',
+    'https://api.example.test/#',
+    'https://api.example.test#',
+    // Korisnik u URL-u, i prazan (`new URL()` ga briše).
+    'https://u@api.example.test',
+    'https://u:@api.example.test',
+    'https://:p@api.example.test',
+    'https://@api.example.test',
+    'https://u@api.example.test/..',
+    // Oblik bez `//host` i znakovi koje URL parser tiho briše.
+    'https:api.example.test',
+    'https:/api.example.test',
+    'https:///api.example.test',
+    ' https://api.example.test',
+    'https://api.example.test ',
+    'https://api.exa\tmple.test',
+    'https://api.example.test/\n',
+    'http://localhost:4000/..',
   ])('%s', (value) => {
     expect(() => serviceOrigin('INSTITUTION_SERVER_URL', value)).toThrow(/INSTITUTION_SERVER_URL/);
     expect(() => serviceRewrites({ INSTITUTION_SERVER_URL: value })).toThrow(/INSTITUTION_SERVER_URL/);
@@ -67,6 +98,7 @@ describe('serviceOrigin odbija adresu koja bi promijenila putanju ili otišla ne
     ['http://localhost:4000', 'http://localhost:4000'],
     ['http://127.0.0.1:4000/', 'http://127.0.0.1:4000'],
     ['http://[::1]:4000', 'http://[::1]:4000'],
+    ['HTTPS://API.Example.Test', 'https://api.example.test'],
   ])('prihvaća %s', (value, origin) => {
     expect(serviceOrigin('X', value)).toBe(origin);
   });
