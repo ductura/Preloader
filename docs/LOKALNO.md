@@ -5,7 +5,9 @@ Ugovor toka prijave i instance je Ductus #2028, komentar 6993786629 (§1 portovi
 ## 1. Što treba
 
 - Node.js 24 ili noviji i pnpm (`corepack enable` ili `npm install --global pnpm`).
-- PostgreSQL na `localhost:5432` ili `DATABASE_URL` u okolini. Shemu i migracije podižu poslužitelji (vidi README Aplication_servera i Institution_servera).
+- PostgreSQL 16 ili noviji (produkcija je 17) na ovom računalu, na jedan od dva načina:
+  - `DATABASE_URL` sa superkorisnikom, na `localhost`, `127.0.0.1` ili `[::1]` (npr. `postgres://postgres:<lozinka>@localhost:5432/postgres`); baza u adresi se zanemaruje;
+  - ili Docker i `pnpm sve --docker`: skripta pokrene (ili ponovno upotrijebi) kontejner `ductura-lokalno-postgres` sa slikom `postgres:17` na `127.0.0.1:54320`. Lozinka kontejnera je javna i samo lokalna (`ductura-lokalno-samo`).
 - Checkouti svih repozitorija jedan do drugoga, u istoj mapi:
 
 ```text
@@ -19,7 +21,9 @@ ductura/
 
 Ako su checkouti negdje drugdje, postavite `DUCTURA_REPOS` na mapu u kojoj su. Velika i mala slova u imenu mape nisu bitna (`aplication_server` vrijedi kao `Aplication_server`).
 
-U svakom repozitoriju jednom pokrenite `pnpm install` (u `Institution_server` i u `packages/test-fakes/oidc` ako ima vlastiti `package.json`).
+Grane provjerene 20. 11. 2026. (LOK-2): Institution_server `migracija/kopija-ductus-backend`, Institution_front_web_chrome `migracija/kopija-ductus-front`, Aplication_server i Aplication_front `migracija/faza2`.
+
+U svakom repozitoriju jednom pokrenite `pnpm install`.
 
 ## 2. Pokretanje
 
@@ -27,38 +31,42 @@ U ovom repozitoriju:
 
 ```bash
 pnpm install
-pnpm sve
+DATABASE_URL='postgres://postgres:<lozinka>@localhost:5432/postgres' pnpm sve
+# ili, s Dockerom:
+pnpm sve --docker
 ```
 
 Isto radi u PowerShellu, cmd-u i terminalu na macOS-u i Linuxu: skripta ne treba bash, a pnpm pokreće kroz Node. Na Windowsu ju pokrenite kroz `pnpm sve`, ne kao `node scripts/sve-lokalno.mjs`.
 
 `pnpm sve`:
 
-1. izgradi preloader (`pnpm run build`);
-2. pokrene preloader (`next start` na :3100) i usluge iz ugovora §1 (svaka sa svojim portom u `PORT`):
+1. uz `--docker` pokrene PostgreSQL 17 u Dockeru i čeka da prihvaća veze;
+2. izgradi preloader (`pnpm run build`);
+3. pripremi Aplication_server: stvori bazu `ductura` ako je nema, `pnpm run db:migrate` i lokalnog administratora platforme `admin` (`pnpm run admin:stvori admin --zamijeni`, lozinka na stdin). Lozinka se stvara jednom u `Aplication_server/.local/admin-lozinka` (0600) i nikad se ne ispisuje;
+4. pokrene preloader (`next start` na :3100) i usluge iz ugovora §1:
 
 | Usluga | Port | Mapa | Naredba |
 |---|---|---|---|
 | preloader (Next.js) | 3100 | ovaj repo | `pnpm run start` |
 | Aplication_server | 3110 | `Aplication_server` | `pnpm run dev` |
 | Aplication_front (`basePath: "/admin"`) | 3120 | `Aplication_front` | `pnpm run dev` |
-| Institution_server | 4000 | `Institution_server` | `pnpm run dev` |
-| lažni OIDC (simulator AAI@EduHr) | 8090 | `Institution_server/packages/test-fakes/oidc` | `pnpm run start` |
+| Institution_server | 4000 | `Institution_server` | `pnpm run lokalno` (baza `ductus`, migracije, izmišljeni seed, `dist/server.js`) |
+| lažni OIDC (simulator AAI@EduHr) | 8090 | `Institution_server` | isti `pnpm run lokalno` |
 | front institucije | 5173 | `Institution_front_web_chrome` | `pnpm run dev` |
 | edge | 8000 | ovaj repo | `node deploy/edge/dev-proxy.mjs` |
 
-3. ispiše koje usluge rade i adresu **http://localhost:8000/**.
+5. Aplication_server pokrene tek kad Institution_server zapiše token provisioninga (`Institution_server/.local/provisioning-token`), pa oba poslužitelja imaju isti token (§2);
+6. ispiše koje usluge rade (Institution_server prvi put treba oko minutu za migracije i izgradnju), gdje je lozinka administratora i adresu **http://localhost:8000/**.
 
-Usluga čiji checkout, `package.json` ili skripta nedostaje preskače se, a razlog se ispiše (na primjer `Aplication_front nema skriptu "dev"`). Ostale rade dalje. Ispis svake usluge ima oznaku (`[institution-server] ...`). Ctrl+C gasi sve usluge s njihovim podprocesima.
+Usluga čiji checkout, `package.json` ili skripta nedostaje preskače se, a razlog se ispiše (na primjer `Aplication_front nema skriptu "dev"`). Ostale rade dalje. Bez baze (ni `DATABASE_URL` ni `--docker`) skripta to ispiše i pokrene ostalo; Institution_server tada ne radi. Ispis svake usluge ima oznaku (`[institution-server] ...`). Ctrl+C gasi sve usluge s njihovim podprocesima.
 
 Okolina koju skripta postavlja:
 
-- `DUCTURA_PROVISIONING_TOKEN`: zajednička tajna za §2. Ako nije postavljena, generira se nova (32 slučajna bajta) pri svakom pokretanju i dobivaju je samo Aplication_server i Institution_server. Nikad se ne ispisuje ni ne zapisuje.
-- Aplication_server: `INSTITUTION_SERVER_URL=http://localhost:4000`.
-- Aplication_front: `APLICATION_SERVER_URL=http://localhost:3110`, `PUBLIC_ORIGIN=http://localhost:8000`.
-- Institution_server: `OIDC_ISSUER=http://localhost:8090`, `OIDC_REDIRECT_URI=http://localhost:8000/api/v1/auth/callback`, `PUBLIC_ORIGIN=http://localhost:8000`.
-- lažni OIDC: `ISSUER=http://localhost:8090`, `REDIRECT_URI=http://localhost:8000/api/v1/auth/callback`, `POST_LOGOUT_REDIRECT_URI=http://localhost:8000/`, `BACKCHANNEL_LOGOUT_URI=http://localhost:8000/api/v1/auth/backchannel-logout`.
-- Ostalo (npr. `DATABASE_URL`) prolazi iz Vaše okoline nepromijenjeno; `PORT` iz okoline se ne prenosi.
+- Aplication_server: `DATABASE_URL` na bazu `ductura`, `INSTITUTION_SERVER_URL=http://127.0.0.1:4000`, `AAI_OIDC_ISSUER=http://localhost:8090` (issuer nove institucije; obrazac ga ne traži), `DUCTURA_ADMIN_TOKEN_SECRET` (nova pri svakom pokretanju, pa se administrator nakon ponovnog pokretanja prijavljuje iznova) i `DUCTURA_PROVISIONING_TOKEN` iz `.local/` Institution_servera.
+- Aplication_front: `APLICATION_SERVER_URL=http://127.0.0.1:3110`, `PUBLIC_ORIGIN=http://localhost:8000`.
+- Institution_server: samo `DATABASE_URL` na bazu `ductus`. Sve ostalo (server na `127.0.0.1:4000`, `APP_ORIGIN=http://localhost:8000`, issuer `http://localhost:8090`, povratak `http://localhost:8000/api/v1/auth/callback`, lozinke prijava i token provisioninga u `.local/`) postavlja njegov `pnpm lokalno` (vidi njegov `docs/LOKALNO.md`).
+- front institucije: `INSTITUTION_SERVER_URL=http://127.0.0.1:4000`.
+- Ostalo iz Vaše okoline prolazi nepromijenjeno; `PORT`, `DATABASE_URL`, `DUCTURA_PROVISIONING_TOKEN` i `DUCTURA_ADMIN_TOKEN_SECRET` iz okoline se ne prenose. Nijedna tajna se ne ispisuje.
 
 Sam edge bez ostalih usluga: `pnpm build && pnpm start` u jednom terminalu i `pnpm edge` u drugom. Preloader iza edgea nije `next dev`: ondje Next dodaje vlastite skripte, pa stranica dobiva strogu zamjensku politiku i vidi se bez stila (§3).
 
@@ -78,6 +86,7 @@ Sam edge bez ostalih usluga: `pnpm build && pnpm start` u jednom terminalu i `pn
 - Ugašena usluga daje `502` sa stranicom greške preloadera (`/greska.html`, s CSP-om kao ispod); kad ne radi ni preloader, kratak tekst. Edge radi dalje.
 - Ciljevi se mijenjaju varijablama `DUCTURA_EDGE_PRELOADER`, `DUCTURA_EDGE_ADMIN`, `DUCTURA_EDGE_API` i `DUCTURA_EDGE_FRONT` (`http://host:port`, bez putanje). Port edgea je `DUCTURA_EDGE_PORT` (zadano 8000), adresa `DUCTURA_EDGE_HOST` (zadano `localhost`).
 - HTML preloadera dobiva `Content-Security-Policy` iz hasheva jedine ugrađene skripte i stila (`deploy/edge/content-security-policy.ts`, DAN-995); stranica bez skripte (404) dobiva `script-src 'none'`. Zaglavlje preloadera se zamjenjuje, a preloader odgovara cijelim i nekomprimiranim tijelom (edge mu ne šalje `Accept-Encoding` ni `Range`); `304` prolazi nepromijenjen. HEAD ide preloaderu kao GET, da zaglavlja budu ista. HTML koji ne prolazi provjeru (npr. iz `next dev`) dobiva strogu politiku `default-src 'none'` i redak u ispisu edgea; HTML veći od 1 MiB daje `502`.
+- Razvojne putanje `next dev` (`/__nextjs_font/*`, `/__nextjs_original-stack-frames`) Next traži bez basePatha, pa edge ih šalje usluzi čija je stranica u `Referer` (`/admin/...` na Aplication_front, `/app/web/...` na front institucije); bez Referera idu preloaderu. Bez toga administracija u `next dev` nema font (404).
 - Razlika od Vercela: rewriteovi Nexta (`src/rewrites.ts`) uspoređuju putanju bez obzira na velika i mala slova (`/Admin` ide na `/admin` Aplication_fronta), a edge doslovno. `%2f` i `%61` ni jedan ni drugi ne dekodira.
 
 ## 4. Tok u pregledniku (ugovor §3)
@@ -87,8 +96,8 @@ Sam edge bez ostalih usluga: `pnpm build && pnpm start` u jednom terminalu i `pn
    - **Administracija platforme** vodi na `/admin/prijava`.
 
    Preloader nakon 4 sekunde sam otvara web za Vaš preglednik. Fokus ili dodir na jednom od ova dva ulaza to otkazuje, pa izbor ostaje Vaš.
-2. **Administracija:** na `/admin/prijava` se prijavite korisničkim imenom i lozinkom administratora platforme. Lozinka je samo lokalno, u `.local/` Aplication_servera (nije u repozitoriju; postupak je u njegovu README-u). Na `/admin` dodajte instituciju (slug, naziv, `aaiHomeOrg`, OIDC issuer `http://localhost:8090`, broj računa po ulozi). Aplication_server je šalje Institution_serveru (§2), poslužitelj sa poslužiteljem; preglednik taj poziv nikad ne radi.
-3. **Prijava računa institucije:** vratite se na http://localhost:8000/ i odaberite **Prijava preko AAI@EduHr**. Lokalno to otvara lažni OIDC na :8090; odaberite izmišljeni račun čiji je `hrEduPersonHomeOrg` jednak `aaiHomeOrg` dodane institucije.
+2. **Administracija:** na `/admin/prijava` se prijavite kao `admin` s lozinkom iz `Aplication_server/.local/admin-lozinka` (`pnpm sve` je stvara; nije u repozitoriju). Na `/admin` odaberite **+ Dodaj instituciju**: fakultet s popisa, izmišljenu AAI domenu (npr. `lok2.example.invalid`) i broj računa po ulozi. Issuer je `http://localhost:8090` iz `AAI_OIDC_ISSUER`. Aplication_server šalje instituciju Institution_serveru (§2), poslužitelj sa poslužiteljem; preglednik taj poziv nikad ne radi. Stranica institucije zatim pokazuje „Instanca je aktivna”.
+3. **Prijava računa institucije:** vratite se na http://localhost:8000/ i odaberite **Prijava preko AAI@EduHr**. Lokalno to otvara lažni OIDC na :8090 („Demo prijava, samo lokalno i CI”). Odaberite izmišljeni račun iz seeda (npr. „Demo studentica” ili „Demo nastavnik” ustanove `demo.ductus.test`) ili pod „Račun bilo koje ustanove” upišite AAI domenu dodane institucije.
 4. Lažni OIDC vraća preglednik na `/api/v1/auth/callback`. Institution_server postavlja kolačić `__Host-ductus_session` i preusmjerava (303) na `/app/web/`.
 5. Front institucije poziva `GET /api/v1/me`. Na `401` šalje preglednik na `/api/v1/auth/login?returnTo=<trenutna adresa>`, na `200` prikazuje početni ekran po ulozi.
 
@@ -96,7 +105,9 @@ Studenti i svi računi institucije prijavljuju se samo preko AAI@EduHr, lokalno 
 
 ## 5. Provjera da sve radi
 
+- `pnpm sve` ispiše `radi` za svih šest usluga iza edgea (preloader, aplication-server, aplication-front, institution-server, lazni-oidc, front-institucije).
 - `curl -i http://localhost:8000/` vraća preloader s `Content-Security-Policy` (`script-src 'sha256-…'`).
+- `curl -i http://localhost:8000/api/v1/health` vraća `200`.
 - `curl -i "http://localhost:8000/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F"` vraća preusmjeravanje na `http://localhost:8090/...`.
 - `curl -i http://localhost:8000/admin/prijava` vraća stranicu prijave administratora.
 - `curl -i http://localhost:8000/app/web/` vraća front institucije.
@@ -107,12 +118,47 @@ Studenti i svi računi institucije prijavljuju se samo preko AAI@EduHr, lokalno 
 |---|---|
 | `502` na `/admin`, `/api/v1` ili `/app/...` | Ta usluga ne radi. Pogledajte ispis `pnpm sve` (redak `NE ODGOVARA` ili `PRESKOČENO`). |
 | `EADDRINUSE` | Port iz tablice već koristi drugi proces. Ugasite ga ili promijenite cilj edgea varijablom. |
+| `Institution_server nema skriptu "lokalno"` | Checkout je na staroj grani. Prebacite ga na `migracija/kopija-ductus-backend` (§1). |
+| `institution-server :4000 NE ODGOVARA` | Pogledajte redove `[institution-server]`: najčešće baza (`DATABASE_URL` mora biti superkorisnik na ovom računalu) ili zauzet port 4000/8090. |
+| „Nema tokena provisioninga” | Institution_server nije zapisao `.local/provisioning-token` u 60 s. Dodavanje institucije tada ne stiže do njega; ponovno pokrenite `pnpm sve`. |
+| Dodavanje institucije javlja grešku issuera | Aplication_server je pokrenut bez `AAI_OIDC_ISSUER`, dakle ne kroz `pnpm sve`. |
 | Nakon prijave nema kolačića | `__Host-` kolačić traži `Secure`. Chrome i Firefox ga na `http://localhost` prihvaćaju; drugi preglednici možda ne. Za lokalni rad koristite Chrome ili Firefox. |
 | Na Windowsu „Na Windowsu pokrenite kroz pnpm” | Pokrenite `pnpm sve`, ne `node scripts/sve-lokalno.mjs`. |
 | `/app/mobile/` daje 404 | Ugovor §1 zasad nema rutu za mobilno sučelje; preloader ga nudi na mobitelu. Otvoreno pitanje za orkestratora. |
 
 ## 7. Testovi
 
-- `test/dev-proxy.test.ts`: rute, zaglavlja, kolačići, `Location`, WebSocket i ugašen uzvodni, s lažnim uzvodnim poslužiteljima.
-- `test/sve-lokalno.test.ts`: plan usluga, pokretanje bez ljuske i cijeli `pnpm sve` nad lažnim checkoutima (koristi stvarne portove iz tablice, pa ne smije raditi uz pokrenut `pnpm sve`).
+- `test/dev-proxy.test.ts`: rute (i razvojne putanje po Refereru), zaglavlja, kolačići, `Location`, WebSocket i ugašen uzvodni, s lažnim uzvodnim poslužiteljima.
+- `test/sve-lokalno.test.ts`: plan usluga, adrese baza, lozinka administratora, pokretanje bez ljuske i cijeli `pnpm sve` nad lažnim checkoutima: lažni `pnpm lokalno` zapiše token, a Aplication_server ga dobiva (koristi stvarne portove iz tablice, pa ne smije raditi uz pokrenut `pnpm sve`).
 - `test/functional.test.ts` i `e2e/matrix/*.spec.ts`: dva ulaza za prijavu na preloaderu.
+
+## 8. Rezultat prolaza (LOK-2, 20. 11. 2026.)
+
+Prolaz u oblaku: Linux, Node 24.22, Docker 29, `pnpm sve --docker` (PostgreSQL 17.12), grane iz §1, preglednik Chromium (Playwright) na 1250 px. Windows nije provjeren.
+
+| Korak | Ishod |
+|---|---|
+| `pnpm sve --docker`: baza, izgradnja preloadera, priprema Aplication_servera | prolazi |
+| svih 7 usluga sluša (preloader, Aplication_server, Aplication_front, Institution_server, lažni OIDC, front institucije, edge) | prolazi |
+| `/`: preloader s CSP-om iz hasheva | prolazi |
+| klik **Prijava preko AAI@EduHr** → lažni OIDC → „Demo studentica” → `/app/web/zadaci`, `GET /api/v1/me` 200 (`student`, Demo fakultet) | prolazi |
+| isto s „Demo nastavnik” → `/app/web/nastavnik`, `roles: ["teacher"]` | prolazi |
+| klik **Administracija platforme** → `/admin/prijava` → prijava kao `admin` → `/admin` | prolazi |
+| **+ Dodaj instituciju** (izmišljena domena `lok2.example.invalid`) → „Instanca je aktivna” | prolazi (nakon popravka u ovom PR-u) |
+| prijava računom nove institucije („Račun bilo koje ustanove”) → `/app/web/zadaci`, `/api/v1/me` 200 | prolazi |
+| `/app/web/zadaci` pokazuje zadatke studenta | ne prolazi: LOK-2-1 |
+| račun bez potvrđene uloge dobiva stanje „bez uloge” | ne prolazi: LOK-2-2 |
+| nakon `pnpm sve` susjedni checkouti ostaju čisti (`git status`) | ne prolazi: LOK-2-3 |
+
+### Padovi popravljeni u ovom PR-u (Preloader)
+
+- **LOK-2-4:** Institution_server nema skriptu `dev`, pa ga je `pnpm sve` preskakao. Sada se pokreće njegov `pnpm lokalno`.
+- **LOK-2-5:** `Institution_server/packages/test-fakes/oidc` nema `package.json`, pa je lažni OIDC bio preskočen. Sada ga podiže isti `pnpm lokalno`.
+- **LOK-2-6:** Aplication_server nije imao bazu, migracije, administratora, tajnu kolačića, issuer ni token koji Institution_server prihvaća: bez tajne prijava u administraciju vraća `503` (README Aplication_servera), a dodavanje institucije je u ovom prolazu vratilo `502` (greška issuera). Sada sve priprema `pnpm sve`.
+- **LOK-2-7:** u `next dev` administracija traži `/__nextjs_font/*` bez basePatha, a edge ga je slao preloaderu (`404`, stranica bez fonta). Sada edge usmjerava po Refereru.
+
+### Novi zadaci u redu
+
+- **LOK-2-1 · Institution_server:** `GET /api/v1/student/assignments` vraća `404` (ruta nije montirana). Koraci: `pnpm sve`, prijava „Demo studentica”. Dobiveno: na `/app/web/zadaci` „Prikaz trenutačno nije dostupan”. Očekivano: zadatak „Seminarski rad: kućno kompostiranje” iz seeda (SRV-09 `h-student-zadaci`).
+- **LOK-2-2 · Institution_server:** račun s nepotvrđenom nastavničkom ulogom dobiva ulogu studenta. Koraci: prijava „Iva Neimenić (demo.ductus.test, nastavnik)” (`demo-bez-uloge`), ili „Račun bilo koje ustanove” s ulogom „nastavnik” za novu instituciju. Dobiveno: `/api/v1/me` 200 s `roles: ["student"]` i studentsko sučelje. Očekivano (SRV-01, A-5): `/api/v1/me` 403 i stanje „bez uloge” s uputom na administratora fakulteta.
+- **LOK-2-3 · Aplication_server:** `next dev` zapisuje `AGENTS.md` u checkout jer `next.config.mjs` nema `agentRules: false` (Aplication_front i preloader ga imaju). Koraci: `pnpm sve`, zatim `git status` u Aplication_serveru. Očekivano: čist checkout.
