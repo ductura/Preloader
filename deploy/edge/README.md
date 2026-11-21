@@ -12,3 +12,19 @@ Objava na rubu, hosting i proxy nisu ovdje (DAN-939). Test je `test/csp.test.ts`
 ## Lokalni edge (`dev-proxy.mjs`)
 
 Samo za razvoj: jedno podrijetlo `http://localhost:8000` ispred preloadera (Next.js na :3100), Aplication_fronta, Institution_servera i fronta institucije, po rutama iz ugovora Ductus #2028 §1. Na Vercelu iste rute daju rewriteovi Nexta (`src/rewrites.ts`). Pokretanje `pnpm edge` (ili sve odjednom `pnpm sve`); rute, varijable i ponašanje su u `docs/LOKALNO.md` §3. Test je `test/dev-proxy.test.ts`. Pravi rub u produkciji nije ovdje (P-0.10).
+
+### VS-2 · Lokalni frontovi iza porta 8000
+
+`pnpm sve` traži `Institution_front_web_chrome`, `Institution_web_mobile` i `Web_other` među susjednim checkoutima ili u `DUCTURA_REPOS`. U svakom prethodno pokrenite `pnpm install`. Za mobilni i ostali front koristite granu `migracija/nextjs`, a za Chrome `migracija/kopija-ductus-front`.
+
+| Ulaz s preloadera | Front i port |
+| --- | --- |
+| `/app/chrome/` | `Institution_front_web_chrome` na `:5173` |
+| `/app/mobile/` | `Institution_web_mobile` na `:5174` uz `BASE_PATH=/app/mobile` |
+| `/app/web/` s početne stranice na istom podrijetlu | `307` na `/o/`, `Web_other` na `:5175` |
+
+Edge prepoznaje dolazak s preloadera po `Referer` zaglavlju. Izravan ulaz i povratak iz AAI@EduHr na `/app/web/`, kao i resursi pod `/app/web/_next/`, i dalje idu na Chromeov host. Ako se zaglavlje `Referer` uklanja, za Web_other može se izravno otvoriti `/o/`.
+
+Za samostalni `pnpm edge` s već pokrenutim frontovima postavite `DUCTURA_EDGE_MOBILE=http://localhost:5174` i `DUCTURA_EDGE_OTHER=http://localhost:5175`. `pnpm sve` te ciljeve postavlja za pronađene checkoute. Eksplicitni cilj koristi već pokrenuti poslužitelj.
+
+Uz pokrenut `pnpm sve`, `pnpm e2e:vs2` provjerava stvarne odgovore frontova kroz `:8000` u svih 12 profila uređaja. `pnpm e2e` dodatno izvršava istu matricu preko pravog edgea i triju HTTP fixturea, kao u CI-ju. Za taj prolaz dovoljni su ovaj repo i preglednici iz Playwrighta.

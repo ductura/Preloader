@@ -5,6 +5,8 @@
 //   /admin, /admin/*       -> Aplication_front (:3120)
 //   /api/v1, /api/v1/*     -> Institution_server (:4000)
 //   /app/web, /app/chrome  -> front institucije (:5173)
+//   /app/mobile           -> Institution_web_mobile (:5174)
+//   /o                    -> Web_other (:5175)
 //
 // Putanja se uspoređuje doslovno, bez dekodiranja i bez promjene velikih slova (P-0.10,
 // src/sign-in/README.md): `/%61dmin` ili `/Admin` nisu administracija. Host, kolačići,
@@ -17,7 +19,8 @@ import { contentSecurityPolicyFor } from './content-security-policy.ts';
 import { isMain } from '../../scripts/is-main.ts';
 
 /** @typedef {'preloader' | 'admin' | 'api' | 'front'} Upstream */
-/** @typedef {Record<Upstream, URL>} Targets */
+/** @typedef {'mobile' | 'other'} Variant */
+/** @typedef {Record<Upstream, URL> & Partial<Record<Variant, URL>>} Targets */
 
 /** Zadani portovi iz ugovora §1. */
 export const DEFAULT_TARGETS = Object.freeze({
@@ -33,6 +36,8 @@ export const TARGET_ENV = Object.freeze({
   admin: 'DUCTURA_EDGE_ADMIN',
   api: 'DUCTURA_EDGE_API',
   front: 'DUCTURA_EDGE_FRONT',
+  mobile: 'DUCTURA_EDGE_MOBILE',
+  other: 'DUCTURA_EDGE_OTHER',
 });
 
 export const DEFAULT_PORT = 8000;
@@ -55,9 +60,10 @@ const MAX_HTML_BYTES = 1024 * 1024;
 export function targetsFromEnv(env = process.env) {
   /** @type {Partial<Targets>} */
   const targets = {};
-  for (const key of /** @type {Upstream[]} */ (Object.keys(DEFAULT_TARGETS))) {
+  for (const key of /** @type {(Upstream | Variant)[]} */ (Object.keys(TARGET_ENV))) {
     const name = TARGET_ENV[key];
-    const raw = env[name] || DEFAULT_TARGETS[key];
+    const raw = env[name] || (key in DEFAULT_TARGETS ? DEFAULT_TARGETS[/** @type {Upstream} */ (key)] : undefined);
+    if (!raw) continue;
     let url;
     try {
       url = new URL(raw);
@@ -78,13 +84,16 @@ export function targetsFromEnv(env = process.env) {
  * Next ih traži bez basePatha, pa idu usluzi čija ih je stranica tražila. Samo lokalno (LOK-2).
  * @param {string} rawPath
  * @param {string} [referer]
- * @returns {Upstream}
+ * @param {Partial<Record<Variant, URL>>} [variants]
+ * @returns {Upstream | Variant}
  */
-export function routeFor(rawPath, referer) {
+export function routeFor(rawPath, referer, variants = {}) {
   const under = (/** @type {string} */ prefix) => rawPath === prefix || rawPath.startsWith(`${prefix}/`);
   if (under('/admin')) return 'admin';
   if (under('/api/v1')) return 'api';
   if (under('/app/web') || under('/app/chrome')) return 'front';
+  if (variants.mobile && under('/app/mobile')) return 'mobile';
+  if (variants.other && under('/o')) return 'other';
   if (rawPath.startsWith('/__nextjs') && referer) {
     let from = '';
     try {
@@ -92,7 +101,7 @@ export function routeFor(rawPath, referer) {
     } catch {
       // Neispravan Referer: preloader.
     }
-    if (from && !from.startsWith('/__nextjs')) return routeFor(from);
+    if (from && !from.startsWith('/__nextjs')) return routeFor(from, undefined, variants);
   }
   return 'preloader';
 }
@@ -106,6 +115,13 @@ function connectHost(/** @type {URL} */ url) {
 function pathOf(/** @type {string} */ target) {
   const path = target.split('?', 1)[0] ?? '';
   return path.startsWith('/') ? path : '';
+}
+
+// Samo odabir s početnog ekrana koristi /app/web/ za Web_other. Povratak iz
+// AAI@EduHr, izravni pristup i Chromeovi resursi pod /app/web/ pripadaju postojećem hostu.
+function fromFirstScreen(/** @type {import('node:http').IncomingMessage} */ req) {
+  const source = URL.parse(req.headers.referer ?? '');
+  return source?.protocol === 'http:' && source.host === req.headers.host && source.pathname === '/';
 }
 
 // RFC 9110 §7.6.1: vrijede samo za jednu vezu i ne prosljeđuju se.
@@ -274,14 +290,19 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       res.writeHead(400).end();
       return;
     }
-    const route = routeFor(rawPath, req.headers.referer);
+    const otherEntry = targets.other && (rawPath === '/app/web' || rawPath === '/app/web/');
+    if (otherEntry && (req.method === 'GET' || req.method === 'HEAD') && fromFirstScreen(req)) {
+      res.writeHead(307, { Location: `/o/${target.slice(rawPath.length)}`, 'Cache-Control': 'no-store' }).end();
+      return;
+    }
+    const route = routeFor(rawPath, req.headers.referer, targets);
     // Preloader nema obrazaca ni API-ja: drugo od GET i HEAD ne ide dalje.
     if (route === 'preloader' && req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' }).end();
       return;
     }
 
-    const upstream = targets[route];
+    const upstream = targets[route] ?? targets.preloader;
     const preloader = route === 'preloader';
     const outgoing = httpRequest({
       hostname: connectHost(upstream),
@@ -299,7 +320,9 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
         void sendHtml(res, status, endToEnd(incoming.rawHeaders), incoming, log);
         return;
       }
-      res.writeHead(status, incoming.statusMessage, endToEnd(incoming.rawHeaders));
+      const headers = endToEnd(incoming.rawHeaders);
+      if (otherEntry) headers.push('Vary', 'Referer');
+      res.writeHead(status, incoming.statusMessage, headers);
       incoming.pipe(res);
       incoming.on('error', () => res.destroy());
     });
@@ -320,8 +343,8 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       return;
     }
-    const route = routeFor(rawPath);
-    const upstream = targets[route];
+    const route = routeFor(rawPath, undefined, targets);
+    const upstream = targets[route] ?? targets.preloader;
     let connected = false;
     const remote = connect({ host: connectHost(upstream), port: Number(upstream.port || 80) }, () => {
       connected = true;
@@ -363,7 +386,7 @@ export async function main(env = process.env) {
     server.listen(port, host, () => resolveListen(undefined));
   });
   console.log(`[edge] sluša na http://localhost:${port}/`);
-  for (const key of /** @type {Upstream[]} */ (Object.keys(targets))) console.log(`[edge]   ${key} -> ${targets[key].host}`);
+  for (const [key, target] of Object.entries(targets)) console.log(`[edge]   ${key} -> ${target.host}`);
   return server;
 }
 
