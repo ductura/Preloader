@@ -16,7 +16,7 @@ test('automatski otvara odgovarajući frontend kroz lokalni edge', async ({ page
   const variant = device.view === 'mobile' ? 'mobile' : device.desktopFrontend;
   const { href, path } = destinations[variant];
   await prepareFirstScreen(page, context, device);
-  const home = await page.goto('/');
+  const home = await page.goto('/', { waitUntil: 'domcontentloaded' });
   expect(home?.status()).toBe(200);
   expect(home?.headers()['content-security-policy']).toMatch(/script-src 'sha256-/);
   await expect(page.locator('body')).toHaveAttribute('data-frontend', variant);
@@ -54,7 +54,7 @@ test('automatski otvara odgovarajući frontend kroz lokalni edge', async ({ page
 });
 
 test('nepoznata putanja vraća hrvatsku stranicu greške sa statusom 404', async ({ page }) => {
-  const response = await page.goto('/nepoznata-putanja-vs2');
+  const response = await page.goto('/nepoznata-putanja-vs2', { waitUntil: 'domcontentloaded' });
   expect(response?.status()).toBe(404);
   expect(response?.headers()['content-security-policy']).toContain("script-src 'none'");
   await expect(page.getByRole('heading', { name: 'Stranica ne postoji' })).toBeVisible();
