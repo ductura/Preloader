@@ -27,12 +27,10 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",
-    "@ductura/contracts": "https://github.com/ductura/Institution_server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz",
     "@playwright/test": "1.63.0",
     "@types/node": "^24.19.2",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
-    "ajv": "8.20.0",
     "esbuild": "^0.28.2",
     "fast-check": "4.10.2",
     "happy-dom": "^21.0.4",
@@ -41,6 +39,7 @@
     "yaml": "2.9.1"
   },
   "dependencies": {
+    "@ductura/contracts": "https://github.com/ductura/Institution_server/releases/download/contracts-v2.9.1/ductura-contracts-2.9.1.tgz",
     "@tiptap/core": "3.33.0",
     "@tiptap/extension-bold": "3.33.0",
     "@tiptap/extension-document": "3.33.0",
@@ -52,6 +51,7 @@
     "@tiptap/extension-text": "3.33.0",
     "@tiptap/pm": "3.33.0",
     "@tiptap/react": "3.33.0",
+    "ajv": "8.20.0",
     "next": "16.4.6",
     "react": "19.3.1",
     "react-dom": "19.3.1"
