@@ -11,18 +11,22 @@ const STUB = '<!doctype html><html lang="hr"><meta charset="utf-8"><title>odredi
 const CLOCK_START = Date.UTC(2026, 0, 1);
 
 export async function openFirstScreen(page: Page, context: BrowserContext, d: MatrixDevice): Promise<void> {
-  if (d.maxTouchPoints !== undefined) {
-    await context.addInitScript((n) => {
-      Object.defineProperty(Navigator.prototype, 'maxTouchPoints', { get: () => n, configurable: true });
-    }, d.maxTouchPoints);
-  }
+  await prepareFirstScreen(page, context, d);
   await page.route('**/*', (route) =>
     fromPreloader(new URL(route.request().url()))
       ? route.continue()
       : route.fulfill({ contentType: 'text/html; charset=utf-8', body: STUB }),
   );
+  await page.goto('/');
+}
+
+export async function prepareFirstScreen(page: Page, context: BrowserContext, d: MatrixDevice): Promise<void> {
+  if (d.maxTouchPoints !== undefined) {
+    await context.addInitScript((n) => {
+      Object.defineProperty(Navigator.prototype, 'maxTouchPoints', { get: () => n, configurable: true });
+    }, d.maxTouchPoints);
+  }
   // Lažni sat, zaustavljen prije učitavanja: preusmjeravanje nakon REDIRECT_DELAY_MS ide samo uz `runFor`.
   await page.clock.install({ time: CLOCK_START });
   await page.clock.pauseAt(CLOCK_START + 1000);
-  await page.goto('/');
 }

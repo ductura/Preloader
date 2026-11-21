@@ -15,9 +15,10 @@
     "test": "vitest run --config src/components/landing/vitest.config.ts",
     "build": "next build",
     "budget": "node scripts/budget.ts .next budget.json",
-    "e2e": "next build && playwright test -c e2e/matrix/playwright.config.ts",
+    "e2e": "next build && playwright test -c e2e/matrix/playwright.config.ts && playwright test -c e2e/vs2/playwright.ci.config.ts",
+    "e2e:vs2": "playwright test -c e2e/vs2/playwright.config.ts",
     "edge": "node deploy/edge/dev-proxy.mjs",
-    "sve": "node scripts/sve-lokalno.mjs"
+    "sve": "node scripts/sve-lokalno/main.mjs"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

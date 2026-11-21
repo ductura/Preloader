@@ -18,8 +18,9 @@ import { connect } from 'node:net';
 import { contentSecurityPolicyFor } from './content-security-policy.ts';
 import { isMain } from '../../scripts/is-main.ts';
 
-/** @typedef {'preloader' | 'admin' | 'api' | 'front' | 'mobile' | 'other'} Upstream */
-/** @typedef {Record<Upstream, URL>} Targets */
+/** @typedef {'preloader' | 'admin' | 'api' | 'front'} Upstream */
+/** @typedef {'mobile' | 'other'} Variant */
+/** @typedef {Record<Upstream, URL> & Partial<Record<Variant, URL>>} Targets */
 
 /** Zadani portovi iz ugovora §1. */
 export const DEFAULT_TARGETS = Object.freeze({
@@ -28,9 +29,6 @@ export const DEFAULT_TARGETS = Object.freeze({
   api: 'http://localhost:4000',
   front: 'http://localhost:5173',
 });
-
-// INT-07 dodaje dva fronta uz portove iz ugovora §1.
-const LOCAL_TARGETS = { ...DEFAULT_TARGETS, mobile: 'http://localhost:5174', other: 'http://localhost:5175' };
 
 /** Varijable okoline koje mijenjaju cilj; vrijednost je `http://host:port` bez putanje. */
 export const TARGET_ENV = Object.freeze({
@@ -62,9 +60,10 @@ const MAX_HTML_BYTES = 1024 * 1024;
 export function targetsFromEnv(env = process.env) {
   /** @type {Partial<Targets>} */
   const targets = {};
-  for (const key of /** @type {Upstream[]} */ (Object.keys(LOCAL_TARGETS))) {
+  for (const key of /** @type {(Upstream | Variant)[]} */ (Object.keys(TARGET_ENV))) {
     const name = TARGET_ENV[key];
-    const raw = env[name] || LOCAL_TARGETS[key];
+    const raw = env[name] || (key in DEFAULT_TARGETS ? DEFAULT_TARGETS[/** @type {Upstream} */ (key)] : undefined);
+    if (!raw) continue;
     let url;
     try {
       url = new URL(raw);
@@ -85,15 +84,16 @@ export function targetsFromEnv(env = process.env) {
  * Next ih traži bez basePatha, pa idu usluzi čija ih je stranica tražila. Samo lokalno (LOK-2).
  * @param {string} rawPath
  * @param {string} [referer]
- * @returns {Upstream}
+ * @param {Partial<Record<Variant, URL>>} [variants]
+ * @returns {Upstream | Variant}
  */
-export function routeFor(rawPath, referer) {
+export function routeFor(rawPath, referer, variants = {}) {
   const under = (/** @type {string} */ prefix) => rawPath === prefix || rawPath.startsWith(`${prefix}/`);
   if (under('/admin')) return 'admin';
   if (under('/api/v1')) return 'api';
   if (under('/app/web') || under('/app/chrome')) return 'front';
-  if (under('/app/mobile')) return 'mobile';
-  if (under('/o')) return 'other';
+  if (variants.mobile && under('/app/mobile')) return 'mobile';
+  if (variants.other && under('/o')) return 'other';
   if (rawPath.startsWith('/__nextjs') && referer) {
     let from = '';
     try {
@@ -101,7 +101,7 @@ export function routeFor(rawPath, referer) {
     } catch {
       // Neispravan Referer: preloader.
     }
-    if (from && !from.startsWith('/__nextjs')) return routeFor(from);
+    if (from && !from.startsWith('/__nextjs')) return routeFor(from, undefined, variants);
   }
   return 'preloader';
 }
@@ -290,19 +290,19 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       res.writeHead(400).end();
       return;
     }
-    const otherEntry = rawPath === '/app/web' || rawPath === '/app/web/';
+    const otherEntry = targets.other && (rawPath === '/app/web' || rawPath === '/app/web/');
     if (otherEntry && (req.method === 'GET' || req.method === 'HEAD') && fromFirstScreen(req)) {
       res.writeHead(307, { Location: `/o/${target.slice(rawPath.length)}`, 'Cache-Control': 'no-store' }).end();
       return;
     }
-    const route = routeFor(rawPath, req.headers.referer);
+    const route = routeFor(rawPath, req.headers.referer, targets);
     // Preloader nema obrazaca ni API-ja: drugo od GET i HEAD ne ide dalje.
     if (route === 'preloader' && req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' }).end();
       return;
     }
 
-    const upstream = targets[route];
+    const upstream = targets[route] ?? targets.preloader;
     const preloader = route === 'preloader';
     const outgoing = httpRequest({
       hostname: connectHost(upstream),
@@ -343,8 +343,8 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       return;
     }
-    const route = routeFor(rawPath);
-    const upstream = targets[route];
+    const route = routeFor(rawPath, undefined, targets);
+    const upstream = targets[route] ?? targets.preloader;
     let connected = false;
     const remote = connect({ host: connectHost(upstream), port: Number(upstream.port || 80) }, () => {
       connected = true;
