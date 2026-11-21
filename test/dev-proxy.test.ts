@@ -154,8 +154,27 @@ describe('routeFor', () => {
     ['/app/chrome/index.html', 'front'],
     ['/app/webx', 'preloader'],
     ['/app/mobile/', 'preloader'],
+    ['/o/', 'preloader'],
   ] as const)('%s -> %s', (path, route) => {
     expect(routeFor(path)).toBe(route);
+  });
+
+  test.each([
+    ['/app/mobile', 'mobile'],
+    ['/app/mobile/', 'mobile'],
+    ['/app/mobile/_next/webpack-hmr', 'mobile'],
+    ['/app/mobilex', 'preloader'],
+    ['/App/mobile', 'preloader'],
+    ['/o', 'other'],
+    ['/o/', 'other'],
+    ['/o/zadaci', 'other'],
+    ['/ostalo', 'preloader'],
+    ['/O/', 'preloader'],
+    ['/%6F/', 'preloader'],
+    ['/app/web/', 'front'],
+  ] as const)('uz pokrenute VS-2 frontove (tablica ruta) %s -> %s', (path, route) => {
+    const targets = targetsFromEnv({ DUCTURA_EDGE_MOBILE: 'http://localhost:5174', DUCTURA_EDGE_OTHER: 'http://localhost:5175' });
+    expect(routeFor(path, undefined, targets)).toBe(route);
   });
 
   test('razvojne putanje next dev idu usluzi stranice iz Referera (LOK-2)', () => {
@@ -177,6 +196,15 @@ describe('targetsFromEnv', () => {
     });
     const t = targetsFromEnv({});
     expect([t.preloader.port, t.admin.port, t.api.port, t.front.port]).toEqual(['3100', '3120', '4000', '5173']);
+  });
+
+  test('Institution_web_mobile i Web_other nemaju zadani cilj; ciljevi su iz tablice ruta', () => {
+    const t = targetsFromEnv({});
+    expect(t.mobile).toBeUndefined();
+    expect(t.other).toBeUndefined();
+    const v = targetsFromEnv({ DUCTURA_EDGE_MOBILE: 'http://localhost:5174', DUCTURA_EDGE_OTHER: 'http://127.0.0.1:5175/' });
+    expect([v.mobile?.host, v.other?.host]).toEqual(['localhost:5174', '127.0.0.1:5175']);
+    expect(() => targetsFromEnv({ DUCTURA_EDGE_OTHER: 'http://localhost:5175/o' })).toThrow(/DUCTURA_EDGE_OTHER/);
   });
 
   test('prazna vrijednost znači zadanu', () => {
