@@ -5,6 +5,8 @@
 //   /admin, /admin/*       -> Aplication_front (:3120)
 //   /api/v1, /api/v1/*     -> Institution_server (:4000)
 //   /app/web, /app/chrome  -> front institucije (:5173)
+//   /app/mobile           -> Institution_web_mobile (:5174)
+//   /o                    -> Web_other (:5175)
 //
 // Putanja se uspoređuje doslovno, bez dekodiranja i bez promjene velikih slova (P-0.10,
 // src/sign-in/README.md): `/%61dmin` ili `/Admin` nisu administracija. Host, kolačići,
@@ -16,7 +18,7 @@ import { connect } from 'node:net';
 import { contentSecurityPolicyFor } from './content-security-policy.ts';
 import { isMain } from '../../scripts/is-main.ts';
 
-/** @typedef {'preloader' | 'admin' | 'api' | 'front'} Upstream */
+/** @typedef {'preloader' | 'admin' | 'api' | 'front' | 'mobile' | 'other'} Upstream */
 /** @typedef {Record<Upstream, URL>} Targets */
 
 /** Zadani portovi iz ugovora §1. */
@@ -27,12 +29,17 @@ export const DEFAULT_TARGETS = Object.freeze({
   front: 'http://localhost:5173',
 });
 
+// INT-07 dodaje dva fronta uz portove iz ugovora §1.
+const LOCAL_TARGETS = { ...DEFAULT_TARGETS, mobile: 'http://localhost:5174', other: 'http://localhost:5175' };
+
 /** Varijable okoline koje mijenjaju cilj; vrijednost je `http://host:port` bez putanje. */
 export const TARGET_ENV = Object.freeze({
   preloader: 'DUCTURA_EDGE_PRELOADER',
   admin: 'DUCTURA_EDGE_ADMIN',
   api: 'DUCTURA_EDGE_API',
   front: 'DUCTURA_EDGE_FRONT',
+  mobile: 'DUCTURA_EDGE_MOBILE',
+  other: 'DUCTURA_EDGE_OTHER',
 });
 
 export const DEFAULT_PORT = 8000;
@@ -55,9 +62,9 @@ const MAX_HTML_BYTES = 1024 * 1024;
 export function targetsFromEnv(env = process.env) {
   /** @type {Partial<Targets>} */
   const targets = {};
-  for (const key of /** @type {Upstream[]} */ (Object.keys(DEFAULT_TARGETS))) {
+  for (const key of /** @type {Upstream[]} */ (Object.keys(LOCAL_TARGETS))) {
     const name = TARGET_ENV[key];
-    const raw = env[name] || DEFAULT_TARGETS[key];
+    const raw = env[name] || LOCAL_TARGETS[key];
     let url;
     try {
       url = new URL(raw);
@@ -85,6 +92,8 @@ export function routeFor(rawPath, referer) {
   if (under('/admin')) return 'admin';
   if (under('/api/v1')) return 'api';
   if (under('/app/web') || under('/app/chrome')) return 'front';
+  if (under('/app/mobile')) return 'mobile';
+  if (under('/o')) return 'other';
   if (rawPath.startsWith('/__nextjs') && referer) {
     let from = '';
     try {
@@ -106,6 +115,13 @@ function connectHost(/** @type {URL} */ url) {
 function pathOf(/** @type {string} */ target) {
   const path = target.split('?', 1)[0] ?? '';
   return path.startsWith('/') ? path : '';
+}
+
+// Samo odabir s početnog ekrana koristi /app/web/ za Web_other. Povratak iz
+// AAI@EduHr, izravni pristup i Chromeovi resursi pod /app/web/ pripadaju postojećem hostu.
+function fromFirstScreen(/** @type {import('node:http').IncomingMessage} */ req) {
+  const source = URL.parse(req.headers.referer ?? '');
+  return source?.protocol === 'http:' && source.host === req.headers.host && source.pathname === '/';
 }
 
 // RFC 9110 §7.6.1: vrijede samo za jednu vezu i ne prosljeđuju se.
@@ -274,6 +290,11 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       res.writeHead(400).end();
       return;
     }
+    const otherEntry = rawPath === '/app/web' || rawPath === '/app/web/';
+    if (otherEntry && (req.method === 'GET' || req.method === 'HEAD') && fromFirstScreen(req)) {
+      res.writeHead(307, { Location: `/o/${target.slice(rawPath.length)}`, 'Cache-Control': 'no-store' }).end();
+      return;
+    }
     const route = routeFor(rawPath, req.headers.referer);
     // Preloader nema obrazaca ni API-ja: drugo od GET i HEAD ne ide dalje.
     if (route === 'preloader' && req.method !== 'GET' && req.method !== 'HEAD') {
@@ -299,7 +320,9 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
         void sendHtml(res, status, endToEnd(incoming.rawHeaders), incoming, log);
         return;
       }
-      res.writeHead(status, incoming.statusMessage, endToEnd(incoming.rawHeaders));
+      const headers = endToEnd(incoming.rawHeaders);
+      if (otherEntry) headers.push('Vary', 'Referer');
+      res.writeHead(status, incoming.statusMessage, headers);
       incoming.pipe(res);
       incoming.on('error', () => res.destroy());
     });
@@ -363,7 +386,7 @@ export async function main(env = process.env) {
     server.listen(port, host, () => resolveListen(undefined));
   });
   console.log(`[edge] sluša na http://localhost:${port}/`);
-  for (const key of /** @type {Upstream[]} */ (Object.keys(targets))) console.log(`[edge]   ${key} -> ${targets[key].host}`);
+  for (const [key, target] of Object.entries(targets)) console.log(`[edge]   ${key} -> ${target.host}`);
   return server;
 }
 
