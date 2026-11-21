@@ -33,5 +33,9 @@ test('izgrađena stranica zove server samo jednom, za kontekst klijenta (P-0.8)'
 });
 
 test('izgrađena stranica stane u proračun iz repoa', () => {
-  expect(checkBudget(out, parseBudget(readFileSync('budget.json', 'utf8')))).toEqual([]);
+  // PRE-1301: /preuzimanje je SSR stranica; njezinu granicu mjeri test/downloads/budget.ts i `pnpm budget` nad `.next`.
+  const budget = parseBudget(readFileSync('budget.json', 'utf8'));
+  const { 'preuzimanje.html': downloadsLimit, ...staticFiles } = budget.files;
+  expect(downloadsLimit).toBeGreaterThan(0);
+  expect(checkBudget(out, { ...budget, files: staticFiles })).toEqual([]);
 });

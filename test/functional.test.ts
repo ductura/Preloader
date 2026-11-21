@@ -21,7 +21,8 @@ describe('stranica preloadera', () => {
     const { doc, go } = visit(UA.chromeMac);
     expect(doc.body.dataset['frontend']).toBe('chrome');
     expect(href(doc, 'open-app')).toBe(defaultConfig.frontends.chrome);
-    expect(href(doc, 'desktop-download')).toMatch(/\.dmg$/);
+    // PRE-1301: gumb vodi na /preuzimanje (manifest servera), ne na tvrdo upisanu datoteku.
+    expect(href(doc, 'desktop-download')).toBe('/preuzimanje?sustav=macos');
     expect(doc.getElementById('desktop-offer')?.hidden).toBe(false);
     expect(doc.getElementById('desktop-download')?.textContent).toContain('za macOS');
     expect(go).toHaveBeenCalledWith(defaultConfig.frontends.chrome, 4000);
