@@ -34,10 +34,18 @@ test('automatski otvara odgovarajući frontend kroz lokalni edge', async ({ page
     expect(response.status()).toBe(200);
     expect(response.headers()['x-vs2-frontend']).toBe(variant);
     await expect(page.getByRole('heading', { name: variant })).toBeVisible();
+    const callbackTarget = await page.request.get('/app/web/', {
+      headers: { Referer: `${EDGE_ORIGIN}/api/v1/auth/callback` },
+      maxRedirects: 0,
+    });
+    expect(callbackTarget.status()).toBe(200);
+    expect(callbackTarget.headers()['x-vs2-frontend']).toBe('chrome');
   } else if (variant === 'other') {
     // Svježi kontekst: Web_other šalje neprijavljenog korisnika na vlastitu prijavu.
     expect(response.status()).toBe(307);
-    expect(response.headers()['location']).toBe('/o/prijava');
+    const login = new URL(response.headers()['location'] ?? '', response.url());
+    expect(login.origin).toBe(EDGE_ORIGIN);
+    expect(login.pathname).toBe('/o/prijava');
   } else {
     expect(response.status()).toBe(200);
     const assets = variant === 'mobile' ? '/app/mobile/_next/' : '/app/web/_next/';

@@ -4,9 +4,9 @@ import { main } from '../../deploy/edge/dev-proxy.mjs';
 import { PRELOADER_ORIGIN } from '../matrix/server.ts';
 
 // Stvarne TCP veze između edgea i triju odvojenih HTTP poslužitelja.
-async function fixture(name, prefix) {
+async function fixture(name, paths) {
   const server = createServer((req, res) => {
-    if (req.url !== `${prefix}/`) {
+    if (!paths.includes(req.url)) {
       res.writeHead(404).end();
       return;
     }
@@ -21,9 +21,9 @@ async function fixture(name, prefix) {
 try {
   await main({
     DUCTURA_EDGE_PRELOADER: PRELOADER_ORIGIN,
-    DUCTURA_EDGE_FRONT: await fixture('chrome', '/app/chrome'),
-    DUCTURA_EDGE_MOBILE: await fixture('mobile', '/app/mobile'),
-    DUCTURA_EDGE_OTHER: await fixture('other', '/o'),
+    DUCTURA_EDGE_FRONT: await fixture('chrome', ['/app/chrome/', '/app/web/']),
+    DUCTURA_EDGE_MOBILE: await fixture('mobile', ['/app/mobile/']),
+    DUCTURA_EDGE_OTHER: await fixture('other', ['/o/']),
   });
 } catch (error) {
   console.error(error);
