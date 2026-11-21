@@ -1,17 +1,22 @@
-// Jedno podrijetlo (ductura.org): Next.js prosljeđuje putanje ostalih usluga po ugovoru Ductus #2028 §1,
-// isto kao lokalni edge (`deploy/edge/dev-proxy.mjs`). Adrese su u varijablama okoline, ne u repou.
+// Jedno podrijetlo (ductura.org): Next.js prosljeđuje putanje ostalih usluga po ugovoru Ductus #2028 §1.
+// Putanje i varijable su u tablici ruta (`deploy/edge/routes.ts`), iz koje čita i lokalni edge
+// (`deploy/edge/dev-proxy.mjs`). Adrese su u varijablama okoline, ne u repou.
+import { pathsOf, ROUTES, SERVICES as SERVICE_SPECS, type Service } from '../deploy/edge/routes.ts';
 
 export interface Rewrite {
   source: string;
   destination: string;
 }
 
-/** Varijabla okoline i putanje koje idu na tu uslugu. */
-export const SERVICES = {
-  APLICATION_FRONT_URL: ['/admin'],
-  INSTITUTION_SERVER_URL: ['/api/v1'],
-  INSTITUTION_FRONT_URL: ['/app/web', '/app/chrome'],
-} as const satisfies Record<string, readonly string[]>;
+/** Varijabla okoline i putanje koje idu na tu uslugu, iz tablice ruta, redom tablice. */
+export const SERVICES: Readonly<Record<string, readonly string[]>> = Object.freeze(
+  Object.fromEntries(
+    (Object.keys(SERVICE_SPECS) as Service[]).map((service) => [
+      SERVICE_SPECS[service].rewriteEnv,
+      Object.freeze(pathsOf(service)),
+    ]),
+  ),
+);
 
 /** Samo čitanje; `process.env` odgovara ovom tipu. */
 export type ServiceEnv = Readonly<Record<string, string | undefined>>;
@@ -56,21 +61,27 @@ export function serviceOrigin(name: string, value: string): string {
 }
 
 /**
- * Rewriteovi za `next.config.ts`. Usluga bez varijable nema rewrite, pa njezine putanje daju 404,
- * a početna stranica radi. `/x` i `/x/...` idu na istu putanju kod usluge; `/x` dobiva završnu
- * kosu crtu samo za front institucije (Vite base `/app/web/`), kao u dosadašnjem `vercel.json`.
+ * Rewriteovi za `next.config.ts`, redom tablice ruta. Usluga bez varijable nema rewrite, pa njezine
+ * putanje daju 404, a početna stranica radi. `/x` i `/x/...` idu na istu putanju kod usluge; `/x`
+ * dobiva završnu kosu crtu samo gdje tablica to traži (`bareSlash`: Vite base `/app/web/` fronta
+ * institucije, kao u dosadašnjem `vercel.json`). Svaka zadana varijabla provjerava se prije prvog
+ * rewritea, pa neispravno podrijetlo ruši izgradnju.
  */
 export function serviceRewrites(env: ServiceEnv): Rewrite[] {
-  const rewrites: Rewrite[] = [{ source: '/greska.html', destination: '/greska' }];
-  for (const [name, paths] of Object.entries(SERVICES) as [keyof typeof SERVICES, readonly string[]][]) {
+  const origins = new Map<Service, string>();
+  for (const service of Object.keys(SERVICE_SPECS) as Service[]) {
+    const name = SERVICE_SPECS[service].rewriteEnv;
     const value = env[name];
     if (value === undefined || value === '') continue;
-    const origin = serviceOrigin(name, value);
-    const slash = name === 'INSTITUTION_FRONT_URL' ? '/' : '';
-    for (const path of paths) {
-      rewrites.push({ source: path, destination: `${origin}${path}${slash}` });
-      rewrites.push({ source: `${path}/:path*`, destination: `${origin}${path}/:path*` });
-    }
+    origins.set(service, serviceOrigin(name, value));
+  }
+  const rewrites: Rewrite[] = [{ source: '/greska.html', destination: '/greska' }];
+  for (const { prefix, service } of ROUTES) {
+    const origin = origins.get(service);
+    if (origin === undefined) continue;
+    const slash = SERVICE_SPECS[service].bareSlash ? '/' : '';
+    rewrites.push({ source: prefix, destination: `${origin}${prefix}${slash}` });
+    rewrites.push({ source: `${prefix}/:path*`, destination: `${origin}${prefix}/:path*` });
   }
   return rewrites;
 }

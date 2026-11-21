@@ -15,7 +15,8 @@ import { errorText } from '../src/text.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const NEXT_BIN = join(root, 'node_modules', 'next', 'dist', 'bin', 'next');
-const COPY = ['pages', 'src', 'scripts', 'next.config.ts', 'package.json', 'tsconfig.json'];
+// `deploy`: src/rewrites.ts čita tablicu ruta iz deploy/edge/routes.ts.
+const COPY = ['pages', 'src', 'scripts', 'deploy', 'next.config.ts', 'package.json', 'tsconfig.json'];
 
 interface Seen {
   upstream: string;
