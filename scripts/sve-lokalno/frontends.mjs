@@ -53,7 +53,10 @@ export async function startFrontends(planned, env) {
       console.error(`[${name}] port :${port} je zauzet.`);
       continue;
     }
-    const { command, args } = pnpmInvocation(env, ['run', service.script, '--port', String(port)]);
+    // Checkout ima instalirane ovisnosti; pokretanje dev skripte koristi pnpm pozivatelja.
+    const { command, args } = pnpmInvocation(env, [
+      '--config.manage-package-manager-versions=false', 'run', service.script, '--port', String(port),
+    ]);
     const child = spawn(command, args, {
       cwd, env: childEnv(env, service.env), stdio: ['ignore', 'inherit', 'inherit'],
       detached: process.platform !== 'win32', windowsHide: true,
