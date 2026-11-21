@@ -8,6 +8,8 @@ export default defineConfig({
   outputDir: '../../test-results/vs2',
   forbidOnly: !!process.env['CI'],
   workers: 1,
+  // Prvo otvaranje u hladnom pregledniku i lokalna Next kompilacija na zahtjev.
+  timeout: 60_000,
   reporter: 'list',
   use: { baseURL: EDGE_ORIGIN, trace: 'retain-on-failure' },
   projects: MATRIX.map((device) => ({
