@@ -1,16 +1,19 @@
 // Rewriteovi Next.js iz varijabli okoline (ugovor Ductus #2028 §1), umjesto adresa u `vercel.json`.
+// Isti cilj kao lokalni edge za svaku putanju provjerava test/route-table.test.ts.
 import { describe, expect, test } from 'vitest';
-import { routeFor } from '../deploy/edge/dev-proxy.mjs';
+import { ROUTES, SERVICES as SERVICE_SPECS } from '../deploy/edge/routes.ts';
 import { SERVICES, serviceOrigin, serviceRewrites } from '../src/rewrites.ts';
 
 const ENV = {
   APLICATION_FRONT_URL: 'https://admin.example.test',
   INSTITUTION_SERVER_URL: 'https://api.example.test/',
   INSTITUTION_FRONT_URL: 'https://front.example.test',
+  INSTITUTION_WEB_MOBILE_URL: 'https://mobile.example.test',
+  WEB_OTHER_URL: 'https://other.example.test/',
 };
 
 describe('serviceRewrites', () => {
-  test('sve tri usluge, putanja ide nepromijenjena (kao dosadašnji vercel.json)', () => {
+  test('svih pet usluga, putanja ide nepromijenjena (kao dosadašnji vercel.json)', () => {
     expect(serviceRewrites(ENV)).toEqual([
       { source: '/greska.html', destination: '/greska' },
       { source: '/admin', destination: 'https://admin.example.test/admin' },
@@ -21,7 +24,31 @@ describe('serviceRewrites', () => {
       { source: '/app/web/:path*', destination: 'https://front.example.test/app/web/:path*' },
       { source: '/app/chrome', destination: 'https://front.example.test/app/chrome/' },
       { source: '/app/chrome/:path*', destination: 'https://front.example.test/app/chrome/:path*' },
+      // Next frontovi s basePathom: gola putanja bez dodane kose crte, kao lokalni edge.
+      { source: '/app/mobile', destination: 'https://mobile.example.test/app/mobile' },
+      { source: '/app/mobile/:path*', destination: 'https://mobile.example.test/app/mobile/:path*' },
+      { source: '/o', destination: 'https://other.example.test/o' },
+      { source: '/o/:path*', destination: 'https://other.example.test/o/:path*' },
     ]);
+  });
+
+  test('SERVICES je izveden iz tablice ruta: svaka putanja tablice ima točno jednu varijablu', () => {
+    expect(SERVICES).toEqual({
+      APLICATION_FRONT_URL: ['/admin'],
+      INSTITUTION_SERVER_URL: ['/api/v1'],
+      INSTITUTION_FRONT_URL: ['/app/web', '/app/chrome'],
+      INSTITUTION_WEB_MOBILE_URL: ['/app/mobile'],
+      WEB_OTHER_URL: ['/o'],
+    });
+    expect(Object.values(SERVICES).flat().sort()).toEqual(ROUTES.map((r) => r.prefix).sort());
+    expect(Object.keys(SERVICES)).toEqual(Object.values(SERVICE_SPECS).map((spec) => spec.rewriteEnv));
+  });
+
+  test.each([
+    ['INSTITUTION_WEB_MOBILE_URL', ['/app/mobile', '/app/mobile/:path*']],
+    ['WEB_OTHER_URL', ['/o', '/o/:path*']],
+  ] as const)('%s sam daje samo svoje putanje', (name, sources) => {
+    expect(serviceRewrites({ [name]: ENV[name] }).map((r) => r.source)).toEqual(['/greska.html', ...sources]);
   });
 
   test('bez varijabli samo stranica greške: putanje usluga daju 404, početna radi', () => {
@@ -34,14 +61,8 @@ describe('serviceRewrites', () => {
     expect(sources).toEqual(['/greska.html', '/api/v1', '/api/v1/:path*']);
   });
 
-  test('iste putanje kao lokalni edge: svaki izvor rewritea edge šalje istoj usluzi', () => {
-    const upstream = { APLICATION_FRONT_URL: 'admin', INSTITUTION_SERVER_URL: 'api', INSTITUTION_FRONT_URL: 'front' } as const;
-    for (const [name, paths] of Object.entries(SERVICES) as [keyof typeof SERVICES, readonly string[]][]) {
-      for (const path of paths) {
-        expect(routeFor(path)).toBe(upstream[name]);
-        expect(routeFor(`${path}/x`)).toBe(upstream[name]);
-      }
-    }
+  test('neispravna varijabla ruši izgradnju i kad bi njezina usluga bila zadnja u tablici', () => {
+    expect(() => serviceRewrites({ ...ENV, WEB_OTHER_URL: 'https://other.example.test/o' })).toThrow(/WEB_OTHER_URL/);
   });
 });
 
@@ -89,7 +110,10 @@ describe('serviceOrigin odbija adresu koja bi promijenila putanju ili otišla ne
     'http://localhost:4000/..',
   ])('%s', (value) => {
     expect(() => serviceOrigin('INSTITUTION_SERVER_URL', value)).toThrow(/INSTITUTION_SERVER_URL/);
-    expect(() => serviceRewrites({ INSTITUTION_SERVER_URL: value })).toThrow(/INSTITUTION_SERVER_URL/);
+    // Ista pravila za svaku varijablu iz tablice, i za nove (Institution_web_mobile, Web_other).
+    for (const { rewriteEnv } of Object.values(SERVICE_SPECS)) {
+      expect(() => serviceRewrites({ [rewriteEnv]: value })).toThrow(new RegExp(rewriteEnv));
+    }
   });
 
   test.each([

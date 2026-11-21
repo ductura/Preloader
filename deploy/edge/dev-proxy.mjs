@@ -1,12 +1,14 @@
 // Lokalni edge (ugovor #2028 §1): jedino podrijetlo http://localhost:8000 za preglednik.
 // Samo za razvoj na jednom računalu; pravi rubni proxy u produkciji je P-0.10.
 //
+// Rute su u tablici `routes.ts`, iz koje čitaju i rewriteovi Nexta (src/rewrites.ts):
 //   /, sve ostalo          -> preloader (Next.js, :3100)
 //   /admin, /admin/*       -> Aplication_front (:3120)
 //   /api/v1, /api/v1/*     -> Institution_server (:4000)
 //   /app/web, /app/chrome  -> front institucije (:5173)
-//   /app/mobile           -> Institution_web_mobile (:5174)
-//   /o                    -> Web_other (:5175)
+//   /app/mobile            -> Institution_web_mobile (DUCTURA_EDGE_MOBILE; bez nje preloader, 404)
+//   /o                     -> Web_other (DUCTURA_EDGE_OTHER; bez nje preloader, 404)
+// Samo lokalno: /app/web s početne stranice -> 307 na /o/ (EDGE_ONLY_REDIRECT, VS-2).
 //
 // Putanja se uspoređuje doslovno, bez dekodiranja i bez promjene velikih slova (P-0.10,
 // src/sign-in/README.md): `/%61dmin` ili `/Admin` nisu administracija. Host, kolačići,
@@ -16,29 +18,34 @@
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 import { contentSecurityPolicyFor } from './content-security-policy.ts';
+import { EDGE_ONLY_REDIRECT, SERVICES, serviceFor } from './routes.ts';
 import { isMain } from '../../scripts/is-main.ts';
 
+/** @typedef {import('./routes.ts').Service} Service */
 /** @typedef {'preloader' | 'admin' | 'api' | 'front'} Upstream */
 /** @typedef {'mobile' | 'other'} Variant */
 /** @typedef {Record<Upstream, URL> & Partial<Record<Variant, URL>>} Targets */
 
-/** Zadani portovi iz ugovora §1. */
-export const DEFAULT_TARGETS = Object.freeze({
-  preloader: 'http://localhost:3100',
-  admin: 'http://localhost:3120',
-  api: 'http://localhost:4000',
-  front: 'http://localhost:5173',
-});
+const SERVICE_NAMES = /** @type {Service[]} */ (Object.keys(SERVICES));
+
+/** Zadani portovi iz ugovora §1 (preloader i usluge s `edgeDefault` u tablici ruta). */
+export const DEFAULT_TARGETS = Object.freeze(
+  /** @type {Readonly<Record<Upstream, string>>} */ ({
+    preloader: 'http://localhost:3100',
+    ...Object.fromEntries(SERVICE_NAMES.flatMap((name) => {
+      const spec = /** @type {import('./routes.ts').ServiceSpec} */ (SERVICES[name]);
+      return spec.edgeDefault ? [[name, spec.edgeDefault]] : [];
+    })),
+  }),
+);
 
 /** Varijable okoline koje mijenjaju cilj; vrijednost je `http://host:port` bez putanje. */
-export const TARGET_ENV = Object.freeze({
-  preloader: 'DUCTURA_EDGE_PRELOADER',
-  admin: 'DUCTURA_EDGE_ADMIN',
-  api: 'DUCTURA_EDGE_API',
-  front: 'DUCTURA_EDGE_FRONT',
-  mobile: 'DUCTURA_EDGE_MOBILE',
-  other: 'DUCTURA_EDGE_OTHER',
-});
+export const TARGET_ENV = Object.freeze(
+  /** @type {Readonly<Record<Upstream | Variant, string>>} */ ({
+    preloader: 'DUCTURA_EDGE_PRELOADER',
+    ...Object.fromEntries(SERVICE_NAMES.map((name) => [name, SERVICES[name].edgeEnv])),
+  }),
+);
 
 export const DEFAULT_PORT = 8000;
 
@@ -79,21 +86,23 @@ export function targetsFromEnv(env = process.env) {
 }
 
 /**
- * Kamo ide zahtjev. `rawPath` je putanja točno kako ju je poslao preglednik (bez upita).
+ * Kamo ide zahtjev, po tablici ruta (`routes.ts`). `rawPath` je putanja točno kako ju je poslao
+ * preglednik (bez upita). Usluga bez zadanog cilja (Institution_web_mobile, Web_other) dobiva svoje
+ * putanje samo kad je u `targets`; inače idu preloaderu i daju 404, kao rewrite bez varijable.
  * `referer` služi samo za razvojne putanje `next dev` (`/__nextjs_font/*`, `/__nextjs_original-stack-frames`):
  * Next ih traži bez basePatha, pa idu usluzi čija ih je stranica tražila. Samo lokalno (LOK-2).
  * @param {string} rawPath
  * @param {string} [referer]
- * @param {Partial<Record<Variant, URL>>} [variants]
+ * @param {Partial<Record<Upstream | Variant, URL>>} [targets]
  * @returns {Upstream | Variant}
  */
-export function routeFor(rawPath, referer, variants = {}) {
-  const under = (/** @type {string} */ prefix) => rawPath === prefix || rawPath.startsWith(`${prefix}/`);
-  if (under('/admin')) return 'admin';
-  if (under('/api/v1')) return 'api';
-  if (under('/app/web') || under('/app/chrome')) return 'front';
-  if (variants.mobile && under('/app/mobile')) return 'mobile';
-  if (variants.other && under('/o')) return 'other';
+export function routeFor(rawPath, referer, targets = {}) {
+  const service = serviceFor(rawPath);
+  if (service !== null) {
+    const spec = /** @type {import('./routes.ts').ServiceSpec} */ (SERVICES[service]);
+    if (spec.edgeDefault !== undefined || targets[service] !== undefined) return service;
+    return 'preloader';
+  }
   if (rawPath.startsWith('/__nextjs') && referer) {
     let from = '';
     try {
@@ -101,7 +110,7 @@ export function routeFor(rawPath, referer, variants = {}) {
     } catch {
       // Neispravan Referer: preloader.
     }
-    if (from && !from.startsWith('/__nextjs')) return routeFor(from, undefined, variants);
+    if (from && !from.startsWith('/__nextjs')) return routeFor(from, undefined, targets);
   }
   return 'preloader';
 }
@@ -290,9 +299,10 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       res.writeHead(400).end();
       return;
     }
-    const otherEntry = targets.other && (rawPath === '/app/web' || rawPath === '/app/web/');
+    const otherEntry = targets[EDGE_ONLY_REDIRECT.requires] !== undefined && EDGE_ONLY_REDIRECT.paths.includes(rawPath);
     if (otherEntry && (req.method === 'GET' || req.method === 'HEAD') && fromFirstScreen(req)) {
-      res.writeHead(307, { Location: `/o/${target.slice(rawPath.length)}`, 'Cache-Control': 'no-store' }).end();
+      const location = `${EDGE_ONLY_REDIRECT.location}${target.slice(rawPath.length)}`;
+      res.writeHead(EDGE_ONLY_REDIRECT.status, { Location: location, 'Cache-Control': 'no-store' }).end();
       return;
     }
     const route = routeFor(rawPath, req.headers.referer, targets);
