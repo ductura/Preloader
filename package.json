@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit -p src/components/landing/tsconfig.preloader.json && tsc --noEmit -p tsconfig.next.json",
     "test": "vitest run --config src/components/landing/vitest.config.ts",
     "build": "next build",
-    "budget": "node scripts/budget.ts .next budget.json",
+    "budget": "node test/downloads/budget.ts",
     "e2e": "next build && playwright test -c e2e/matrix/playwright.config.ts && playwright test -c e2e/vs2/playwright.ci.config.ts",
     "e2e:vs2": "playwright test -c e2e/vs2/playwright.config.ts",
     "edge": "node deploy/edge/dev-proxy.mjs",
