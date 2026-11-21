@@ -13,8 +13,8 @@ export const defaultConfig: Config = {
     other: '/app/web/',
   },
   downloads: {
-    windows: '/download/Ductura-Setup-x64.exe',
-    macos: '/download/Ductura-macOS.dmg',
+    windows: '/preuzimanje?sustav=windows',
+    macos: '/preuzimanje?sustav=macos',
   },
   signIn: {
     returnTo: '/app/web/',

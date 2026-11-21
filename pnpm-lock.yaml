@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@ductura/contracts':
+        specifier: https://github.com/ductura/Institution_server/releases/download/contracts-v2.9.1/ductura-contracts-2.9.1.tgz
+        version: https://github.com/ductura/Institution_server/releases/download/contracts-v2.9.1/ductura-contracts-2.9.1.tgz
       '@tiptap/core':
         specifier: 3.33.0
         version: 3.33.0(@tiptap/pm@3.33.0)
@@ -41,6 +44,9 @@ importers:
       '@tiptap/react':
         specifier: 3.33.0
         version: 3.33.0(@floating-ui/dom@1.8.0)(@tiptap/core@3.33.0(@tiptap/pm@3.33.0))(@tiptap/pm@3.33.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
       next:
         specifier: 16.4.6
         version: 16.4.6(@playwright/test@1.63.0)(@types/node@24.19.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -54,9 +60,6 @@ importers:
       '@axe-core/playwright':
         specifier: 4.14.0
         version: 4.14.0(playwright-core@1.63.0)
-      '@ductura/contracts':
-        specifier: https://github.com/ductura/Institution_server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz
-        version: https://github.com/ductura/Institution_server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz
       '@playwright/test':
         specifier: 1.63.0
         version: 1.63.0
@@ -69,9 +72,6 @@ importers:
       '@types/react-dom':
         specifier: 19.3.0
         version: 19.3.0(@types/react@19.3.0)
-      ajv:
-        specifier: 8.20.0
-        version: 8.20.0
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2
@@ -99,9 +99,9 @@ packages:
     peerDependencies:
       playwright-core: '>= 1.0.0'
 
-  '@ductura/contracts@https://github.com/ductura/Institution_server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz':
-    resolution: {integrity: sha512-s7Jp9VSwai9K/7azDNruikV0rIjLzb1c2CuJlb8wQtKPVjA5iZFqrd6bGUkHAEFDXFxge2uM+Tm2VPUR4Lsz0Q==, tarball: https://github.com/ductura/Institution_server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz}
-    version: 2.6.0
+  '@ductura/contracts@https://github.com/ductura/Institution_server/releases/download/contracts-v2.9.1/ductura-contracts-2.9.1.tgz':
+    resolution: {integrity: sha512-jMKagDoTdOl4n5cr8qwqIUocbUI7C/qmHnKNwTBiFCN7UI/SaccvQxrw00BX0l2ZU3hrSdNnFK1pb0SiaauFsw==, tarball: https://github.com/ductura/Institution_server/releases/download/contracts-v2.9.1/ductura-contracts-2.9.1.tgz}
+    version: 2.9.1
 
   '@emnapi/core@2.0.0-beta.2':
     resolution: {integrity: sha512-MzCVoWtcg4Pm2B3je5mMvYMvj3MmBKw+fU7vbsJc9/iT8ip6/eYIHo/Dsm/mr+wsHB6SEyJDuxB09Yy6r/8+4A==}
@@ -1226,7 +1226,7 @@ snapshots:
       axe-core: 4.14.1
       playwright-core: 1.63.0
 
-  '@ductura/contracts@https://github.com/ductura/Institution_server/releases/download/contracts-v2.6.0/ductura-contracts-2.6.0.tgz': {}
+  '@ductura/contracts@https://github.com/ductura/Institution_server/releases/download/contracts-v2.9.1/ductura-contracts-2.9.1.tgz': {}
 
   '@emnapi/core@2.0.0-beta.2':
     dependencies:
