@@ -13,7 +13,7 @@ on:
       institution_web_mobile_ref: { description: 'Institution_web_mobile', default: 'migracija/nextjs' }
       web_other_ref: { description: 'Web_other', default: 'migracija/nextjs' }
   push:
-    branches: [migracija/nextjs]
+    branches: [migracija/nextjs, migracija/wint09-zavrsni-prolaz-faze3-edge-ci] # TEMP: probni run INT-09, ukloniti prije SPREMAN
 concurrency:
   group: sistem-${{ github.ref }}
   cancel-in-progress: true
