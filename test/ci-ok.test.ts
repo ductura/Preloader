@@ -176,6 +176,15 @@ test('ci.yml itself runs on pull requests', () => {
 // pull request, push or merge queue.
 test('no other workflow runs jobs that ci-ok cannot see', () => {
   for (const file of readdirSync(dir).filter((f) => /\.ya?ml$/i.test(f) && f !== 'ci.yml')) {
-    assert.deepEqual(strayEvents(readFileSync(new URL(file, dir), 'utf8')), [], file);
+    const text = readFileSync(new URL(file, dir), 'utf8');
+    // INT-09: sistem.yml smije biti pokrenut pushem na bazu migracija/nextjs (nije required check i ne ulazi u
+    // ci-ok); nikad pull_requestom ni drugom granom.
+    if (file === 'sistem.yml') {
+      assert.deepEqual(strayEvents(text), ['push'], file);
+      const on = workflowOf(text)['on'] as Obj;
+      assert.deepEqual((on['push'] as Obj)['branches'], ['migracija/nextjs'], file);
+      continue;
+    }
+    assert.deepEqual(strayEvents(text), [], file);
   }
 });
