@@ -1,0 +1,179 @@
+name: Sistem
+# INT-09: cijeli stog iza edgea :8000 na GitHub runneru (LOK-2), pa INT-07 (A01 usmjeravanje po
+# uređaju, e2e/vs2) i INT-06 (A02/A03 otvaranje izmišljene ustanove, Aplication_server) kroz pravi edge.
+# Nije required check i ne ulazi u ci-ok: ci.yml je jedini tijek koji ci-ok vidi (test/ci-ok.test.ts).
+# Docker i PostgreSQL rade samo ovdje, na runneru (service container); ništa se ne pokreće na računalu vlasnika.
+on:
+  workflow_dispatch:
+    inputs:
+      aplication_server_ref: { description: 'Aplication_server (grana s INT-06 testom)', default: 'migracija/cint06-admin-otvaranje-ustanove-e2e' }
+      aplication_front_ref: { description: 'Aplication_front', default: 'migracija/faza2' }
+      institution_server_ref: { description: 'Institution_server', default: 'migracija/kopija-ductus-backend' }
+      institution_front_ref: { description: 'Institution_front_web_chrome', default: 'migracija/kopija-ductus-front' }
+      institution_web_mobile_ref: { description: 'Institution_web_mobile', default: 'migracija/nextjs' }
+      web_other_ref: { description: 'Web_other', default: 'migracija/nextjs' }
+  push:
+    branches: [migracija/nextjs]
+concurrency:
+  group: sistem-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  sistem:
+    name: sistem (edge :8000, INT-06 i INT-07)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          # Javna lozinka jednokratne baze na runneru; nije tajna i nije u Secretsima.
+          POSTGRES_PASSWORD: ductura-ci-samo
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DUCTURA_REPOS: ${{ github.workspace }}/ductura
+      DATABASE_URL: postgres://postgres:ductura-ci-samo@127.0.0.1:5432/postgres
+      INT06_DATABASE_URL: postgres://postgres:ductura-ci-samo@127.0.0.1:5432/ductura_int06_test
+      PGPASSWORD: ductura-ci-samo
+      # Svi repoi ductura/* su javni: checkout ne treba tajnu ni PAT.
+      REF_APLICATION_SERVER: ${{ inputs.aplication_server_ref || 'migracija/cint06-admin-otvaranje-ustanove-e2e' }}
+      REF_APLICATION_FRONT: ${{ inputs.aplication_front_ref || 'migracija/faza2' }}
+      REF_INSTITUTION_SERVER: ${{ inputs.institution_server_ref || 'migracija/kopija-ductus-backend' }}
+      REF_INSTITUTION_FRONT: ${{ inputs.institution_front_ref || 'migracija/kopija-ductus-front' }}
+      REF_WEB_MOBILE: ${{ inputs.institution_web_mobile_ref || 'migracija/nextjs' }}
+      REF_WEB_OTHER: ${{ inputs.web_other_ref || 'migracija/nextjs' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { path: ductura/Preloader, persist-credentials: false }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { repository: ductura/Aplication_server, ref: '${{ env.REF_APLICATION_SERVER }}', path: ductura/Aplication_server, persist-credentials: false }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { repository: ductura/Aplication_front, ref: '${{ env.REF_APLICATION_FRONT }}', path: ductura/Aplication_front, persist-credentials: false }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { repository: ductura/Institution_server, ref: '${{ env.REF_INSTITUTION_SERVER }}', path: ductura/Institution_server, persist-credentials: false }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { repository: ductura/Institution_front_web_chrome, ref: '${{ env.REF_INSTITUTION_FRONT }}', path: ductura/Institution_front_web_chrome, persist-credentials: false }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { repository: ductura/Institution_web_mobile, ref: '${{ env.REF_WEB_MOBILE }}', path: ductura/Institution_web_mobile, persist-credentials: false }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { repository: ductura/Web_other, ref: '${{ env.REF_WEB_OTHER }}', path: ductura/Web_other, persist-credentials: false }
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with: { package_json_file: ductura/Preloader/package.json }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version-file: ductura/Preloader/.nvmrc }
+
+      - name: Install dependencies of every repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          for repo in Preloader Aplication_server Aplication_front Institution_server Institution_front_web_chrome Institution_web_mobile Web_other; do
+            echo "::group::pnpm install $repo"
+            (cd "ductura/$repo" && pnpm install --frozen-lockfile)
+            echo "::endgroup::"
+          done
+
+      - name: Unit test of the report script
+        working-directory: ductura/Preloader
+        run: node --test e2e/system/izvjestaj.test.mjs
+
+      - name: Start the stack behind the edge (pnpm sve)
+        id: stack
+        working-directory: ductura/Preloader
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sistem"
+          nohup pnpm sve > "$RUNNER_TEMP/sistem/stog.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/sistem/stog.pid"
+          # Institution_server prvi put migrira i gradi se; pnpm sve čeka do 300 s po usluzi.
+          for i in $(seq 1 120); do
+            if grep -q 'Ductura lokalno:' "$RUNNER_TEMP/sistem/stog.log"; then break; fi
+            if ! kill -0 "$(cat "$RUNNER_TEMP/sistem/stog.pid")" 2>/dev/null; then echo '::error::pnpm sve je završio'; tail -n 80 "$RUNNER_TEMP/sistem/stog.log"; exit 1; fi
+            sleep 5
+          done
+          grep -q 'Ductura lokalno:' "$RUNNER_TEMP/sistem/stog.log" || { echo '::error::stog nije spreman u 10 min'; tail -n 80 "$RUNNER_TEMP/sistem/stog.log"; exit 1; }
+          grep -E '^  (radi|NE ODGOVARA)' "$RUNNER_TEMP/sistem/stog.log"
+          curl --fail --silent --show-error http://localhost:8000/api/v1/health
+          curl --fail --silent --show-error --output /dev/null http://localhost:8000/
+
+      - name: Install Playwright browsers
+        if: steps.stack.outcome == 'success'
+        working-directory: ductura/Preloader
+        run: pnpm exec playwright install --with-deps chromium firefox webkit
+
+      # INT-07: A01 usmjeravanje i matrica uređaja kroz pravi edge (bez lažnih frontenda iz edge-fixture.mjs).
+      - name: INT-07 A01 routing and device matrix
+        id: int07
+        if: steps.stack.outcome == 'success'
+        continue-on-error: true
+        working-directory: ductura/Preloader
+        env:
+          CI: 'true'
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/sistem/int07.json
+        run: pnpm exec playwright test -c e2e/vs2/playwright.config.ts --reporter=list,json
+
+      # INT-06: A02/A03 otvaranje izmišljene ustanove; test je u Aplication_serveru (scripts/lokalno).
+      - name: INT-06 A02/A03 opening a fictional institution
+        id: int06
+        if: steps.stack.outcome == 'success'
+        continue-on-error: true
+        working-directory: ductura/Aplication_server
+        env:
+          INT06_PROVISIONING_TOKEN_FILE: ${{ github.workspace }}/ductura/Institution_server/.local/provisioning-token
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -h 127.0.0.1 -U postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE ductura_int06_test'
+          node --test scripts/lokalno/admin-otvaranje-ustanove-e2e.test.mjs 2>&1 | tee "$RUNNER_TEMP/sistem/int06.log"
+          test "${PIPESTATUS[0]}" -eq 0
+
+      - name: Report (table, SHAs, vs-run.json)
+        id: report
+        if: always()
+        working-directory: ductura/Preloader
+        env:
+          STACK_OUTCOME: ${{ steps.stack.outcome }}
+          INT07_OUTCOME: ${{ steps.int07.outcome }}
+          INT06_OUTCOME: ${{ steps.int06.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          node e2e/system/izvjestaj.mjs \
+            --repos "$DUCTURA_REPOS" \
+            --int07 "$RUNNER_TEMP/sistem/int07.json" \
+            --out "$RUNNER_TEMP/sistem/vs-run.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Stop the stack
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/sistem/stog.pid" ]; then kill -TERM -- "-$(cat "$RUNNER_TEMP/sistem/stog.pid")" 2>/dev/null || kill -TERM "$(cat "$RUNNER_TEMP/sistem/stog.pid")" 2>/dev/null || true; fi
+          true
+
+      - name: Upload vs-run.json and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vs-run
+          path: |
+            ${{ runner.temp }}/sistem/vs-run.json
+            ${{ runner.temp }}/sistem/stog.log
+            ${{ runner.temp }}/sistem/int06.log
+            ${{ runner.temp }}/sistem/int07.json
+            ductura/Preloader/test-results/
+          retention-days: 14
+          if-no-files-found: warn
+
+      # Pad se ne skriva: nakon pohrane dokaza posao je crven ako je ijedan scenarij PAD ili nije pokrenut.
+      - name: Fail when any scenario is not PROLAZ
+        if: always()
+        shell: bash
+        run: |
+          test "$(jq -r '.sveProlazi' "$RUNNER_TEMP/sistem/vs-run.json")" = "true"
