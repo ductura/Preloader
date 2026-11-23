@@ -65,7 +65,7 @@ Okolina koju skripta postavlja:
 - Aplication_server: `DATABASE_URL` na bazu `ductura`, `INSTITUTION_SERVER_URL=http://127.0.0.1:4000`, `AAI_OIDC_ISSUER=http://localhost:8090` (issuer nove institucije; obrazac ga ne traži), `DUCTURA_ADMIN_TOKEN_SECRET` (nova pri svakom pokretanju, pa se administrator nakon ponovnog pokretanja prijavljuje iznova) i `DUCTURA_PROVISIONING_TOKEN` iz `.local/` Institution_servera.
 - Aplication_front: `APLICATION_SERVER_URL=http://127.0.0.1:3110`, `PUBLIC_ORIGIN=http://localhost:8000`.
 - Institution_server: samo `DATABASE_URL` na bazu `ductus`. Sve ostalo (server na `127.0.0.1:4000`, `APP_ORIGIN=http://localhost:8000`, issuer `http://localhost:8090`, povratak `http://localhost:8000/api/v1/auth/callback`, lozinke prijava i token provisioninga u `.local/`) postavlja njegov `pnpm lokalno` (vidi njegov `docs/LOKALNO.md`).
-- front institucije: `INSTITUTION_SERVER_URL=http://127.0.0.1:4000`.
+- front institucije: `INSTITUTION_SERVER_URL=http://127.0.0.1:4000`, `OIDC_ISSUER=http://localhost:8090` (CSP `form-action` stranice pušta preusmjeravanje odjave na simulator AAI@EduHr; bez njega odjava stane na stranici).
 - Ostalo iz Vaše okoline prolazi nepromijenjeno; `PORT`, `DATABASE_URL`, `DUCTURA_PROVISIONING_TOKEN` i `DUCTURA_ADMIN_TOKEN_SECRET` iz okoline se ne prenose. Nijedna tajna se ne ispisuje.
 
 Sam edge bez ostalih usluga: `pnpm build && pnpm start` u jednom terminalu i `pnpm edge` u drugom. Preloader iza edgea nije `next dev`: ondje Next dodaje vlastite skripte, pa stranica dobiva strogu zamjensku politiku i vidi se bez stila (§3).

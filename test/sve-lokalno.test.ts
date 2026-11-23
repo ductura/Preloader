@@ -63,6 +63,10 @@ describe('usluge iz ugovora §1', () => {
     expect(DATABASES).toEqual({ institution: 'ductus', aplication: 'ductura' });
   });
 
+  test('front institucije: issuer simulatora za form-action odjave', () => {
+    expect(by('front-institucije')?.env).toMatchObject({ INSTITUTION_SERVER_URL: 'http://127.0.0.1:4000', OIDC_ISSUER });
+  });
+
   test('nijedna usluga nema token ni tajnu u planu', () => {
     for (const s of list) expect(Object.keys(s.env)).not.toContain('DUCTURA_PROVISIONING_TOKEN');
   });

@@ -95,7 +95,9 @@ export function services() {
       repo: 'Institution_front_web_chrome',
       script: 'dev',
       listens: [['front-institucije', 5173]],
-      env: { PORT: '5173', INSTITUTION_SERVER_URL },
+      // OIDC_ISSUER: form-action u CSP-u stranice pušta 303 odjave na end_session simulatora;
+      // bez njega preglednik zaustavlja odjavu na stranici (INT-20).
+      env: { PORT: '5173', INSTITUTION_SERVER_URL, OIDC_ISSUER },
     },
   ];
 }
