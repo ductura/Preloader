@@ -1,4 +1,6 @@
 // Sve na jednoj domeni: ductura.org. Putanje su relativne, pa stranica ne zove drugi poslužitelj.
+// Odredišta slijede tablicu ruta `deploy/edge/routes.ts` (jedini zapis putanja usluga, DAN-1550);
+// `test/config-routes.test.ts` pada čim se razmimoiđu.
 export interface Config {
   frontends: { chrome: string; mobile: string; other: string };
   downloads: { windows: string; macos: string };

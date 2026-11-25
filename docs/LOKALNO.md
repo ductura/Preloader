@@ -78,6 +78,10 @@ Sam edge bez ostalih usluga: `pnpm build && pnpm start` u jednom terminalu i `pn
 | `/admin`, `/admin/*` | Aplication_front :3120 |
 | `/api/v1`, `/api/v1/*` | Institution_server :4000 |
 | `/app/web`, `/app/web/*`, `/app/chrome`, `/app/chrome/*` | front institucije :5173 |
+| `/app/mobile`, `/app/mobile/*` | Institution_web_mobile (`DUCTURA_EDGE_MOBILE`; bez nje preloader, 404) |
+| `/o`, `/o/*` | Web_other (`DUCTURA_EDGE_OTHER`; bez nje preloader, 404) |
+
+Putanje usluga zapisane su samo u `deploy/edge/routes.ts`; iz nje čitaju rewriteovi Nexta i edge, a `test/config-routes.test.ts` provjerava da ih slijede i odredišta u `src/config.ts` (mobilni `/app/mobile/`, ostali `/o/`, uz lokalni `307` s `/app/web/` s početnog ekrana). Promjena basePatha u drugom repozitoriju traži izmjenu te tablice u istom koraku.
 
 - Putanja se uspoređuje doslovno: bez dekodiranja i bez promjene velikih slova. `/Admin`, `/%61dmin`, `/administracija` i `/api/v2/...` nisu prosljeđeni nego idu preloaderu (404 Nexta).
 - Putanja i upit prosljeđuju se nepromijenjeni: front institucije dobiva `/app/web/...`, ne `/...`.
@@ -124,7 +128,7 @@ Studenti i svi računi institucije prijavljuju se samo preko AAI@EduHr, lokalno 
 | Dodavanje institucije javlja grešku issuera | Aplication_server je pokrenut bez `AAI_OIDC_ISSUER`, dakle ne kroz `pnpm sve`. |
 | Nakon prijave nema kolačića | `__Host-` kolačić traži `Secure`. Chrome i Firefox ga na `http://localhost` prihvaćaju; drugi preglednici možda ne. Za lokalni rad koristite Chrome ili Firefox. |
 | Na Windowsu „Na Windowsu pokrenite kroz pnpm” | Pokrenite `pnpm sve`, ne `node scripts/sve-lokalno.mjs`. |
-| `/app/mobile/` daje 404 | Ugovor §1 zasad nema rutu za mobilno sučelje; preloader ga nudi na mobitelu. Otvoreno pitanje za orkestratora. |
+| `/app/mobile/` ili `/o/` daje 404 | Usluga nije pokrenuta lokalno: `pnpm sve` ih preskače bez checkouta (`Institution_web_mobile`, `Web_other`), a edge ih tada ne prosljeđuje. Pokrenite ih i postavite `DUCTURA_EDGE_MOBILE` odnosno `DUCTURA_EDGE_OTHER`. |
 
 ## 7. Testovi
 
