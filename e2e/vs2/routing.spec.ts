@@ -89,3 +89,14 @@ test('nepoznata putanja vraća hrvatsku stranicu greške sa statusom 404', async
   await expect(page.getByRole('heading', { name: 'Stranica ne postoji' })).toBeVisible();
   await expect(page.getByRole('link', { name: text.home })).toHaveAttribute('href', '/');
 });
+
+// Put za promjenu zapamćenog izbora: `/ulaz?izbor` prikazuje izbor i nikad ne prelazi sam.
+test('/ulaz?izbor ostaje na ulazu i prikazuje izbor, i uz zapamćeni izbor', async ({ page, context }, info) => {
+  const device = matrixDevice(info.project.name);
+  await prepareFirstScreen(page, context, device);
+  await page.addInitScript(() => localStorage.setItem('ductura.choice', JSON.stringify({ v: 1, package: 'windows' })));
+  await page.goto(`${FIRST_SCREEN_PATH}?izbor`, { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#choice')).toBeVisible();
+  await page.clock.runFor(REDIRECT_DELAY_MS * 2);
+  expect(new URL(page.url()).pathname).toBe(FIRST_SCREEN_PATH);
+});

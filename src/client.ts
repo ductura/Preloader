@@ -84,14 +84,21 @@ export function applyRoute(
   let cancel: (() => void) | void = undefined;
   let stopTicking: (() => void) | undefined;
   let prefetch: HTMLLinkElement | null = null;
-  const stop = (): void => {
+  let active = true;
+  /** `announce`: korisnik ostaje na stranici (poruka „Ostajete…”); inače ide dalje ili bira, pa poruke nema. */
+  const stop = (announce: boolean): void => {
+    if (!active) return;
+    active = false;
     cancel?.();
     cancel = undefined;
     stopTicking?.();
     stopTicking = undefined;
     prefetch?.remove();
     prefetch = null;
-    if (countdown && !countdown.hidden) countdown.textContent = text.stayed;
+    if (countdown && !countdown.hidden) {
+      countdown.textContent = announce ? text.stayed : '';
+      countdown.hidden = !announce;
+    }
     if (stay) stay.hidden = true;
   };
 
@@ -120,7 +127,10 @@ export function applyRoute(
   }
   // Klik, tipka ili fokus bilo gdje na ekranu zaustavlja odbrojavanje: prijelaz ne smije preteći korisnika.
   const screen = doc.querySelector('main') ?? doc.body;
-  for (const type of ['click', 'keydown', 'focusin']) screen.addEventListener(type, stop);
+  for (const type of ['click', 'keydown', 'focusin']) {
+    // Klik na poveznicu vodi dalje: tada se ne tvrdi da korisnik ostaje.
+    screen.addEventListener(type, (event) => stop(!(type === 'click' && (event.target as Element | null)?.closest?.('a'))));
+  }
   if (!section) return route;
   section.hidden = false;
   section.addEventListener('click', (event) => {
@@ -130,7 +140,7 @@ export function applyRoute(
     const pkg = button.getAttribute('data-package') as DesktopPackage | null;
     if (!view && !pkg) return;
     // Korisnik bira: automatsko preusmjeravanje više ne smije preteći njegov klik.
-    stop();
+    stop(false);
     manual = view ? { ...manual, view } : { ...manual, package: pkg ?? undefined };
     const saved = writeChoice(store, manual);
     decision = resolveChoice(auto, manual);

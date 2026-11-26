@@ -4,6 +4,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { applyRoute, REDIRECT_DELAY_MS } from '../src/client.ts';
 import { defaultConfig } from '../src/config.ts';
+import { clientText } from '../src/client-text.ts';
 import { renderPage } from '../src/page.ts';
 import { UA } from './user-agents.ts';
 
@@ -94,6 +95,21 @@ describe('ulaz bez prijave i administracije', () => {
     applyRoute(doc, { userAgent: UA.chromeAndroid }, withMobile, go);
     expect(go).toHaveBeenCalledWith('/mobilna/prijava', REDIRECT_DELAY_MS);
     expect(doc.querySelector('[data-view="mobile"]')).not.toBeNull();
+  });
+
+  test('klik na poveznicu zaustavlja odbrojavanje bez poruke „Ostajete”, tipka je ispisuje', () => {
+    const run = (target: string, type: string) => {
+      const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
+      applyRoute(doc, { userAgent: UA.chromeMac }, defaultConfig, () => () => undefined);
+      doc.getElementById(target)?.dispatchEvent(new Event(type, { bubbles: true }));
+      return doc.getElementById('countdown') as HTMLElement;
+    };
+    const link = run('open-app', 'click');
+    expect(link.hidden).toBe(true);
+    expect(link.textContent).toBe('');
+    const key = run('open-app', 'keydown');
+    expect(key.hidden).toBe(false);
+    expect(key.textContent).toBe(clientText.stayed);
   });
 
   test('klik, tipka ili fokus unutar ekrana zaustavljaju odbrojavanje (P-0.3)', () => {

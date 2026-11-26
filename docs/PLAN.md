@@ -68,6 +68,11 @@ Ovisi o `@ductura/contracts` (generirani klijent, katalog grešaka, vektori), `@
 | P-0.4 | Provjera servera i verzije API-ja | S-1M-a | shema `health` (U4, U7) | standard |
 | P-0.5 | Stranice grešaka iz kataloga | S-1M-c | katalog grešaka u ugovoru (U4) | standard |
 | P-0.8 | Slanje konteksta klijenta | S-1M-b | shema `client-context` | standard |
+| P-0.7 | Ulaz u prijavu AAI@EduHr; FIDO2 za mrežnog inženjera | S-1E-a, S-1E-g | sheme `auth/*` + lažni OIDC i FIDO2 (U9); spajanje tek uz S-1E-a i S-1E-g | critical |
+| P-0.6 | Traka kolačića i ekran pristanka | S-1N-d | shema pristanka i `legal`; spajanje uz S-1N-d | critical |
+| P-0.9 | Info stranica, pravni tekstovi, preuzimanje | S-1N-c, S-1H.5 | sheme `legal`, `downloads` | standard |
+| P-0.10 | Proxy na domeni i lokalni sistemski stog | S-1H.7 | S-1H.7 (treba pravi server) | critical |
+| VS-1 | Vertikalni presjek (ulaz i preusmjeravanje) | S-1E-a, S-1D-d, S-1M-a, S-M-5, E-0.2, P-0.1 | isto | critical |
 
 **P-0.3, odluka vlasnika 27. 11. 2026. (zamjenjuje čekanje od 4 s na `/ulaz`):**
 
@@ -79,11 +84,6 @@ Ovisi o `@ductura/contracts` (generirani klijent, katalog grešaka, vektori), `@
 | `/ulaz?izbor` | uvijek prikazuje izbor, bez automatskog prijelaza (put za promjenu zapamćenog izbora) | nije postojalo | novo |
 
 Vrijeme do prijave: zapamćen izbor 4 s → 0 s, prvi posjet 4 s → 1,5 s (uz prefetch ciljne stranice).
-| P-0.7 | Ulaz u prijavu AAI@EduHr; FIDO2 za mrežnog inženjera | S-1E-a, S-1E-g | sheme `auth/*` + lažni OIDC i FIDO2 (U9); spajanje tek uz S-1E-a i S-1E-g | critical |
-| P-0.6 | Traka kolačića i ekran pristanka | S-1N-d | shema pristanka i `legal`; spajanje uz S-1N-d | critical |
-| P-0.9 | Info stranica, pravni tekstovi, preuzimanje | S-1N-c, S-1H.5 | sheme `legal`, `downloads` | standard |
-| P-0.10 | Proxy na domeni i lokalni sistemski stog | S-1H.7 | S-1H.7 (treba pravi server) | critical |
-| VS-1 | Vertikalni presjek (ulaz i preusmjeravanje) | S-1E-a, S-1D-d, S-1M-a, S-M-5, E-0.2, P-0.1 | isto | critical |
 
 Za `critical` zadatke (P-0.6, P-0.7) PRIJEDLOG: gradi se nad lažnim serverom, a spaja tek kad pravi serverski zadatak prođe iste vektore. P-0.7 ne gradi prijavu admina aplikacije (pitanje 8).
 
