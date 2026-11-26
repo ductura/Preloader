@@ -1,17 +1,23 @@
 // Lokalni edge (ugovor #2028 §1): jedino podrijetlo http://localhost:8000 za preglednik.
 // Samo za razvoj na jednom računalu; pravi rubni proxy u produkciji je P-0.10.
 //
-// Rute su u tablici `routes.ts`, iz koje čitaju i rewriteovi Nexta (src/rewrites.ts):
-//   /                      -> naslovnica fronta institucije (:5173, putanja /app/web/naslovnica; DAN-1574)
-//   /prijava               -> prvi ekran preloadera (Next.js, :3100; Next ga prepisuje na /; DAN-1574)
+// Rute su u tablici `routes.ts`, iz koje čitaju i rewriteovi Nexta (src/rewrites.ts). Karta adresa D-318:
+//   /                      -> naslovnica fronta institucije (:5173, putanja /app/web/naslovnica)
+//   /ulaz                  -> preloader (Next.js, :3100; Next ga prepisuje na svoj /)
+//   /preuzimanja, /pomoc, /kontakt, /uvjeti-koristenja, /privatnost, /pristupacnost, /stanje
+//                          -> front institucije, ista putanja pod /app/web
+//   /aplikacija, /aplikacija/*         -> front institucije, /app/web/* (dok front ne prijeđe na /aplikacija)
+//   /administracija, /administracija/* -> Aplication_front, /admin/* (dok ne prijeđe na /administracija)
 //   sve ostalo             -> preloader (Next.js, :3100)
 //   /admin, /admin/*       -> Aplication_front (:3120)
 //   /api/v1, /api/v1/*     -> Institution_server (:4000)
 //   /app/web, /app/chrome  -> front institucije (:5173)
 //   /app/mobile            -> Institution_web_mobile (DUCTURA_EDGE_MOBILE; bez nje preloader, 404)
 //   /o                     -> Web_other (DUCTURA_EDGE_OTHER; bez nje preloader, 404)
-// Samo lokalno: /app/web s prvog ekrana preloadera (/prijava) -> 307 na /o/ (EDGE_ONLY_REDIRECT, VS-2).
-// Adresa u pregledniku za / i /prijava ostaje ista; front za / dobiva putanju iz ENTRY_REWRITES uz isti upit.
+// Adresa u pregledniku za javne putanje ostaje ista; usluga dobiva putanju iz ENTRY_REWRITES uz isti upit.
+// Samo lokalno: stare adrese (LEGACY_REDIRECTS) -> 307 (`/api/auth/*` 308) na nove, i /app/web s preloadera
+// (/ulaz) -> 307 na /o/ (EDGE_ONLY_REDIRECT, VS-2). /ulaz, /aplikacija i /administracija nose
+// `X-Robots-Tag: noindex`.
 //
 // Putanja se uspoređuje doslovno, bez dekodiranja i bez promjene velikih slova (P-0.10,
 // src/sign-in/README.md): `/%61dmin` ili `/Admin` nisu administracija. Host, kolačići,
@@ -21,7 +27,7 @@
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 import { contentSecurityPolicyFor } from './content-security-policy.ts';
-import { EDGE_ONLY_REDIRECT, entryFor, SERVICES, serviceFor } from './routes.ts';
+import { EDGE_ONLY_REDIRECT, entryFor, redirectFor, SERVICES, serviceFor } from './routes.ts';
 import { isMain } from '../../scripts/is-main.ts';
 
 /** @typedef {import('./routes.ts').Service} Service */
@@ -110,25 +116,26 @@ function available(/** @type {Service} */ service, /** @type {Partial<Record<Ups
 }
 
 /**
- * Kamo ide zahtjev i s kojom putanjom (bez upita). Ulaz usluge (`/` na naslovnicu fronta; ENTRY_REWRITES,
- * DAN-1574) mijenja putanju prema uzvodnom; sve ostale putanje idu nepromijenjene. `/prijava` ide preloaderu
- * kao `/prijava`: njegov Next je sam prepisuje na `/` (src/rewrites.ts, `entryRewrites`). Poslan kao `/`,
- * preloader izgrađen s `INSTITUTION_FRONT_URL` bi ga opet poslao na naslovnicu. Ulaz čija usluga lokalno
- * ne postoji ide preloaderu s izvornom putanjom.
+ * Kamo ide zahtjev, s kojom putanjom (bez upita) i nosi li odgovor `X-Robots-Tag: noindex`. Javna putanja
+ * (ENTRY_REWRITES, karta adresa D-318) mijenja putanju prema uzvodnom; sve ostale putanje idu nepromijenjene.
+ * `/ulaz` ide preloaderu kao `/ulaz`: njegov Next je sam prepisuje na `/` (src/rewrites.ts, `entryRewrites`).
+ * Poslan kao `/`, preloader izgrađen s `INSTITUTION_FRONT_URL` bi ga opet poslao na naslovnicu. Javna putanja
+ * čija usluga lokalno ne postoji ide preloaderu s izvornom putanjom (404).
  * @param {string} rawPath
  * @param {string} [referer]
  * @param {Partial<Record<Upstream | Variant, URL>>} [targets]
- * @returns {{ route: Upstream | Variant, path: string }}
+ * @returns {{ route: Upstream | Variant, path: string, noindex: boolean }}
  */
 export function forwardFor(rawPath, referer, targets = {}) {
-  const entry = entryFor(rawPath);
-  if (entry !== null) {
-    if (entry.service === null) return { route: 'preloader', path: rawPath };
-    if (available(entry.service, targets)) return { route: entry.service, path: entry.destination };
-    return { route: 'preloader', path: rawPath };
+  const found = entryFor(rawPath);
+  if (found !== null) {
+    const { entry, path } = found;
+    const noindex = entry.noindex;
+    if (entry.service !== null && available(entry.service, targets)) return { route: entry.service, path, noindex };
+    return { route: 'preloader', path: rawPath, noindex };
   }
   const service = serviceFor(rawPath);
-  if (service !== null) return { route: available(service, targets) ? service : 'preloader', path: rawPath };
+  if (service !== null) return { route: available(service, targets) ? service : 'preloader', path: rawPath, noindex: false };
   if (rawPath.startsWith('/__nextjs') && referer) {
     let from = '';
     try {
@@ -136,9 +143,9 @@ export function forwardFor(rawPath, referer, targets = {}) {
     } catch {
       // Neispravan Referer: preloader.
     }
-    if (from && !from.startsWith('/__nextjs')) return { route: routeFor(from, undefined, targets), path: rawPath };
+    if (from && !from.startsWith('/__nextjs')) return { route: routeFor(from, undefined, targets), path: rawPath, noindex: false };
   }
-  return { route: 'preloader', path: rawPath };
+  return { route: 'preloader', path: rawPath, noindex: false };
 }
 
 /** Ime hosta za spajanje: IPv6 iz URL-a (`[::1]`) bez uglatih zagrada. */
@@ -152,15 +159,17 @@ function pathOf(/** @type {string} */ target) {
   return path.startsWith('/') ? path : '';
 }
 
-// Samo odabir s prvog ekrana preloadera (`/prijava`, DAN-1574) koristi /app/web/ za Web_other. Povratak iz
+// Samo odabir s preloadera (`/ulaz`, karta adresa D-318) koristi /app/web/ za Web_other. Povratak iz
 // AAI@EduHr, izravni pristup, poveznice naslovnice (`/`) i Chromeovi resursi pod /app/web/ pripadaju
 // postojećem hostu.
 function fromFirstScreen(/** @type {import('node:http').IncomingMessage} */ req) {
   const source = URL.parse(req.headers.referer ?? '');
   if (source?.protocol !== 'http:' || source.host !== req.headers.host) return false;
-  const entry = entryFor(source.pathname);
-  return entry !== null && entry.service === null;
+  return entryFor(source.pathname)?.entry.service === null;
 }
+
+/** Zaglavlje koje drži ulaz, aplikaciju i administraciju izvan tražilica (karta adresa D-318). */
+const NOINDEX = Object.freeze(['X-Robots-Tag', 'noindex']);
 
 // RFC 9110 §7.6.1: vrijede samo za jednu vezu i ne prosljeđuju se.
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'te', 'trailer', 'upgrade']);
@@ -222,10 +231,10 @@ function upstreamHeaders(req, upgrade, identity = false) {
 
 const isHtml = (/** @type {string | undefined} */ type) => String(type).toLowerCase().startsWith('text/html');
 
-/** Kratak tekstualni odgovor (bez HTML-a, pa bez CSP-a). */
-function sendPlain(/** @type {import('node:http').ServerResponse} */ res, /** @type {number} */ status) {
+/** Kratak tekstualni odgovor (bez HTML-a, pa bez CSP-a); `extra` su dodatna sirova zaglavlja. */
+function sendPlain(/** @type {import('node:http').ServerResponse} */ res, /** @type {number} */ status, /** @type {readonly string[]} */ extra = []) {
   if (res.headersSent) return;
-  res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.writeHead(status, ['Content-Type', 'text/plain; charset=utf-8', 'Cache-Control', 'no-store', ...extra]);
   res.end(`${status}\n`);
 }
 
@@ -296,12 +305,13 @@ function sendError(
   /** @type {import('node:http').ServerResponse} */ res,
   /** @type {number} */ status,
   /** @type {(line: string) => void} */ log,
+  /** @type {readonly string[]} */ extra = [],
 ) {
   if (res.headersSent) {
     res.destroy();
     return;
   }
-  const plain = () => sendPlain(res, status);
+  const plain = () => sendPlain(res, status, extra);
   const page = httpRequest({ hostname: connectHost(preloader), port: preloader.port || 80, path: '/greska.html', timeout: 5000 });
   page.on('response', (incoming) => {
     if (incoming.statusCode !== 200 || !isHtml(incoming.headers['content-type'])) {
@@ -309,7 +319,7 @@ function sendError(
       plain();
       return;
     }
-    void sendHtml(res, status, ['Content-Type', 'text/html; charset=utf-8', 'Cache-Control', 'no-store'], incoming, log);
+    void sendHtml(res, status, ['Content-Type', 'text/html; charset=utf-8', 'Cache-Control', 'no-store', ...extra], incoming, log);
   });
   page.on('timeout', () => page.destroy(new Error('timeout')));
   page.on('error', plain);
@@ -334,10 +344,17 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       res.writeHead(EDGE_ONLY_REDIRECT.status, { Location: location, 'Cache-Control': 'no-store' }).end();
       return;
     }
-    const { route, path } = forwardFor(rawPath, req.headers.referer, targets);
+    // Stara adresa (karta adresa D-318): samo lokalno, 307 (`/api/auth/*` 308); upit ide uz novu adresu.
+    const moved = redirectFor(rawPath);
+    if (moved !== null) {
+      res.writeHead(moved.status, { Location: `${moved.location}${target.slice(rawPath.length)}`, 'Cache-Control': 'no-store' }).end();
+      return;
+    }
+    const { route, path, noindex } = forwardFor(rawPath, req.headers.referer, targets);
+    const robots = noindex ? NOINDEX : [];
     // Preloader nema obrazaca ni API-ja: drugo od GET i HEAD ne ide dalje.
     if (route === 'preloader' && req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { Allow: 'GET, HEAD' }).end();
+      res.writeHead(405, ['Allow', 'GET, HEAD', ...robots]).end();
       return;
     }
 
@@ -355,11 +372,13 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
     outgoing.on('response', (incoming) => {
       const status = incoming.statusCode ?? 502;
       // 304 nema tijela: preglednik zadržava spremljenu stranicu i njezin CSP.
+      // Rub odlučuje o indeksiranju javne putanje: zaglavlje uzvodnog se zamjenjuje.
+      const received = noindex ? without(endToEnd(incoming.rawHeaders), ['x-robots-tag']) : endToEnd(incoming.rawHeaders);
       if (preloader && status !== 304 && isHtml(incoming.headers['content-type'])) {
-        void sendHtml(res, status, endToEnd(incoming.rawHeaders), incoming, log);
+        void sendHtml(res, status, [...received, ...robots], incoming, log);
         return;
       }
-      const headers = endToEnd(incoming.rawHeaders);
+      const headers = [...received, ...robots];
       if (otherEntry) headers.push('Vary', 'Referer');
       res.writeHead(status, incoming.statusMessage, headers);
       incoming.pipe(res);
@@ -368,13 +387,14 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
     outgoing.on('error', (error) => {
       log(`${route} ${upstream.host} nije dostupan: ${error.message}`);
       // Kad ne odgovara sam preloader, ni stranice greške nema: kratak tekst.
-      sendError(targets.preloader, res, 502, log);
+      sendError(targets.preloader, res, 502, log, robots);
     });
     req.on('error', () => outgoing.destroy());
     req.pipe(outgoing);
   });
 
   // WebSocket (HMR razvojnih poslužitelja): zahtjev se šalje uzvodnom i dalje se samo prenose bajtovi.
+  // Stare adrese se ovdje ne preusmjeravaju (WebSocket ne slijedi preusmjeravanje), nego idu po tablici ruta.
   server.on('upgrade', (req, socket, head) => {
     const target = req.url ?? '/';
     const rawPath = pathOf(target);

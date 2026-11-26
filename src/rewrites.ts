@@ -87,24 +87,33 @@ export function serviceRewrites(env: ServiceEnv): Rewrite[] {
 }
 
 /**
- * Ulazni rewriteovi (DAN-1574) za `beforeFiles` u `next.config.ts`, redom `ENTRY_REWRITES`: `/` ide na
- * naslovnicu fronta institucije (`/app/web/naslovnica`), a `/prijava` na prvi ekran preloadera (`/`).
- * Moraju biti u `beforeFiles` jer preloader ima vlastitu stranicu `/`. Bez varijable fronta nema rewritea
- * `/`, pa preloader ostaje i na `/` (kao bez ostalih usluga). Next završnu kosu crtu ne razlikuje, pa se
- * izvor navodi bez nje. Neispravno podrijetlo ruši izgradnju kao u `serviceRewrites`.
+ * Javne putanje iz karte adresa (D-318, DAN-1574) za `beforeFiles` u `next.config.ts`, redom `ENTRY_REWRITES`:
+ * `/` na naslovnicu fronta institucije, `/ulaz` na stranicu preloadera `/`, javne stranice i `/aplikacija` na
+ * front institucije, `/administracija` na Aplication_front. Moraju biti u `beforeFiles` jer preloader ima
+ * vlastitu stranicu `/`. Usluga bez varijable nema rewritea, pa preloader ostaje i na `/`, a ostale njezine
+ * javne putanje daju 404 (kao bez ostalih usluga). Next završnu kosu crtu ne razlikuje, pa se izvor navodi bez
+ * nje; gola putanja čije je odredište osnova usluge dobiva kosu crtu kao u `serviceRewrites` (`bareSlash`).
+ * Neispravno podrijetlo ruši izgradnju kao u `serviceRewrites`. Stare adrese (`LEGACY_REDIRECTS`) i
+ * `X-Robots-Tag` ovdje nisu: lokalno ih daje edge, a na ductura.org produkcijski rub (zadatak 10, DAN-939).
  */
 export function entryRewrites(env: ServiceEnv): Rewrite[] {
   const rewrites: Rewrite[] = [];
   for (const entry of ENTRY_REWRITES) {
-    let destination = entry.destination;
-    if (entry.service !== null) {
-      const name = SERVICE_SPECS[entry.service].rewriteEnv;
-      const value = env[name];
-      if (value === undefined || value === '') continue;
-      destination = `${serviceOrigin(name, value)}${entry.destination}`;
+    if (entry.service === null) {
+      rewrites.push({ source: entry.path, destination: entry.destination });
+      continue;
     }
-    const sources = new Set(entry.paths.map((path) => (path.length > 1 ? path.replace(/\/+$/, '') : path)));
-    for (const source of sources) rewrites.push({ source, destination });
+    const name = SERVICE_SPECS[entry.service].rewriteEnv;
+    const value = env[name];
+    if (value === undefined || value === '') continue;
+    const target = `${serviceOrigin(name, value)}${entry.destination}`;
+    if (!entry.prefix) {
+      rewrites.push({ source: entry.path, destination: target });
+      continue;
+    }
+    const base = SERVICE_SPECS[entry.service].bareSlash && ROUTES.some((route) => route.prefix === entry.destination);
+    rewrites.push({ source: entry.path, destination: base ? `${target}/` : target });
+    rewrites.push({ source: `${entry.path}/:path*`, destination: `${target}/:path*` });
   }
   return rewrites;
 }

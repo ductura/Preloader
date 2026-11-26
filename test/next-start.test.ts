@@ -150,9 +150,17 @@ describe('next start: rewriteovi do usluga', () => {
     ['PATCH', '/app/chrome/a/b?c=d', 'front', '/app/chrome/a/b?c=d'],
     ['GET', '/app/web', 'front', '/app/web/'],
     ['GET', '/app/web/assets/x.js', 'front', '/app/web/assets/x.js'],
-    // DAN-1574: naslovnica fronta institucije na `/`, s istim upitom.
+    // Karta adresa (D-318, DAN-1574): naslovnica na `/`, javne stranice na vrhu, nove adrese aplikacije i
+    // administracije prepisane na staru osnovu usluge; upit ide uz odredište.
     ['GET', '/', 'front', '/app/web/naslovnica'],
     ['GET', '/?izvor=a&put=%2Fapp%2Fweb%2F', 'front', '/app/web/naslovnica?izvor=a&put=%2Fapp%2Fweb%2F'],
+    ['GET', '/pomoc', 'front', '/app/web/pomoc'],
+    ['GET', '/stanje?x=1', 'front', '/app/web/stanje?x=1'],
+    ['GET', '/preuzimanja/windows/a.msi', 'front', '/app/web/preuzimanja/windows/a.msi'],
+    ['GET', '/aplikacija', 'front', '/app/web/'],
+    ['POST', '/aplikacija/zadaci?godina=2026', 'front', '/app/web/zadaci?godina=2026'],
+    ['GET', '/administracija', 'admin', '/admin'],
+    ['GET', '/administracija/prijava', 'admin', '/admin/prijava'],
   ])('%s %s ide na %s kao %s', async (method, path, upstream, url) => {
     seen.length = 0;
     const res = await fetch(`${nextOrigin}${path}`, { method, redirect: 'manual' });
@@ -161,8 +169,8 @@ describe('next start: rewriteovi do usluga', () => {
   });
 });
 
-describe('next start: prvi ekran preloadera na /prijava (DAN-1574)', () => {
-  test.each(['/prijava', '/prijava/', '/prijava?x=1'])('%s je prvi ekran preloadera i ne ide nijednoj usluzi', async (path) => {
+describe('next start: preloader na /ulaz (karta adresa D-318)', () => {
+  test.each(['/ulaz', '/ulaz/', '/ulaz?x=1'])('%s je preloader i ne ide nijednoj usluzi', async (path) => {
     seen.length = 0;
     const res = await fetch(`${nextOrigin}${path}`, { redirect: 'manual' });
     expect(res.status).toBe(200);
@@ -174,7 +182,9 @@ describe('next start: prvi ekran preloadera na /prijava (DAN-1574)', () => {
 });
 
 describe('next start: nepoznata putanja', () => {
-  test.each(['/nema-me', '/api/v2/x', '/api/v1x', '/app/mobile/', '/administracija', '/prijava/x'])(
+  // Stare adrese (`/prijava`, `/download`, `/api/auth`) Next ne poznaje: lokalno ih preusmjerava edge, a na
+  // ductura.org produkcijski rub (DAN-939).
+  test.each(['/nema-me', '/api/v2/x', '/api/v1x', '/app/mobile/', '/administracijax', '/ulaz/x', '/prijava', '/download/x', '/api/auth/logout'])(
     '%s daje 404 s hrvatskom stranicom i ne ide nijednoj usluzi',
     async (path) => {
       seen.length = 0;
@@ -194,7 +204,7 @@ describe('lokalni edge ispred next start: CSP iz hasheva na stvarnim stranicama'
   const inner = (html: string, tag: string) => html.match(new RegExp(`<${tag}(?: data-next-head="")?>([^]*?)</${tag}>`))?.[1];
 
   test.each([
-    ['/prijava', 200],
+    ['/ulaz', 200],
     ['/greska.html', 200],
     ['/greska.html?status=503', 200],
     ['/nema-me', 404],
@@ -210,6 +220,7 @@ describe('lokalni edge ispred next start: CSP iz hasheva na stvarnim stranicama'
     expect(csp).toContain(`style-src '${sha(style ?? '')}';`);
     expect(csp).toContain(script === undefined ? "script-src 'none';" : `script-src '${sha(script)}';`);
     expect(csp).not.toMatch(/unsafe|nonce|strict-dynamic|\*/);
+    expect(res.headers.get('x-robots-tag')).toBe(path === '/ulaz' ? 'noindex' : null);
   });
 
   test('uz ugašenu uslugu 502 sa stranicom greške Nexta i CSP-om', async () => {

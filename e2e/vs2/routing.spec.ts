@@ -17,7 +17,7 @@ test('automatski otvara odgovarajući frontend kroz lokalni edge', async ({ page
   const variant = device.view === 'mobile' ? 'mobile' : device.desktopFrontend;
   const { href, path } = destinations[variant];
   await prepareFirstScreen(page, context, device);
-  // DAN-1574: prvi ekran preloadera je na `/prijava`; `/` je naslovnica fronta institucije.
+  // Karta adresa (D-318): preloader je na `/ulaz`; `/` je naslovnica fronta institucije.
   const home = await page.goto(FIRST_SCREEN_PATH, { waitUntil: 'domcontentloaded' });
   expect(home?.status()).toBe(200);
   expect(home?.headers()['content-security-policy']).toMatch(/script-src 'sha256-/);
@@ -69,6 +69,31 @@ test('/ poslužuje naslovnicu fronta institucije, adresa ostaje /', async ({ pag
     expect(html).toContain('/app/web/_next/');
     expect(html).not.toContain('id="sign-in-aai"');
   }
+});
+
+test('/ulaz i /aplikacija nisu za tražilice; /aplikacija otvara web aplikaciju bez preusmjeravanja', async ({ page }) => {
+  for (const path of ['/ulaz', '/aplikacija/']) {
+    const response = await page.request.get(path, { maxRedirects: 0 });
+    expect(response.status(), path).toBe(200);
+    expect(response.headers()['x-robots-tag'], path).toBe('noindex');
+  }
+  // Naslovnica i javne stranice smiju u tražilice.
+  expect((await page.request.get('/', { maxRedirects: 0 })).headers()['x-robots-tag']).toBeUndefined();
+});
+
+test('stare adrese preusmjeravaju na nove (lokalno 307, /api/auth 308)', async ({ page }) => {
+  const cases = [
+    ['/prijava?greska=x', 307, '/app/web/prijava?greska=x'],
+    ['/aplikacija/naslovnica', 307, '/'],
+    ['/download/windows', 307, '/preuzimanja/windows'],
+    ['/api/auth/logout', 308, '/api/v1/auth/logout'],
+  ] as const;
+  for (const [path, status, location] of cases) {
+    const response = await page.request.get(path, { maxRedirects: 0 });
+    expect([response.status(), response.headers()['location']], path).toEqual([status, location]);
+  }
+  // Dok front ne prijeđe na `/aplikacija`, stara adresa aplikacije radi bez preusmjeravanja.
+  expect((await page.request.get('/app/web/', { maxRedirects: 0 })).status()).toBe(200);
 });
 
 test('nepoznata putanja vraća hrvatsku stranicu greške sa statusom 404', async ({ page }) => {

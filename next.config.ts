@@ -24,7 +24,7 @@ const nextConfig: NextConfig = {
   // Čita se pri izgradnji (`next build`): na Vercelu su varijable postavljene u projektu.
   async rewrites() {
     const services = serviceRewrites(process.env);
-    // DAN-1574: `/` je naslovnica fronta institucije, a prvi ekran preloadera je na `/prijava`.
+    // Karta adresa (D-318, DAN-1574): `/` je naslovnica, preloader je na `/ulaz`, javne stranice su na vrhu.
     const entries = entryRewrites(process.env);
     if (!hasLanding) return { beforeFiles: entries, afterFiles: services, fallback: [] };
     return {

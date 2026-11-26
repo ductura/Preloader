@@ -66,22 +66,42 @@ describe('serviceRewrites', () => {
   });
 });
 
-describe('entryRewrites (DAN-1574)', () => {
-  test('/ na naslovnicu fronta institucije, zatim /prijava na prvi ekran preloadera', () => {
+describe('entryRewrites (karta adresa D-318, DAN-1574)', () => {
+  const front = 'https://front.example.test';
+  const admin = 'https://admin.example.test';
+  const pages = ['/preuzimanja', '/pomoc', '/kontakt', '/uvjeti-koristenja', '/privatnost', '/pristupacnost', '/stanje'];
+
+  test('/ na naslovnicu, /ulaz na preloader, javne stranice i /aplikacija na front, /administracija na admin', () => {
     expect(entryRewrites(ENV)).toEqual([
-      { source: '/', destination: 'https://front.example.test/app/web/naslovnica' },
-      { source: '/prijava', destination: '/' },
+      { source: '/', destination: `${front}/app/web/naslovnica` },
+      { source: '/ulaz', destination: '/' },
+      ...pages.flatMap((page) => [
+        { source: page, destination: `${front}/app/web${page}` },
+        { source: `${page}/:path*`, destination: `${front}/app/web${page}/:path*` },
+      ]),
+      // Gola osnova fronta dobiva kosu crtu (Vite/Next osnova `/app/web/`), kao `serviceRewrites`.
+      { source: '/aplikacija', destination: `${front}/app/web/` },
+      { source: '/aplikacija/:path*', destination: `${front}/app/web/:path*` },
+      { source: '/administracija', destination: `${admin}/admin` },
+      { source: '/administracija/:path*', destination: `${admin}/admin/:path*` },
     ]);
   });
 
-  test('bez fronta institucije preloader ostaje i na /, a /prijava ga i dalje otvara', () => {
-    expect(entryRewrites({})).toEqual([{ source: '/prijava', destination: '/' }]);
-    expect(entryRewrites({ ...ENV, INSTITUTION_FRONT_URL: '' })).toEqual([{ source: '/prijava', destination: '/' }]);
+  test('bez fronta institucije preloader ostaje i na /, a /ulaz ga i dalje otvara', () => {
+    expect(entryRewrites({})).toEqual([{ source: '/ulaz', destination: '/' }]);
+    const withoutFront = entryRewrites({ ...ENV, INSTITUTION_FRONT_URL: '' });
+    expect(withoutFront.map((r) => r.source)).toEqual(['/ulaz', '/administracija', '/administracija/:path*']);
   });
 
-  test('neispravno podrijetlo fronta ruši izgradnju', () => {
+  test('stare adrese nisu rewrite (na ductura.org ih preusmjerava produkcijski rub, DAN-939)', () => {
+    const sources = entryRewrites(ENV).map((r) => r.source);
+    for (const old of ['/prijava', '/download', '/api/auth', '/app/web', '/admin']) expect(sources).not.toContain(old);
+  });
+
+  test('neispravno podrijetlo fronta ili admina ruši izgradnju', () => {
     expect(() => entryRewrites({ INSTITUTION_FRONT_URL: 'https://front.example.test/app' })).toThrow(/INSTITUTION_FRONT_URL/);
     expect(() => entryRewrites({ INSTITUTION_FRONT_URL: 'http://front.example.test' })).toThrow(/INSTITUTION_FRONT_URL/);
+    expect(() => entryRewrites({ APLICATION_FRONT_URL: 'https://admin.example.test/x' })).toThrow(/APLICATION_FRONT_URL/);
   });
 });
 

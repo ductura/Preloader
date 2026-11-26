@@ -1,7 +1,8 @@
 // Jedna tablica ruta jedinog podrijetla (P-0.10, ugovor Ductus #2028 §1). Iz nje čitaju oba ulaza:
 // rewriteovi Nexta na Vercelu (`src/rewrites.ts`) i lokalni edge (`dev-proxy.mjs`). Nova usluga ili
-// putanja dodaje se samo ovdje. Ulazne putanje `/` (naslovnica fronta institucije) i `/prijava` (prvi ekran
-// preloadera) su u `ENTRY_REWRITES` (DAN-1574). Putanja koja nije ni u jednoj tablici ide preloaderu: njegove
+// putanja dodaje se samo ovdje. Karta adresa (D-318, DAN-1574): javne putanje (`/` naslovnica, `/ulaz`
+// preloader, javne stranice, `/aplikacija`, `/administracija`) su u `ENTRY_REWRITES`, a stare adrese koje lokalni
+// edge preusmjerava u `LEGACY_REDIRECTS`. Putanja koja nije ni u jednoj tablici ide preloaderu: njegove
 // stranice, a sve ostalo je 404. Kod je čisti TypeScript bez `node:` uvoza (Node ga izvršava bez prevođenja).
 
 /** Usluga iza jedinog podrijetla. Preloader nije usluga: on je sve što nije u tablici. */
@@ -87,14 +88,49 @@ export function serviceFor(rawPath: string): Service | null {
 }
 
 /**
- * Ulazne putanje koje rub poslužuje s druge putanje, a adresa u pregledniku ostaje ista (DAN-1574, Daniel
- * 26. 11. 2026.): `/` je naslovnica fronta institucije, a preloader se seli na `/prijava`. Vrijedi lokalno
- * (`dev-proxy.mjs`) i na ductura.org (rewriteovi Nexta, `src/rewrites.ts`). Putanja se uspoređuje doslovno i
- * cijela, bez prefiksa: `/prijava/x` nije preloader. Upit ide uz odredište nepromijenjen.
+ * Osnova usluge kod same usluge, dok ne prijeđe na javnu adresu iz karte adresa (D-318, DAN-1574). Front
+ * institucije ima Next `basePath` `/app` i `assetPrefix` `/app/web`, a Aplication_front `/admin`; preglednik na
+ * `/aplikacija/…` ili `/administracija/…` bi njihovom klijentu bio izvan osnove. Zato rub do prelaska javnu
+ * adresu prepisuje na osnovu usluge, a stara adresa radi i dalje (zadaci 3 i 9 karte). Kad usluga prijeđe,
+ * ovdje se upisuje javna adresa: prepisivanje postaje doslovno, a stara adresa počinje preusmjeravati.
+ */
+export interface Bases {
+  /** Osnova fronta institucije (`/app/web`, nakon zadatka 3 `/aplikacija`). */
+  readonly front: string;
+  /** Osnova Aplication_fronta (`/admin`, nakon zadatka 9 `/administracija`). */
+  readonly admin: string;
+}
+
+export const BASES: Bases = Object.freeze({ front: '/app/web', admin: '/admin' });
+
+/** Javne adrese iz karte adresa (D-318). */
+export const APP_PATH = '/aplikacija';
+export const ADMINISTRATION_PATH = '/administracija';
+/** Javna adresa preloadera (prepozna uređaj i pošalje na ekran prijave inačice). */
+export const FIRST_SCREEN_PATH = '/ulaz';
+
+/** Javne stranice na vrhu adrese; rub ih prikazuje iz fronta institucije, adresa ostaje kratka. */
+export const PUBLIC_PAGES: readonly string[] = Object.freeze([
+  '/preuzimanja',
+  '/pomoc',
+  '/kontakt',
+  '/uvjeti-koristenja',
+  '/privatnost',
+  '/pristupacnost',
+  '/stanje',
+]);
+
+/**
+ * Putanja koju rub poslužuje s druge putanje, a adresa u pregledniku ostaje ista (karta adresa D-318).
+ * Uspoređuje se doslovno, bez dekodiranja i bez promjene velikih slova. Putanja bez prefiksa vrijedi i sa
+ * završnom kosom crtom (Next je ne razlikuje), osim `/`; s prefiksom vrijedi i `putanja/…`. Upit ide uz
+ * odredište nepromijenjen.
  */
 export interface EntryRewrite {
-  /** Putanje točno kako ih šalje preglednik; Next završnu kosu crtu ne razlikuje, pa je navedena i ona. */
-  readonly paths: readonly string[];
+  /** Javna putanja. */
+  readonly path: string;
+  /** Vrijedi i za `path/…` (ostatak se dodaje na odredište). */
+  readonly prefix: boolean;
   /** Usluga iz tablice, ili null za sam preloader. */
   readonly service: Service | null;
   /**
@@ -102,23 +138,96 @@ export interface EntryRewrite {
    * lokalni edge mu putanju šalje nepromijenjenu, da je preloader izgrađen s varijablom fronta ne pošalje dalje.
    */
   readonly destination: string;
+  /** Odgovor nosi `X-Robots-Tag: noindex` (ulaz, aplikacija i administracija ne idu u tražilice). */
+  readonly noindex: boolean;
 }
 
 /**
- * Redom kojim ih Next primjenjuje (beforeFiles): `/` prije `/prijava`, da preloaderov `/` nakon rewritea
- * `/prijava` ne ode ponovno na naslovnicu.
+ * Ulazi redom kojim ih Next primjenjuje (beforeFiles): `/` prije `/ulaz`, da preloaderov `/` nakon rewritea
+ * `/ulaz` ne ode ponovno na naslovnicu.
  */
-export const ENTRY_REWRITES: readonly EntryRewrite[] = Object.freeze([
-  Object.freeze<EntryRewrite>({ paths: Object.freeze(['/']), service: 'front', destination: '/app/web/naslovnica' }),
-  Object.freeze<EntryRewrite>({ paths: Object.freeze(['/prijava', '/prijava/']), service: null, destination: '/' }),
-]);
+export function entriesFor(bases: Bases): readonly EntryRewrite[] {
+  const entry = (path: string, prefix: boolean, service: Service | null, destination: string, noindex = false) =>
+    Object.freeze<EntryRewrite>({ path, prefix, service, destination, noindex });
+  return Object.freeze([
+    entry('/', false, 'front', `${bases.front}/naslovnica`),
+    entry(FIRST_SCREEN_PATH, false, null, '/', true),
+    ...PUBLIC_PAGES.map((page) => entry(page, true, 'front', `${bases.front}${page}`)),
+    entry(APP_PATH, true, 'front', bases.front, true),
+    entry(ADMINISTRATION_PATH, true, 'admin', bases.admin, true),
+  ]);
+}
 
-/** Javna adresa prvog ekrana preloadera (izbor sučelja i dva ulaza za prijavu). */
-export const FIRST_SCREEN_PATH = '/prijava';
+export const ENTRY_REWRITES: readonly EntryRewrite[] = entriesFor(BASES);
 
-/** Ulazna putanja za putanju točno kako ju je poslao preglednik (bez upita), ili null. */
-export function entryFor(rawPath: string): EntryRewrite | null {
-  return ENTRY_REWRITES.find((entry) => entry.paths.includes(rawPath)) ?? null;
+/** Ostatak putanje iza javne putanje (`''`, `/` ili `/…`), ili null kad se putanja ne poklapa. */
+function restOf(rawPath: string, path: string, prefix: boolean): string | null {
+  if (rawPath === path) return '';
+  if (path === '/') return null;
+  if (rawPath === `${path}/`) return '/';
+  if (prefix && rawPath.startsWith(`${path}/`)) return rawPath.slice(path.length);
+  return null;
+}
+
+/** Ulaz za putanju točno kako ju je poslao preglednik (bez upita), s putanjom kod usluge, ili null. */
+export function entryFor(
+  rawPath: string,
+  entries: readonly EntryRewrite[] = ENTRY_REWRITES,
+): { readonly entry: EntryRewrite; readonly path: string } | null {
+  for (const entry of entries) {
+    const rest = restOf(rawPath, entry.path, entry.prefix);
+    if (rest === null) continue;
+    return { entry, path: entry.prefix ? `${entry.destination}${rest}` : entry.destination };
+  }
+  return null;
+}
+
+/**
+ * Stara adresa koju lokalni edge preusmjerava na novu (karta adresa D-318). Lokalno `307`, da preglednik
+ * ništa trajno ne zapamti dok se karta uvodi; trajni `301` je tek na produkcijskom rubu (zadatak 10, DAN-939).
+ * `/api/auth/…` ide sa `308`, jer odjava i prijava šalju POST, a `308` zadržava metodu i tijelo.
+ */
+export interface LegacyRedirect {
+  readonly path: string;
+  readonly prefix: boolean;
+  readonly status: 307 | 308;
+  /** Nova adresa; uz prefiks se dodaje ostatak putanje, a uvijek upit. */
+  readonly location: string;
+}
+
+/**
+ * Stare adrese za zadane osnove. `/app/web/…`, `/app/chrome/…` i `/admin/…` preusmjeravaju tek kad je usluga
+ * prešla na novu osnovu: dotad je stara adresa jedina na kojoj klijent usluge radi (i povratak nakon prijave
+ * AAI@EduHr je `/app/web/`), pa stare i nove adrese rade istodobno. Ostale stare adrese preusmjeravaju odmah,
+ * na adresu na kojoj stranica danas radi.
+ */
+export function redirectsFor(bases: Bases): readonly LegacyRedirect[] {
+  const redirect = (path: string, prefix: boolean, location: string, status: 307 | 308 = 307) =>
+    Object.freeze<LegacyRedirect>({ path, prefix, status, location });
+  const list = [
+    redirect(`${APP_PATH}/naslovnica`, false, '/'),
+    redirect('/prijava', false, `${bases.front}/prijava`),
+    redirect('/download', true, '/preuzimanja'),
+    redirect('/api/auth', true, '/api/v1/auth', 308),
+  ];
+  if (bases.front !== '/app/web') list.push(redirect('/app/web', true, bases.front), redirect('/app/chrome', true, bases.front));
+  if (bases.admin !== '/admin') list.push(redirect('/admin', true, bases.admin));
+  return Object.freeze(list);
+}
+
+export const LEGACY_REDIRECTS: readonly LegacyRedirect[] = redirectsFor(BASES);
+
+/** Preusmjeravanje stare adrese (putanja bez upita, kako ju je poslao preglednik), ili null. */
+export function redirectFor(
+  rawPath: string,
+  redirects: readonly LegacyRedirect[] = LEGACY_REDIRECTS,
+): { readonly status: 307 | 308; readonly location: string } | null {
+  for (const redirect of redirects) {
+    const rest = restOf(rawPath, redirect.path, redirect.prefix);
+    if (rest === null) continue;
+    return { status: redirect.status, location: redirect.prefix ? `${redirect.location}${rest}` : redirect.location };
+  }
+  return null;
 }
 
 /** Putanje jedne usluge iz tablice. */
@@ -127,10 +236,10 @@ export function pathsOf(service: Service): string[] {
 }
 
 /**
- * Jedino pravilo koje ima samo lokalni edge (VS-2, deploy/edge/README.md): odabir „ostala sučelja” s
- * prvog ekrana preloadera (`FIRST_SCREEN_PATH`) otvara `/app/web/`, a lokalni edge ga s `307` šalje na
- * Web_other pod `/o/`. Vrijedi samo za GET i HEAD s `Referer` prvog ekrana istog podrijetla i samo kad je
- * Web_other lokalno pokrenut. Naslovnica na `/` nije prvi ekran: njezine poveznice na `/app/web/` ostaju na
+ * Pravilo koje uz `LEGACY_REDIRECTS` ima samo lokalni edge (VS-2, deploy/edge/README.md): odabir „ostala sučelja” s
+ * preloadera (`FIRST_SCREEN_PATH`, `/ulaz`) otvara `/app/web/`, a lokalni edge ga s `307` šalje na
+ * Web_other pod `/o/`. Vrijedi samo za GET i HEAD s `Referer` preloadera istog podrijetla i samo kad je
+ * Web_other lokalno pokrenut. Naslovnica na `/` nije preloader: njezine poveznice na `/app/web/` ostaju na
  * frontu institucije.
  * Rewriteovi Nexta to pravilo nemaju: `/app/web` na Vercelu uvijek ide na front institucije.
  */

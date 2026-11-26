@@ -4,7 +4,7 @@ import { main } from '../../deploy/edge/dev-proxy.mjs';
 import { PRELOADER_ORIGIN } from '../matrix/server.ts';
 
 // Stvarne TCP veze između edgea i triju odvojenih HTTP poslužitelja.
-// `pages` daje ime stranice po putanji (bez upita); naslovnica fronta je `/app/web/naslovnica` (DAN-1574).
+// `pages` daje ime stranice po putanji (bez upita); naslovnica fronta je `/app/web/naslovnica` (karta adresa D-318).
 async function fixture(frontend, paths, pages = {}) {
   const server = createServer((req, res) => {
     const path = (req.url ?? '').split('?', 1)[0];
