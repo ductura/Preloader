@@ -1,7 +1,7 @@
 // Jedno podrijetlo (ductura.org): Next.js prosljeđuje putanje ostalih usluga po ugovoru Ductus #2028 §1.
 // Putanje i varijable su u tablici ruta (`deploy/edge/routes.ts`), iz koje čita i lokalni edge
 // (`deploy/edge/dev-proxy.mjs`). Adrese su u varijablama okoline, ne u repou.
-import { pathsOf, ROUTES, SERVICES as SERVICE_SPECS, type Service } from '../deploy/edge/routes.ts';
+import { ENTRY_REWRITES, pathsOf, ROUTES, SERVICES as SERVICE_SPECS, type Service } from '../deploy/edge/routes.ts';
 
 export interface Rewrite {
   source: string;
@@ -82,6 +82,38 @@ export function serviceRewrites(env: ServiceEnv): Rewrite[] {
     const slash = SERVICE_SPECS[service].bareSlash ? '/' : '';
     rewrites.push({ source: prefix, destination: `${origin}${prefix}${slash}` });
     rewrites.push({ source: `${prefix}/:path*`, destination: `${origin}${prefix}/:path*` });
+  }
+  return rewrites;
+}
+
+/**
+ * Javne putanje iz karte adresa (D-318, DAN-1574) za `beforeFiles` u `next.config.ts`, redom `ENTRY_REWRITES`:
+ * `/` na naslovnicu fronta institucije, `/ulaz` na stranicu preloadera `/`, javne stranice i `/aplikacija` na
+ * front institucije, `/administracija` na Aplication_front. Moraju biti u `beforeFiles` jer preloader ima
+ * vlastitu stranicu `/`. Usluga bez varijable nema rewritea, pa preloader ostaje i na `/`, a ostale njezine
+ * javne putanje daju 404 (kao bez ostalih usluga). Next završnu kosu crtu ne razlikuje, pa se izvor navodi bez
+ * nje; gola putanja čije je odredište osnova usluge dobiva kosu crtu kao u `serviceRewrites` (`bareSlash`).
+ * Neispravno podrijetlo ruši izgradnju kao u `serviceRewrites`. Stare adrese (`LEGACY_REDIRECTS`) i
+ * `X-Robots-Tag` ovdje nisu: lokalno ih daje edge, a na ductura.org produkcijski rub (zadatak 10, DAN-939).
+ */
+export function entryRewrites(env: ServiceEnv): Rewrite[] {
+  const rewrites: Rewrite[] = [];
+  for (const entry of ENTRY_REWRITES) {
+    if (entry.service === null) {
+      rewrites.push({ source: entry.path, destination: entry.destination });
+      continue;
+    }
+    const name = SERVICE_SPECS[entry.service].rewriteEnv;
+    const value = env[name];
+    if (value === undefined || value === '') continue;
+    const target = `${serviceOrigin(name, value)}${entry.destination}`;
+    if (!entry.prefix) {
+      rewrites.push({ source: entry.path, destination: target });
+      continue;
+    }
+    const base = SERVICE_SPECS[entry.service].bareSlash && ROUTES.some((route) => route.prefix === entry.destination);
+    rewrites.push({ source: entry.path, destination: base ? `${target}/` : target });
+    rewrites.push({ source: `${entry.path}/:path*`, destination: `${target}/:path*` });
   }
   return rewrites;
 }
