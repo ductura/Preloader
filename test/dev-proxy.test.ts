@@ -476,6 +476,8 @@ describe('karta adresa (D-318, DAN-1574): stare adrese', () => {
     ['/api/auth/logout', 308, '/api/v1/auth/logout'],
     ['/api/auth/login?returnTo=%2Fapp%2Fweb%2F', 308, '/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F'],
     ['/api/auth', 308, '/api/v1/auth'],
+    // Ostatak putanje ide iza nove adrese, pa `//host` ne postaje adresa drugog podrijetla.
+    ['/download//zlo.example/x', 307, '/preuzimanja//zlo.example/x'],
   ] as const)('%s -> %i %s, bez poziva uzvodnog', async (path, status, location) => {
     seen.length = 0;
     const res = await rawRequest(path);
