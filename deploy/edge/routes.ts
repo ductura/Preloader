@@ -18,8 +18,9 @@ export interface ServiceSpec {
   /** Zadani cilj lokalnog edgea. Usluga bez njega lokalno postoji samo uz `edgeEnv` (VS-2). */
   readonly edgeDefault?: string;
   /**
-   * Rewrite gole putanje (`/app/web`) dodaje završnu kosu crtu (Vite base `/app/web/` fronta institucije,
-   * kao dosadašnji `vercel.json`). Lokalni edge putanju uvijek prosljeđuje nepromijenjenu.
+   * Rewrite gole putanje dodaje završnu kosu crtu (za uslugu čija osnova radi samo s kosom crtom, kao nekad
+   * Vite base `/app/web/`). Front institucije na `/aplikacija` je nema: njegov Next `/aplikacija/` preusmjerava
+   * na `/aplikacija` (308), pa bi kosa crta dala petlju. Lokalni edge putanju uvijek prosljeđuje nepromijenjenu.
    */
   readonly bareSlash: boolean;
 }
@@ -44,7 +45,7 @@ export const SERVICES = {
     rewriteEnv: 'INSTITUTION_FRONT_URL',
     edgeEnv: 'DUCTURA_EDGE_FRONT',
     edgeDefault: 'http://localhost:5173',
-    bareSlash: true,
+    bareSlash: false,
   },
   mobile: {
     repo: 'Institution_web_mobile',
@@ -66,12 +67,14 @@ export interface Route {
   readonly service: Service;
 }
 
-/** Putanje usluga, redom kojim se uspoređuju. Prefiksi se ne preklapaju. */
+/**
+ * Putanje usluga, redom kojim se uspoređuju. Prefiksi se ne preklapaju. Front institucije ovdje nema putanje:
+ * njegova je javna adresa `/aplikacija` (ENTRY_REWRITES), a stare `/app/web` i `/app/chrome` lokalni edge samo
+ * preusmjerava (`LEGACY_REDIRECTS`, 301 za GET i HEAD; ostale metode preloader odbija s 405, KA-11-EDGE).
+ */
 export const ROUTES: readonly Route[] = Object.freeze([
   { prefix: '/admin', service: 'admin' },
   { prefix: '/api/v1', service: 'api' },
-  { prefix: '/app/web', service: 'front' },
-  { prefix: '/app/chrome', service: 'front' },
   { prefix: '/app/mobile', service: 'mobile' },
   { prefix: '/o', service: 'other' },
 ]);
@@ -88,20 +91,19 @@ export function serviceFor(rawPath: string): Service | null {
 }
 
 /**
- * Osnova usluge kod same usluge, dok ne prijeđe na javnu adresu iz karte adresa (D-318, DAN-1574). Front
- * institucije ima Next `basePath` `/app` i `assetPrefix` `/app/web`; preglednik na `/aplikacija/…` bi njegovu
- * klijentu bio izvan osnove. Aplication_front je prešao na `/administracija` (zadatak 9, Aplication_front#24). Zato rub do prelaska javnu
- * adresu prepisuje na osnovu usluge, a stara adresa radi i dalje (zadaci 3 i 9 karte). Kad usluga prijeđe,
- * ovdje se upisuje javna adresa: prepisivanje postaje doslovno, a stara adresa počinje preusmjeravati.
+ * Osnova usluge kod same usluge (karta adresa D-318, DAN-1574). Obje usluge su prešle na javnu adresu: front
+ * institucije na `/aplikacija` (Next `basePath`, zadatak 3, KA-03-WEB uz KA-11-EDGE) i Aplication_front na
+ * `/administracija` (zadatak 9, Aplication_front#24). Prepisivanje je zato doslovno, a stare adrese preusmjeravaju
+ * (`redirectsFor`). Usluga koja još nije prešla imala bi ovdje staru osnovu: rub bi javnu adresu prepisivao na nju.
  */
 export interface Bases {
-  /** Osnova fronta institucije (`/app/web`, nakon zadatka 3 `/aplikacija`). */
+  /** Osnova fronta institucije: `/aplikacija` (zadatak 3; prije `/app/web`). */
   readonly front: string;
   /** Osnova Aplication_fronta: `/administracija` (zadatak 9, Aplication_front#24; prije `/admin`). */
   readonly admin: string;
 }
 
-export const BASES: Bases = Object.freeze({ front: '/app/web', admin: '/administracija' });
+export const BASES: Bases = Object.freeze({ front: '/aplikacija', admin: '/administracija' });
 
 /** Javne adrese iz karte adresa (D-318). */
 export const APP_PATH = '/aplikacija';
@@ -213,11 +215,11 @@ export function redirectsMethod(status: RedirectStatus, method: string): boolean
 
 /**
  * Tablica 301 za zadane osnove, redom usporedbe (prvi pogodak vrijedi, pa uže putanje idu prije šire).
- * `/admin/…` preusmjerava kad je Aplication_front prešao na `/administracija` (zadatak 9), a `/app/web/…` i
- * `/app/chrome/…` kad front institucije prijeđe na `/aplikacija` (zadatak 3): dotad je stara adresa jedina na
- * kojoj klijent fronta radi (i povratak nakon prijave AAI@EduHr je `/app/web/`). Stranice koje već imaju javnu
- * adresu (`/app/web/naslovnica`, `/app/web/pristupacnost`, `/app/web/stanje`) i ostale stare adrese
- * preusmjeravaju odmah, na adresu na kojoj stranica danas radi.
+ * `/admin/…` preusmjerava jer je Aplication_front prešao na `/administracija` (zadatak 9), a `/app/web/…` i
+ * `/app/chrome/…` na `/aplikacija/…` jer je front institucije prešao na `/aplikacija` (zadatak 3, KA-11-EDGE).
+ * Povratak nakon prijave AAI@EduHr je `/aplikacija/` (Institution_server `DEFAULT_RETURN_TO`); stari povratak na
+ * `/app/web/` stiže na isto mjesto kroz 301. Stranice koje imaju javnu adresu (`/app/web/naslovnica`,
+ * `/app/web/pristupacnost`, `/app/web/stanje`) idu ravno na nju, ispred šireg `/app/web/…`.
  */
 export function redirectsFor(bases: Bases): readonly LegacyRedirect[] {
   const redirect = (
@@ -285,9 +287,9 @@ export function pathsOf(service: Service): string[] {
  * Pravilo koje uz `LEGACY_REDIRECTS` ima samo lokalni edge (VS-2, deploy/edge/README.md): odabir „ostala sučelja” s
  * preloadera (`FIRST_SCREEN_PATH`, `/ulaz`) otvara `/app/web/`, a lokalni edge ga s `307` šalje na
  * Web_other pod `/o/`. Vrijedi samo za GET i HEAD s `Referer` preloadera istog podrijetla i samo kad je
- * Web_other lokalno pokrenut. Naslovnica na `/` nije preloader: njezine poveznice na `/app/web/` ostaju na
- * frontu institucije.
- * Rewriteovi Nexta to pravilo nemaju: `/app/web` na Vercelu uvijek ide na front institucije.
+ * Web_other lokalno pokrenut; ima prednost pred 301 na `/aplikacija/`. Bez njega `/app/web/` ide 301 na
+ * `/aplikacija/` (front institucije).
+ * Rewriteovi Nexta to pravilo nemaju: `/app/web` na Vercelu nema rewritea (stare adrese daje produkcijski rub).
  */
 export const EDGE_ONLY_REDIRECT: {
   /** Putanje koje se preusmjeravaju (upit ide uz `location`). */

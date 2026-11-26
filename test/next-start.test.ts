@@ -143,22 +143,21 @@ describe('next start: rewriteovi do usluga', () => {
   });
 
   test.each([
-    ['GET', '/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F', 'api', '/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F'],
+    ['GET', '/api/v1/auth/login?returnTo=%2Faplikacija%2F', 'api', '/api/v1/auth/login?returnTo=%2Faplikacija%2F'],
     ['DELETE', '/api/v1', 'api', '/api/v1'],
     ['PUT', '/admin/postavke?kartica=1', 'admin', '/admin/postavke?kartica=1'],
     ['GET', '/admin', 'admin', '/admin'],
-    ['PATCH', '/app/chrome/a/b?c=d', 'front', '/app/chrome/a/b?c=d'],
-    ['GET', '/app/web', 'front', '/app/web/'],
-    ['GET', '/app/web/assets/x.js', 'front', '/app/web/assets/x.js'],
-    // Karta adresa (D-318, DAN-1574): naslovnica na `/`, javne stranice na vrhu, nova adresa aplikacije
-    // prepisana na staru osnovu fronta, administracija doslovno (Aplication_front#24); upit ide uz odredište.
-    ['GET', '/', 'front', '/app/web/naslovnica'],
-    ['GET', '/?izvor=a&put=%2Fapp%2Fweb%2F', 'front', '/app/web/naslovnica?izvor=a&put=%2Fapp%2Fweb%2F'],
-    ['GET', '/pomoc', 'front', '/app/web/pomoc'],
-    ['GET', '/stanje?x=1', 'front', '/app/web/stanje?x=1'],
-    ['GET', '/preuzimanja/windows/a.msi', 'front', '/app/web/preuzimanja/windows/a.msi'],
-    ['GET', '/aplikacija', 'front', '/app/web/'],
-    ['POST', '/aplikacija/zadaci?godina=2026', 'front', '/app/web/zadaci?godina=2026'],
+    // Karta adresa (D-318, DAN-1574): naslovnica na `/`, javne stranice na vrhu, aplikacija i administracija
+    // doslovno na svojoj osnovi (KA-03-WEB i KA-11-EDGE, Aplication_front#24); upit ide uz odredište.
+    ['GET', '/', 'front', '/aplikacija/naslovnica'],
+    ['GET', '/?izvor=a&put=%2Fapp%2Fweb%2F', 'front', '/aplikacija/naslovnica?izvor=a&put=%2Fapp%2Fweb%2F'],
+    ['GET', '/pomoc', 'front', '/aplikacija/pomoc'],
+    ['GET', '/stanje?x=1', 'front', '/aplikacija/stanje?x=1'],
+    ['GET', '/preuzimanja/windows/a.msi', 'front', '/aplikacija/preuzimanja/windows/a.msi'],
+    ['GET', '/aplikacija', 'front', '/aplikacija'],
+    ['GET', '/aplikacija/_next/static/x.js', 'front', '/aplikacija/_next/static/x.js'],
+    ['PATCH', '/aplikacija/a/b?c=d', 'front', '/aplikacija/a/b?c=d'],
+    ['POST', '/aplikacija/zadaci?godina=2026', 'front', '/aplikacija/zadaci?godina=2026'],
     ['GET', '/administracija', 'admin', '/administracija'],
     ['GET', '/administracija/prijava', 'admin', '/administracija/prijava'],
   ])('%s %s ide na %s kao %s', async (method, path, upstream, url) => {
@@ -201,9 +200,9 @@ describe('next start: inačice /ulaz (velika slova, kosa crta) nose noindex', ()
 });
 
 describe('next start: nepoznata putanja', () => {
-  // Stare adrese (`/prijava`, `/download`, `/api/auth`) Next ne poznaje: lokalno ih preusmjerava edge, a na
-  // ductura.org produkcijski rub (DAN-939).
-  test.each(['/nema-me', '/api/v2/x', '/api/v1x', '/app/mobile/', '/administracijax', '/ulaz/x', '/prijava', '/download/x', '/api/auth/logout'])(
+  // Stare adrese (`/prijava`, `/download`, `/api/auth`, stara osnova fronta `/app/web` i `/app/chrome`, KA-11-EDGE)
+  // Next ne poznaje: lokalno ih preusmjerava edge, a na ductura.org produkcijski rub (DAN-939).
+  test.each(['/nema-me', '/api/v2/x', '/api/v1x', '/app/mobile/', '/administracijax', '/ulaz/x', '/prijava', '/download/x', '/api/auth/logout', '/app/web', '/app/web/assets/x.js', '/app/chrome/a/b?c=d'])(
     '%s daje 404 s hrvatskom stranicom i ne ide nijednoj usluzi',
     async (path) => {
       seen.length = 0;

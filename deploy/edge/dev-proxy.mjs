@@ -2,16 +2,16 @@
 // Samo za razvoj na jednom računalu; pravi rubni proxy u produkciji je P-0.10.
 //
 // Rute su u tablici `routes.ts`, iz koje čitaju i rewriteovi Nexta (src/rewrites.ts). Karta adresa D-318:
-//   /                      -> naslovnica fronta institucije (:5173, putanja /app/web/naslovnica)
+//   /                      -> naslovnica fronta institucije (:5173, putanja /aplikacija/naslovnica)
 //   /ulaz                  -> preloader (Next.js, :3100; Next ga prepisuje na svoj /)
 //   /preuzimanja, /pomoc, /kontakt, /uvjeti-koristenja, /privatnost, /pristupacnost, /stanje
-//                          -> front institucije, ista putanja pod /app/web
-//   /aplikacija, /aplikacija/*         -> front institucije, /app/web/* (dok front ne prijeđe na /aplikacija)
+//                          -> front institucije, ista putanja pod /aplikacija
+//   /aplikacija, /aplikacija/*         -> front institucije, ista putanja (osnova /aplikacija, KA-11-EDGE)
 //   /administracija, /administracija/* -> Aplication_front (:3120), ista putanja (osnova /administracija)
 //   sve ostalo             -> preloader (Next.js, :3100)
 //   /admin, /admin/*       -> GET i HEAD 301 na /administracija/*; /admin/api/* i ostale metode Aplication_frontu
 //   /api/v1, /api/v1/*     -> Institution_server (:4000)
-//   /app/web, /app/chrome  -> front institucije (:5173)
+//   /app/web, /app/chrome  -> GET i HEAD 301 na /aplikacija/*; ostale metode preloader (405)
 //   /app/mobile            -> Institution_web_mobile (DUCTURA_EDGE_MOBILE; bez nje 302 na /aplikacija/)
 //   /o                     -> Web_other (DUCTURA_EDGE_OTHER; bez nje preloader, 404)
 // Adresa u pregledniku za javne putanje ostaje ista; usluga dobiva putanju iz ENTRY_REWRITES uz isti upit.
@@ -341,7 +341,7 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
     const otherEntry = targets[EDGE_ONLY_REDIRECT.requires] !== undefined && EDGE_ONLY_REDIRECT.paths.includes(rawPath);
     if (otherEntry && (req.method === 'GET' || req.method === 'HEAD') && fromFirstScreen(req)) {
       const location = `${EDGE_ONLY_REDIRECT.location}${target.slice(rawPath.length)}`;
-      res.writeHead(EDGE_ONLY_REDIRECT.status, { Location: location, 'Cache-Control': 'no-store' }).end();
+      res.writeHead(EDGE_ONLY_REDIRECT.status, { Location: location, 'Cache-Control': 'no-store', Vary: 'Referer' }).end();
       return;
     }
     // Stara adresa (tablica 301 karte adresa D-318): 301 samo za GET i HEAD (`/admin/api/*` nikad), `/api/auth/*`
@@ -351,7 +351,9 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       running: (service) => available(service, targets),
     });
     if (moved !== null) {
-      res.writeHead(moved.status, { Location: `${moved.location}${target.slice(rawPath.length)}`, 'Cache-Control': 'no-store' }).end();
+      // Na `/app/web` uz pokrenut Web_other odgovor ovisi o Refereru (307 na `/o/` ili 301 u aplikaciju).
+      const vary = otherEntry ? { Vary: 'Referer' } : {};
+      res.writeHead(moved.status, { Location: `${moved.location}${target.slice(rawPath.length)}`, 'Cache-Control': 'no-store', ...vary }).end();
       return;
     }
     const { route, path, noindex } = forwardFor(rawPath, req.headers.referer, targets);
@@ -383,7 +385,6 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
         return;
       }
       const headers = [...received, ...robots];
-      if (otherEntry) headers.push('Vary', 'Referer');
       res.writeHead(status, incoming.statusMessage, headers);
       incoming.pipe(res);
       incoming.on('error', () => res.destroy());

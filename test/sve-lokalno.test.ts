@@ -214,7 +214,7 @@ await import('./server.mjs');
 `;
 
 describe('pnpm sve nad lažnim checkoutima', () => {
-  test('pokreće usluge i edge; /admin, /api/v1 i /app/web stižu do svojih usluga', { timeout: 90_000 }, async () => {
+  test('pokreće usluge i edge; /administracija, /api/v1 i /aplikacija stižu do svojih usluga', { timeout: 90_000 }, async () => {
     const dir = join(base, 'sve');
     const fake = (repo: string, name: string, script = 'dev') =>
       fakeRepo(join(dir, repo), { [script]: `node ${script === 'lokalno' ? 'lokalno.mjs' : 'server.mjs'}` }, {
@@ -251,15 +251,18 @@ describe('pnpm sve nad lažnim checkoutima', () => {
       });
       const json = async (path: string) => (await fetch(`http://localhost:8000${path}`, { redirect: 'manual' })).json();
       const admin = await json('/administracija/prijava');
-      const api = await json('/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F');
-      const front = await json('/app/web/');
+      const api = await json('/api/v1/auth/login?returnTo=%2Faplikacija%2F');
+      const front = await json('/aplikacija/');
       expect(admin).toMatchObject({ name: 'aplication-front', url: '/administracija/prijava', host: 'localhost:8000' });
-      expect(api).toMatchObject({ name: 'institution-server', url: '/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F', tokenLength: 43 });
-      expect(front).toMatchObject({ name: 'front-institucije', url: '/app/web/' });
-      // Karta adresa (D-318): `/` je naslovnica fronta institucije, preloader je na `/ulaz`, a nove adrese
-      // aplikacije ide na staru osnovu fronta, a administracija doslovno (Aplication_front#24).
-      expect(await json('/?izvor=x')).toMatchObject({ name: 'front-institucije', url: '/app/web/naslovnica?izvor=x' });
-      expect(await json('/aplikacija/zadaci')).toMatchObject({ name: 'front-institucije', url: '/app/web/zadaci' });
+      expect(api).toMatchObject({ name: 'institution-server', url: '/api/v1/auth/login?returnTo=%2Faplikacija%2F', tokenLength: 43 });
+      expect(front).toMatchObject({ name: 'front-institucije', url: '/aplikacija/' });
+      // Karta adresa (D-318): `/` je naslovnica fronta institucije, preloader je na `/ulaz`, a aplikacija i
+      // administracija idu doslovno na svoju osnovu (KA-11-EDGE, Aplication_front#24).
+      expect(await json('/?izvor=x')).toMatchObject({ name: 'front-institucije', url: '/aplikacija/naslovnica?izvor=x' });
+      expect(await json('/aplikacija/zadaci')).toMatchObject({ name: 'front-institucije', url: '/aplikacija/zadaci' });
+      // Stara osnova fronta (i stari povratak nakon prijave na `/app/web/`): 301 u aplikaciju, bez poziva usluge.
+      const oldApp = await fetch('http://localhost:8000/app/web/?x=1', { redirect: 'manual' });
+      expect([oldApp.status, oldApp.headers.get('location')]).toEqual([301, '/aplikacija/?x=1']);
       // Stara adresa administracije: 301 na novu (tablica 301), bez poziva usluge.
       const old = await fetch('http://localhost:8000/admin/prijava?x=1', { redirect: 'manual' });
       expect([old.status, old.headers.get('location')]).toEqual([301, '/administracija/prijava?x=1']);

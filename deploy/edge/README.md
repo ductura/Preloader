@@ -19,19 +19,21 @@ Odluka vlasnika 26. 11. 2026., vrijedi lokalno i na ductura.org. Javne putanje s
 
 | Adresa | Ide na |
 | --- | --- |
-| `/` | front institucije, `/app/web/naslovnica`; resursi stranice su pod `/app/web/_next/` |
+| `/` | front institucije, `/aplikacija/naslovnica`; resursi stranice su pod `/aplikacija/_next/` |
 | `/ulaz`, `/ulaz/` | preloader; njegov Next ih prepisuje na stranicu `/` (`entryRewrites`, `beforeFiles`) |
-| `/preuzimanja`, `/pomoc`, `/kontakt`, `/uvjeti-koristenja`, `/privatnost`, `/pristupacnost`, `/stanje` (i `…/*`) | front institucije, ista putanja pod `/app/web` |
-| `/aplikacija`, `/aplikacija/*` | front institucije, `/app/web`, `/app/web/*` |
+| `/preuzimanja`, `/pomoc`, `/kontakt`, `/uvjeti-koristenja`, `/privatnost`, `/pristupacnost`, `/stanje` (i `…/*`) | front institucije, ista putanja pod `/aplikacija` |
+| `/aplikacija`, `/aplikacija/*` | front institucije, ista putanja (osnova `/aplikacija`, KA-03-WEB) |
 | `/administracija`, `/administracija/*` | Aplication_front, ista putanja (osnova `/administracija`, Aplication_front#24) |
 
 - `/ulaz`, `/aplikacija` i `/administracija` nose `X-Robots-Tag: noindex` (i uz `405` i `502`); zaglavlje uzvodnog se zamjenjuje.
-- Stare adrese lokalni edge preusmjerava po tablici 301 (`LEGACY_REDIRECTS`, 12 redova u `docs/LOKALNO.md` §3): `/admin/*` `301` na `/administracija/*` (osim `/admin/api/*`, koji se nikad ne preusmjerava), `/app/web/naslovnica` i `/aplikacija/naslovnica` `301` na `/`, `/app/web/pristupacnost` i `/app/web/stanje` `301` na javnu adresu, `/prijava` `301` na ekran prijave, `/download/*` `301` na `/preuzimanja/*`, `/api/auth/*` `308` na `/api/v1/auth/*`, a `/app/mobile/*` `302` na `/aplikacija/` dok ne postoji `/mobilna/` (uz pokrenut mobilni front ide njemu). `301` i `302` samo za GET i HEAD; uz `Cache-Control: no-store`. Rewriteovi Nexta stare adrese i `X-Robots-Tag` ne daju; na ductura.org to radi produkcijski rub (zadatak 10, DAN-939).
-- `BASES` drži osnovu usluge dok ne prijeđe na novu adresu: front `/app/web` (Next `basePath` `/app`), admin `/administracija` (prešao, Aplication_front#24). Dok front ne prijeđe, `/app/web/*` i `/app/chrome/*` rade bez preusmjeravanja, pa stare i nove adrese rade istodobno. Kad front prijeđe (zadatak 3 karte), u `BASES` se upisuje nova osnova: nove adrese idu doslovno, a stare preusmjeravaju `301`.
+- Stare adrese lokalni edge preusmjerava po tablici 301 (`LEGACY_REDIRECTS`, 12 redova u `docs/LOKALNO.md` §3): `/admin/*` `301` na `/administracija/*` (osim `/admin/api/*`, koji se nikad ne preusmjerava), `/app/web/naslovnica` i `/aplikacija/naslovnica` `301` na `/`, `/app/web/pristupacnost` i `/app/web/stanje` `301` na javnu adresu, `/prijava` `301` na `/aplikacija/prijava`, `/download/*` `301` na `/preuzimanja/*`, `/api/auth/*` `308` na `/api/v1/auth/*`, `/app/mobile/*` `302` na `/aplikacija/` dok ne postoji `/mobilna/` (uz pokrenut mobilni front ide njemu), a `/app/web/*` i `/app/chrome/*` `301` na `/aplikacija/*`. `301` i `302` samo za GET i HEAD; uz `Cache-Control: no-store`. Rewriteovi Nexta stare adrese i `X-Robots-Tag` ne daju; na ductura.org to radi produkcijski rub (zadatak 10, DAN-939).
+- `BASES` drži osnovu usluge kod same usluge. Obje su prešle na javnu adresu: front `/aplikacija` (Next `basePath`, zadatak 3, KA-03-WEB uz KA-11-EDGE) i admin `/administracija` (Aplication_front#24). Nove adrese zato idu doslovno, a stare preusmjeravaju `301`.
+- Stara osnova fronta (`/app/web`, `/app/chrome`) nije u tablici ruta (`ROUTES`): GET i HEAD dobivaju samo `301` na `/aplikacija/…` (ostatak putanje i upit idu uz novu adresu), a ostale metode preloaderov `405`, jer bi `301` POST pretvorio u GET. Rewriteovi Nexta za nju ne postoje (na Vercelu je to `404` preloadera). Povratak nakon prijave AAI@EduHr je `/aplikacija/` (Institution_server); stari povratak na `/app/web/` stiže onamo kroz `301`.
+- Front na `/aplikacija` nema `bareSlash`: njegov Next `/aplikacija/` preusmjerava na `/aplikacija` (`308`), pa rewrite gole putanje ne dodaje kosu crtu (inače bi to bila petlja).
 - Usporedba je doslovna: `/ulaz/x`, `/Ulaz`, `/%75laz` i `/aplikacijax` nisu javne putanje (404 preloadera).
 - Lokalni edge `/ulaz` šalje preloaderu nepromijenjen. Poslan kao `/`, preloader izgrađen s `INSTITUTION_FRONT_URL` bi ga opet prepisao na naslovnicu.
 - Na Vercelu bez `INSTITUTION_FRONT_URL` nema rewritea `/`, pa preloader ostaje i na `/`; `/ulaz` radi uvijek.
-- Pravilo VS-2 (`307` na `/o/`) vrijedi samo za `Referer` preloadera (`/ulaz`). Poveznice naslovnice na `/app/web/` ostaju na frontu institucije.
+- Pravilo VS-2 (`307` na `/o/`) vrijedi samo za `Referer` preloadera (`/ulaz`) i ima prednost pred `301`. S drugih stranica `/app/web/` ide `301` na `/aplikacija/`. Uz pokrenut Web_other oba odgovora nose `Vary: Referer`.
 
 Isti cilj za svaku putanju u rewriteovima i u edgeu provjerava `test/route-table.test.ts`; stvarni `next start` `test/next-start.test.ts`, edge `test/dev-proxy.test.ts`, a preglednik `e2e/vs2/routing.spec.ts`. Pokretanje `pnpm edge` (ili sve odjednom `pnpm sve`); rute, varijable i ponašanje su u `docs/LOKALNO.md` §3. Test je `test/dev-proxy.test.ts`. Pravi rub u produkciji nije ovdje (P-0.10).
 
@@ -41,11 +43,11 @@ Isti cilj za svaku putanju u rewriteovima i u edgeu provjerava `test/route-table
 
 | Ulaz s preloadera | Front i port |
 | --- | --- |
-| `/app/chrome/` | `Institution_front_web_chrome` na `:5173` |
+| `/aplikacija/` (`/app/chrome/` ide `301` onamo) | `Institution_front_web_chrome` na `:5173` |
 | `/app/mobile/` | `Institution_web_mobile` na `:5174` uz `BASE_PATH=/app/mobile` |
 | `/app/web/` s preloadera (`/ulaz`) na istom podrijetlu | `307` na `/o/`, `Web_other` na `:5175` |
 
-Edge prepoznaje dolazak s preloadera po `Referer` zaglavlju (`/ulaz`; naslovnica `/` to nije). Izravan ulaz i povratak iz AAI@EduHr na `/app/web/`, kao i resursi pod `/app/web/_next/`, i dalje idu na Chromeov host. Ako se zaglavlje `Referer` uklanja, za Web_other može se izravno otvoriti `/o/`.
+Edge prepoznaje dolazak s preloadera po `Referer` zaglavlju (`/ulaz`; naslovnica `/` to nije). Izravan ulaz na `/app/web/` ide `301` na `/aplikacija/`, a povratak iz AAI@EduHr i resursi (`/aplikacija/_next/`) su na Chromeovu hostu pod `/aplikacija`. Ako se zaglavlje `Referer` uklanja, za Web_other može se izravno otvoriti `/o/`.
 
 Za samostalni `pnpm edge` s već pokrenutim frontovima postavite `DUCTURA_EDGE_MOBILE=http://localhost:5174` i `DUCTURA_EDGE_OTHER=http://localhost:5175`. `pnpm sve` te ciljeve postavlja za pronađene checkoute. Eksplicitni cilj koristi već pokrenuti poslužitelj.
 

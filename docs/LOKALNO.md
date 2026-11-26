@@ -74,15 +74,15 @@ Sam edge bez ostalih usluga: `pnpm build && pnpm start` u jednom terminalu i `pn
 
 | Putanja | Ide na |
 |---|---|
-| `/` (uz isti upit) | naslovnica fronta institucije :5173, putanja `/app/web/naslovnica`; adresa ostaje `/` |
+| `/` (uz isti upit) | naslovnica fronta institucije :5173, putanja `/aplikacija/naslovnica`; adresa ostaje `/` |
 | `/ulaz`, `/ulaz/` | preloader (Next.js) :3100; Next ih sam prepisuje na svoju stranicu `/`; `X-Robots-Tag: noindex` |
-| `/preuzimanja`, `/pomoc`, `/kontakt`, `/uvjeti-koristenja`, `/privatnost`, `/pristupacnost`, `/stanje` (i `…/*`) | front institucije :5173, ista putanja pod `/app/web` (npr. `/app/web/stanje`); adresa ostaje kratka |
-| `/aplikacija`, `/aplikacija/*` | front institucije :5173, `/app/web`, `/app/web/*`; `X-Robots-Tag: noindex` |
+| `/preuzimanja`, `/pomoc`, `/kontakt`, `/uvjeti-koristenja`, `/privatnost`, `/pristupacnost`, `/stanje` (i `…/*`) | front institucije :5173, ista putanja pod `/aplikacija` (npr. `/aplikacija/stanje`); adresa ostaje kratka |
+| `/aplikacija`, `/aplikacija/*` | front institucije :5173, ista putanja (osnova `/aplikacija`, KA-03-WEB); `X-Robots-Tag: noindex` |
 | `/administracija`, `/administracija/*` | Aplication_front :3120, ista putanja (osnova `/administracija`, Aplication_front#24); `X-Robots-Tag: noindex` |
 | `/greska.html`, `/_next/*` i sve ostalo | preloader (Next.js) :3100; drugo od GET i HEAD daje `405` |
 | `/admin/api/*` i `/admin/*` za metode osim GET i HEAD | Aplication_front :3120, nepromijenjeno (stara osnova, vidi stare adrese) |
 | `/api/v1`, `/api/v1/*` | Institution_server :4000 |
-| `/app/web`, `/app/web/*`, `/app/chrome`, `/app/chrome/*` | front institucije :5173 |
+| `/app/web`, `/app/web/*`, `/app/chrome`, `/app/chrome/*` | stara osnova fronta: GET i HEAD `301` na `/aplikacija/*` (redovi 11 i 12 ispod), ostale metode preloader (`405`) |
 | `/app/mobile`, `/app/mobile/*` | Institution_web_mobile (`DUCTURA_EDGE_MOBILE`; bez nje `302` na `/aplikacija/`, vidi stare adrese) |
 | `/o`, `/o/*` | Web_other (`DUCTURA_EDGE_OTHER`; bez nje preloader, 404) |
 
@@ -98,30 +98,31 @@ Javne putanje su iz karte adresa (D-318, odluka vlasnika 26. 11. 2026., DAN-1574
 | 4 | `/aplikacija/naslovnica` | `301` na `/` |
 | 5 | `/app/web/pristupacnost`, `/app/web/pristupacnost/*` | `301` na `/pristupacnost`, `/pristupacnost/*` |
 | 6 | `/app/web/stanje`, `/app/web/stanje/*` | `301` na `/stanje`, `/stanje/*` |
-| 7 | `/prijava`, `/prijava/` | `301` na ekran prijave web inačice: `/app/web/prijava`, nakon prelaska fronta `/aplikacija/prijava` |
+| 7 | `/prijava`, `/prijava/` | `301` na ekran prijave web inačice `/aplikacija/prijava` |
 | 8 | `/download`, `/download/*` | `301` na `/preuzimanja`, `/preuzimanja/*` |
 | 9 | `/api/auth`, `/api/auth/*` | `308` na `/api/v1/auth`, `/api/v1/auth/*`, za svaku metodu (zadržava POST odjave i prijave) |
 | 10 | `/app/mobile`, `/app/mobile/*` | `302` na `/aplikacija/` (ostatak putanje se odbacuje, upit ostaje) dok ne postoji `/mobilna/`; tada `301` na `/mobilna/*`. Uz pokrenut mobilni front (`DUCTURA_EDGE_MOBILE`, VS-2) ide njemu |
-| 11 | `/app/web`, `/app/web/*` | zasad bez preusmjeravanja; `301` na `/aplikacija`, `/aplikacija/*` kad front prijeđe na tu osnovu (zadatak 3 karte) |
-| 12 | `/app/chrome`, `/app/chrome/*` | zasad bez preusmjeravanja; `301` na `/aplikacija`, `/aplikacija/*` kad front prijeđe (`/app/chrome` se ukida) |
+| 11 | `/app/web`, `/app/web/*` | `301` na `/aplikacija`, `/aplikacija/*` (front je prešao na tu osnovu, zadatak 3 karte, KA-11-EDGE); s preloadera (`/ulaz`) uz pokrenut Web_other `307` na `/o/` (VS-2) |
+| 12 | `/app/chrome`, `/app/chrome/*` | `301` na `/aplikacija`, `/aplikacija/*` (`/app/chrome` je ukinut) |
 
-- `301` i `302` vrijede samo za `GET` i `HEAD`. Ostale metode na staroj adresi idu dalje kao i prije (npr. `POST /admin/prijava` Aplication_frontu, `POST /download` preloaderu, `405`). WebSocket se ne preusmjerava.
-- `Cache-Control: no-store` drži preglednik da ne zapamti `301` lokalno: odredište reda 7 i redova 11 i 12 mijenja se s prelaskom fronta. Rewriteovi Nexta stare adrese ne poznaju; na ductura.org ih daje produkcijski rub (zadatak 10, DAN-939).
-- Front institucije ima Next `basePath` `/app` i resurse pod `/app/web/_next/`. Na `/aplikacija/…` njegov klijent bi bio izvan osnove, a povratak nakon prijave AAI@EduHr je `/app/web/`. Zato do prelaska rub `/aplikacija` prepisuje na staru osnovu, a `/app/web/*` radi i dalje. Prelazak je jedna izmjena u `BASES` (`deploy/edge/routes.ts`): nove adrese tada idu doslovno, a redovi 11 i 12 počinju preusmjeravati. Aplication_front je prešao (`BASES.admin` je `/administracija`).
-- `/adminx`, `/Admin/prijava`, `/%61dmin/x`, `/app/web/naslovnicax` i `/app/mobilex` nisu stare adrese.
+- `301` i `302` vrijede samo za `GET` i `HEAD`. Ostale metode na staroj adresi idu dalje kao i prije (npr. `POST /admin/prijava` Aplication_frontu, `POST /download` preloaderu, `405`). Stara osnova fronta (redovi 11 i 12) nije u tablici ruta, pa `POST /app/web/…` daje preloaderov `405`, a ne ide frontu. WebSocket se ne preusmjerava.
+- `Cache-Control: no-store` drži preglednik da ne zapamti `301` lokalno, jer se odredišta mijenjaju s prelaskom usluga (npr. `/mobilna/`). Rewriteovi Nexta stare adrese ne poznaju; na ductura.org ih daje produkcijski rub (zadatak 10, DAN-939).
+- Front institucije ima Next `basePath` `/aplikacija` i resurse pod `/aplikacija/_next/` (KA-03-WEB). `BASES.front` je zato `/aplikacija`: nove adrese idu doslovno, a redovi 11 i 12 preusmjeravaju (KA-11-EDGE). Povratak nakon prijave AAI@EduHr je `/aplikacija/` (Institution_server); stari povratak na `/app/web/` stiže onamo kroz red 11. Aplication_front je prešao (`BASES.admin` je `/administracija`).
+- Next fronta `/aplikacija/` preusmjerava na `/aplikacija` (`308`). Rub zato golu putanju šalje bez dodane kose crte (`bareSlash: false`), da ne bude petlje.
+- `/adminx`, `/Admin/prijava`, `/%61dmin/x`, `/app/webx`, `/App/web/`, `/app/chromex` i `/app/mobilex` nisu stare adrese.
 - `/Ulaz`, `/ULAZ` i `/Ulaz/` Next ne razlikuje od `/ulaz`: vraćaju preloader (200) s istim `X-Robots-Tag: noindex` (`headers()` u `next.config.ts`), pa se ne indeksiraju; 404 daju tek `/ulaz/x`, `/ulazx`.
 - `/ulaz/x`, `/aplikacijax`, `/prijava/x` i `/downloadx` nisu ni javne ni stare adrese (404 preloadera).
 
-Putanje usluga zapisane su samo u `deploy/edge/routes.ts`; iz nje čitaju rewriteovi Nexta i edge, a `test/config-routes.test.ts` provjerava da ih slijede i odredišta u `src/config.ts` (mobilni `/app/mobile/`, ostali `/o/`, uz lokalni `307` s `/app/web/` s preloadera `/ulaz`; s naslovnice `/` tog preusmjeravanja nema). Promjena basePatha u drugom repozitoriju traži izmjenu te tablice u istom koraku.
+Putanje usluga zapisane su samo u `deploy/edge/routes.ts`; iz nje čitaju rewriteovi Nexta i edge, a `test/config-routes.test.ts` provjerava da ih slijede i odredišta u `src/config.ts` (mobilni `/app/mobile/`, ostali `/o/`, uz lokalni `307` s `/app/web/` s preloadera `/ulaz`; s drugih stranica `/app/web/` ide `301` na `/aplikacija/`). Promjena basePatha u drugom repozitoriju traži izmjenu te tablice u istom koraku.
 
 - Putanja se uspoređuje doslovno: bez dekodiranja i bez promjene velikih slova. `/Admin`, `/%61dmin`, `/Administracija` i `/api/v2/...` nisu prosljeđeni nego idu preloaderu (404 Nexta).
-- Putanja i upit prosljeđuju se nepromijenjeni, osim javnih putanja iz tablice iznad: front institucije dobiva `/app/web/...`, ne `/...`.
+- Putanja i upit prosljeđuju se nepromijenjeni, osim javnih putanja iz tablice iznad: front institucije dobiva `/aplikacija/...`, ne `/...` (npr. `/` kao `/aplikacija/naslovnica`).
 - `Host` (`localhost:8000`), kolačići, `Location` i svi `Set-Cookie` prolaze nepromijenjeni. Edge dodaje `X-Forwarded-Host`, `X-Forwarded-Proto: http` i `X-Forwarded-For` (vrijednosti iz preglednika se zamjenjuju) i uklanja samo zaglavlja jednog skoka.
 - WebSocket (HMR razvojnih poslužitelja) prolazi kao sirova veza.
 - Ugašena usluga daje `502` sa stranicom greške preloadera (`/greska.html`, s CSP-om kao ispod); kad ne radi ni preloader, kratak tekst. Edge radi dalje.
 - Ciljevi se mijenjaju varijablama `DUCTURA_EDGE_PRELOADER`, `DUCTURA_EDGE_ADMIN`, `DUCTURA_EDGE_API` i `DUCTURA_EDGE_FRONT` (`http://host:port`, bez putanje). Port edgea je `DUCTURA_EDGE_PORT` (zadano 8000), adresa `DUCTURA_EDGE_HOST` (zadano `localhost`).
 - HTML preloadera dobiva `Content-Security-Policy` iz hasheva jedine ugrađene skripte i stila (`deploy/edge/content-security-policy.ts`, DAN-995); stranica bez skripte (404) dobiva `script-src 'none'`. Zaglavlje preloadera se zamjenjuje, a preloader odgovara cijelim i nekomprimiranim tijelom (edge mu ne šalje `Accept-Encoding` ni `Range`); `304` prolazi nepromijenjen. HEAD ide preloaderu kao GET, da zaglavlja budu ista. HTML koji ne prolazi provjeru (npr. iz `next dev`) dobiva strogu politiku `default-src 'none'` i redak u ispisu edgea; HTML veći od 1 MiB daje `502`.
-- Razvojne putanje `next dev` (`/__nextjs_font/*`, `/__nextjs_original-stack-frames`) Next traži bez basePatha, pa edge ih šalje usluzi čija je stranica u `Referer` (`/administracija/...` na Aplication_front, `/app/web/...` na front institucije); bez Referera idu preloaderu. Bez toga administracija u `next dev` nema font (404).
+- Razvojne putanje `next dev` (`/__nextjs_font/*`, `/__nextjs_original-stack-frames`) Next traži bez basePatha, pa edge ih šalje usluzi čija je stranica u `Referer` (`/administracija/...` na Aplication_front, `/aplikacija/...` i `/` na front institucije); bez Referera idu preloaderu. Bez toga administracija u `next dev` nema font (404).
 - Razlika od Vercela: rewriteovi Nexta (`src/rewrites.ts`) uspoređuju putanju bez obzira na velika i mala slova (`/Admin` ide na `/admin` Aplication_fronta), a edge doslovno. `%2f` i `%61` ni jedan ni drugi ne dekodira.
 
 ## 4. Tok u pregledniku (ugovor §3)
@@ -129,7 +130,7 @@ Putanje usluga zapisane su samo u `deploy/edge/routes.ts`; iz nje čitaju rewrit
 1. Otvorite **http://localhost:8000/**: to je naslovnica fronta institucije. Preloader je na **http://localhost:8000/ulaz**; gumbe za prijavu i administraciju više nema (zadatak 2 karte adresa, #65), nego sam vodi na ekran prijave web inačice `/aplikacija/prijava`. Administracija je zasebno, na `/administracija/prijava` (korak 2).
 2. **Administracija:** na `/administracija/prijava` (stara `/admin/prijava` daje `301` na nju) se prijavite kao `admin` s lozinkom iz `Aplication_server/.local/admin-lozinka` (`pnpm sve` je stvara; nije u repozitoriju). Na `/administracija` odaberite **+ Dodaj instituciju**: fakultet s popisa, izmišljenu AAI domenu (npr. `lok2.example.invalid`) i broj računa po ulozi. Issuer je `http://localhost:8090` iz `AAI_OIDC_ISSUER`. Aplication_server šalje instituciju Institution_serveru (§2), poslužitelj sa poslužiteljem; preglednik taj poziv nikad ne radi. Stranica institucije zatim pokazuje „Instanca je aktivna”.
 3. **Prijava računa institucije:** otvorite http://localhost:8000/ulaz (vodi na `/aplikacija/prijava`) i na ekranu prijave odaberite prijavu sustavom AAI@EduHr. Lokalno to otvara lažni OIDC na :8090 („Demo prijava, samo lokalno i CI”). Odaberite izmišljeni račun iz seeda (npr. „Demo studentica” ili „Demo nastavnik” ustanove `demo.ductus.test`) ili pod „Račun bilo koje ustanove” upišite AAI domenu dodane institucije.
-4. Lažni OIDC vraća preglednik na `/api/v1/auth/callback`. Institution_server postavlja kolačić `__Host-ductus_session` i preusmjerava (303) na `/app/web/`.
+4. Lažni OIDC vraća preglednik na `/api/v1/auth/callback`. Institution_server postavlja kolačić `__Host-ductus_session` i preusmjerava (303) na `/aplikacija/` (stari povratak na `/app/web/` edge `301` šalje onamo).
 5. Front institucije poziva `GET /api/v1/me`. Na `401` šalje preglednik na `/api/v1/auth/login?returnTo=<trenutna adresa>`, na `200` prikazuje početni ekran po ulozi.
 
 Studenti i svi računi institucije prijavljuju se samo preko AAI@EduHr, lokalno preko njegova simulatora (D-09, D-16). Drugog načina prijave za njih nema.
@@ -137,22 +138,22 @@ Studenti i svi računi institucije prijavljuju se samo preko AAI@EduHr, lokalno 
 ## 5. Provjera da sve radi
 
 - `pnpm sve` ispiše `radi` za svih šest usluga iza edgea (preloader, aplication-server, aplication-front, institution-server, lazni-oidc, front-institucije).
-- `curl -i http://localhost:8000/` vraća naslovnicu fronta institucije (resursi pod `/app/web/_next/`).
+- `curl -i http://localhost:8000/` vraća naslovnicu fronta institucije (resursi pod `/aplikacija/_next/`).
 - `curl -i http://localhost:8000/ulaz` vraća preloader s `Content-Security-Policy` (`script-src 'sha256-…'`) i `X-Robots-Tag: noindex`.
-- `curl -i http://localhost:8000/aplikacija/` vraća front institucije (kao `/app/web/`) s `X-Robots-Tag: noindex`; `curl -i http://localhost:8000/administracija/prijava` stranicu prijave administratora.
-- `curl -i http://localhost:8000/prijava` vraća `301` s `Location: /app/web/prijava`; `curl -i http://localhost:8000/api/auth/logout` vraća `308` s `Location: /api/v1/auth/logout`.
+- `curl -i http://localhost:8000/aplikacija` vraća front institucije s `X-Robots-Tag: noindex` (`/aplikacija/` njegov Next preusmjerava na `/aplikacija`); `curl -i http://localhost:8000/administracija/prijava` stranicu prijave administratora.
+- `curl -i http://localhost:8000/prijava` vraća `301` s `Location: /aplikacija/prijava`; `curl -i http://localhost:8000/api/auth/logout` vraća `308` s `Location: /api/v1/auth/logout`.
 - `curl -i http://localhost:8000/api/v1/health` vraća `200`.
-- `curl -i "http://localhost:8000/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F"` vraća preusmjeravanje na `http://localhost:8090/...`.
+- `curl -i "http://localhost:8000/api/v1/auth/login?returnTo=%2Faplikacija%2F"` vraća preusmjeravanje na `http://localhost:8090/...`.
 - `curl -i http://localhost:8000/admin/prijava` vraća `301` s `Location: /administracija/prijava`; `curl -i http://localhost:8000/app/mobile/` bez mobilnog fronta `302` s `Location: /aplikacija/`.
-- `curl -i http://localhost:8000/app/web/` vraća front institucije.
+- `curl -i http://localhost:8000/app/web/` i `curl -i http://localhost:8000/app/chrome/` vraćaju `301` s `Location: /aplikacija/`.
 
 ## 6. Česti problemi
 
 | Simptom | Uzrok i rješenje |
 |---|---|
-| `502` na `/admin`, `/api/v1` ili `/app/...` | Ta usluga ne radi. Pogledajte ispis `pnpm sve` (redak `NE ODGOVARA` ili `PRESKOČENO`). |
+| `502` na `/administracija`, `/api/v1` ili `/app/mobile` | Ta usluga ne radi. Pogledajte ispis `pnpm sve` (redak `NE ODGOVARA` ili `PRESKOČENO`). |
 | `502` na `/`, javnoj stranici ili `/aplikacija` | Njih daje front institucije (:5173), koji ne radi. Preloader je i dalje na `/ulaz`. |
-| `/pomoc`, `/kontakt` ili `/preuzimanja` daje 404 fronta | Rub ih već šalje frontu (`/app/web/pomoc` …), ali stranice još ne postoje (zadatak 6 karte adresa). |
+| `/pomoc`, `/kontakt` ili `/preuzimanja` daje 404 fronta | Rub ih već šalje frontu (`/aplikacija/pomoc` …), ali stranice još ne postoje (zadatak 6 karte adresa). |
 | `EADDRINUSE` | Port iz tablice već koristi drugi proces. Ugasite ga ili promijenite cilj edgea varijablom. |
 | `Institution_server nema skriptu "lokalno"` | Checkout je na staroj grani. Prebacite ga na `migracija/kopija-ductus-backend` (§1). |
 | `institution-server :4000 NE ODGOVARA` | Pogledajte redove `[institution-server]`: najčešće baza (`DATABASE_URL` mora biti superkorisnik na ovom računalu) ili zauzet port 4000/8090. |
