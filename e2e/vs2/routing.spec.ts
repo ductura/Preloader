@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { FIRST_SCREEN_PATH } from '../../deploy/edge/routes.ts';
 import { REDIRECT_DELAY_MS } from '../../src/client.ts';
 import { text } from '../../src/text.ts';
 import { matrixDevice } from '../matrix/devices.ts';
@@ -16,7 +17,8 @@ test('automatski otvara odgovarajući frontend kroz lokalni edge', async ({ page
   const variant = device.view === 'mobile' ? 'mobile' : device.desktopFrontend;
   const { href, path } = destinations[variant];
   await prepareFirstScreen(page, context, device);
-  const home = await page.goto('/', { waitUntil: 'domcontentloaded' });
+  // DAN-1574: prvi ekran preloadera je na `/prijava`; `/` je naslovnica fronta institucije.
+  const home = await page.goto(FIRST_SCREEN_PATH, { waitUntil: 'domcontentloaded' });
   expect(home?.status()).toBe(200);
   expect(home?.headers()['content-security-policy']).toMatch(/script-src 'sha256-/);
   await expect(page.locator('body')).toHaveAttribute('data-frontend', variant);
@@ -50,6 +52,22 @@ test('automatski otvara odgovarajući frontend kroz lokalni edge', async ({ page
     expect(response.status()).toBe(200);
     const assets = variant === 'mobile' ? '/app/mobile/_next/' : '/app/web/_next/';
     expect(await response.text()).toContain(assets);
+  }
+});
+
+test('/ poslužuje naslovnicu fronta institucije, adresa ostaje /', async ({ page }, info) => {
+  const response = await page.goto('/?izvor=e2e', { waitUntil: 'domcontentloaded' });
+  expect(response?.status()).toBe(200);
+  expect(response?.request().redirectedFrom()).toBeNull();
+  expect(new URL(page.url()).pathname).toBe('/');
+  if (info.config.metadata['fixture']) {
+    expect(response?.headers()['x-vs2-frontend']).toBe('naslovnica');
+    await expect(page.getByRole('heading', { name: 'naslovnica' })).toBeVisible();
+  } else {
+    // Pravi front institucije: stranica i njezini resursi dolaze s fronta (`/app/web/_next/`), ne s preloadera.
+    const html = (await response?.text()) ?? '';
+    expect(html).toContain('/app/web/_next/');
+    expect(html).not.toContain('id="sign-in-aai"');
   }
 });
 

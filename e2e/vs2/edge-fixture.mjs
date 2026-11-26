@@ -4,9 +4,12 @@ import { main } from '../../deploy/edge/dev-proxy.mjs';
 import { PRELOADER_ORIGIN } from '../matrix/server.ts';
 
 // Stvarne TCP veze između edgea i triju odvojenih HTTP poslužitelja.
-async function fixture(name, paths) {
+// `pages` daje ime stranice po putanji (bez upita); naslovnica fronta je `/app/web/naslovnica` (DAN-1574).
+async function fixture(frontend, paths, pages = {}) {
   const server = createServer((req, res) => {
-    if (!paths.includes(req.url)) {
+    const path = (req.url ?? '').split('?', 1)[0];
+    const name = pages[path] ?? frontend;
+    if (!paths.includes(req.url) && pages[path] === undefined) {
       res.writeHead(404).end();
       return;
     }
@@ -21,7 +24,7 @@ async function fixture(name, paths) {
 try {
   await main({
     DUCTURA_EDGE_PRELOADER: PRELOADER_ORIGIN,
-    DUCTURA_EDGE_FRONT: await fixture('chrome', ['/app/chrome/', '/app/web/']),
+    DUCTURA_EDGE_FRONT: await fixture('chrome', ['/app/chrome/', '/app/web/'], { '/app/web/naslovnica': 'naslovnica' }),
     DUCTURA_EDGE_MOBILE: await fixture('mobile', ['/app/mobile/']),
     DUCTURA_EDGE_OTHER: await fixture('other', ['/o/']),
   });

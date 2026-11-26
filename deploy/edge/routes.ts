@@ -1,7 +1,8 @@
 // Jedna tablica ruta jedinog podrijetla (P-0.10, ugovor Ductus #2028 §1). Iz nje čitaju oba ulaza:
 // rewriteovi Nexta na Vercelu (`src/rewrites.ts`) i lokalni edge (`dev-proxy.mjs`). Nova usluga ili
-// putanja dodaje se samo ovdje. Putanja koja nije u tablici ide preloaderu: `/` i njegove stranice,
-// a sve ostalo je 404. Kod je čisti TypeScript bez `node:` uvoza (Node ga izvršava bez prevođenja).
+// putanja dodaje se samo ovdje. Ulazne putanje `/` (naslovnica fronta institucije) i `/prijava` (prvi ekran
+// preloadera) su u `ENTRY_REWRITES` (DAN-1574). Putanja koja nije ni u jednoj tablici ide preloaderu: njegove
+// stranice, a sve ostalo je 404. Kod je čisti TypeScript bez `node:` uvoza (Node ga izvršava bez prevođenja).
 
 /** Usluga iza jedinog podrijetla. Preloader nije usluga: on je sve što nije u tablici. */
 export type Service = 'admin' | 'api' | 'front' | 'mobile' | 'other';
@@ -85,6 +86,41 @@ export function serviceFor(rawPath: string): Service | null {
   return null;
 }
 
+/**
+ * Ulazne putanje koje rub poslužuje s druge putanje, a adresa u pregledniku ostaje ista (DAN-1574, Daniel
+ * 26. 11. 2026.): `/` je naslovnica fronta institucije, a preloader se seli na `/prijava`. Vrijedi lokalno
+ * (`dev-proxy.mjs`) i na ductura.org (rewriteovi Nexta, `src/rewrites.ts`). Putanja se uspoređuje doslovno i
+ * cijela, bez prefiksa: `/prijava/x` nije preloader. Upit ide uz odredište nepromijenjen.
+ */
+export interface EntryRewrite {
+  /** Putanje točno kako ih šalje preglednik; Next završnu kosu crtu ne razlikuje, pa je navedena i ona. */
+  readonly paths: readonly string[];
+  /** Usluga iz tablice, ili null za sam preloader. */
+  readonly service: Service | null;
+  /**
+   * Putanja kod usluge, ili stranica preloadera. Prepisivanje na preloader radi njegov Next (`beforeFiles`);
+   * lokalni edge mu putanju šalje nepromijenjenu, da je preloader izgrađen s varijablom fronta ne pošalje dalje.
+   */
+  readonly destination: string;
+}
+
+/**
+ * Redom kojim ih Next primjenjuje (beforeFiles): `/` prije `/prijava`, da preloaderov `/` nakon rewritea
+ * `/prijava` ne ode ponovno na naslovnicu.
+ */
+export const ENTRY_REWRITES: readonly EntryRewrite[] = Object.freeze([
+  Object.freeze<EntryRewrite>({ paths: Object.freeze(['/']), service: 'front', destination: '/app/web/naslovnica' }),
+  Object.freeze<EntryRewrite>({ paths: Object.freeze(['/prijava', '/prijava/']), service: null, destination: '/' }),
+]);
+
+/** Javna adresa prvog ekrana preloadera (izbor sučelja i dva ulaza za prijavu). */
+export const FIRST_SCREEN_PATH = '/prijava';
+
+/** Ulazna putanja za putanju točno kako ju je poslao preglednik (bez upita), ili null. */
+export function entryFor(rawPath: string): EntryRewrite | null {
+  return ENTRY_REWRITES.find((entry) => entry.paths.includes(rawPath)) ?? null;
+}
+
 /** Putanje jedne usluge iz tablice. */
 export function pathsOf(service: Service): string[] {
   return ROUTES.filter((route) => route.service === service).map((route) => route.prefix);
@@ -92,8 +128,10 @@ export function pathsOf(service: Service): string[] {
 
 /**
  * Jedino pravilo koje ima samo lokalni edge (VS-2, deploy/edge/README.md): odabir „ostala sučelja” s
- * početne stranice otvara `/app/web/`, a lokalni edge ga s `307` šalje na Web_other pod `/o/`. Vrijedi samo
- * za GET i HEAD s `Referer` početne stranice istog podrijetla i samo kad je Web_other lokalno pokrenut.
+ * prvog ekrana preloadera (`FIRST_SCREEN_PATH`) otvara `/app/web/`, a lokalni edge ga s `307` šalje na
+ * Web_other pod `/o/`. Vrijedi samo za GET i HEAD s `Referer` prvog ekrana istog podrijetla i samo kad je
+ * Web_other lokalno pokrenut. Naslovnica na `/` nije prvi ekran: njezine poveznice na `/app/web/` ostaju na
+ * frontu institucije.
  * Rewriteovi Nexta to pravilo nemaju: `/app/web` na Vercelu uvijek ide na front institucije.
  */
 export const EDGE_ONLY_REDIRECT: {

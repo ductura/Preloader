@@ -256,7 +256,9 @@ describe('pnpm sve nad lažnim checkoutima', () => {
       expect(admin).toMatchObject({ name: 'aplication-front', url: '/admin/prijava', host: 'localhost:8000' });
       expect(api).toMatchObject({ name: 'institution-server', url: '/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F', tokenLength: 43 });
       expect(front).toMatchObject({ name: 'front-institucije', url: '/app/web/' });
-      const page = await fetch('http://localhost:8000/');
+      // DAN-1574: `/` je naslovnica fronta institucije, a prvi ekran preloadera je na `/prijava`.
+      expect(await json('/?izvor=x')).toMatchObject({ name: 'front-institucije', url: '/app/web/naslovnica?izvor=x' });
+      const page = await fetch('http://localhost:8000/prijava');
       expect(await page.text()).toContain('Prijava preko AAI@EduHr');
       // Izgrađen preloader (`next start`) iza edgea: CSP iz hasheva, ne stroga zamjenska politika.
       expect(page.headers.get('content-security-policy')).toMatch(/script-src 'sha256-[A-Za-z0-9+/]{43}='/);

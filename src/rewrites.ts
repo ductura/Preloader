@@ -1,7 +1,7 @@
 // Jedno podrijetlo (ductura.org): Next.js prosljeđuje putanje ostalih usluga po ugovoru Ductus #2028 §1.
 // Putanje i varijable su u tablici ruta (`deploy/edge/routes.ts`), iz koje čita i lokalni edge
 // (`deploy/edge/dev-proxy.mjs`). Adrese su u varijablama okoline, ne u repou.
-import { pathsOf, ROUTES, SERVICES as SERVICE_SPECS, type Service } from '../deploy/edge/routes.ts';
+import { ENTRY_REWRITES, pathsOf, ROUTES, SERVICES as SERVICE_SPECS, type Service } from '../deploy/edge/routes.ts';
 
 export interface Rewrite {
   source: string;
@@ -82,6 +82,29 @@ export function serviceRewrites(env: ServiceEnv): Rewrite[] {
     const slash = SERVICE_SPECS[service].bareSlash ? '/' : '';
     rewrites.push({ source: prefix, destination: `${origin}${prefix}${slash}` });
     rewrites.push({ source: `${prefix}/:path*`, destination: `${origin}${prefix}/:path*` });
+  }
+  return rewrites;
+}
+
+/**
+ * Ulazni rewriteovi (DAN-1574) za `beforeFiles` u `next.config.ts`, redom `ENTRY_REWRITES`: `/` ide na
+ * naslovnicu fronta institucije (`/app/web/naslovnica`), a `/prijava` na prvi ekran preloadera (`/`).
+ * Moraju biti u `beforeFiles` jer preloader ima vlastitu stranicu `/`. Bez varijable fronta nema rewritea
+ * `/`, pa preloader ostaje i na `/` (kao bez ostalih usluga). Next završnu kosu crtu ne razlikuje, pa se
+ * izvor navodi bez nje. Neispravno podrijetlo ruši izgradnju kao u `serviceRewrites`.
+ */
+export function entryRewrites(env: ServiceEnv): Rewrite[] {
+  const rewrites: Rewrite[] = [];
+  for (const entry of ENTRY_REWRITES) {
+    let destination = entry.destination;
+    if (entry.service !== null) {
+      const name = SERVICE_SPECS[entry.service].rewriteEnv;
+      const value = env[name];
+      if (value === undefined || value === '') continue;
+      destination = `${serviceOrigin(name, value)}${entry.destination}`;
+    }
+    const sources = new Set(entry.paths.map((path) => (path.length > 1 ? path.replace(/\/+$/, '') : path)));
+    for (const source of sources) rewrites.push({ source, destination });
   }
   return rewrites;
 }

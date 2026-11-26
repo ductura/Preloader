@@ -74,14 +74,18 @@ Sam edge bez ostalih usluga: `pnpm build && pnpm start` u jednom terminalu i `pn
 
 | Putanja | Ide na |
 |---|---|
-| `/`, `/greska.html`, `/_next/*` i sve ostalo | preloader (Next.js) :3100; drugo od GET i HEAD daje `405` |
+| `/` (uz isti upit) | naslovnica fronta institucije :5173, putanja `/app/web/naslovnica`; adresa ostaje `/` (DAN-1574) |
+| `/prijava`, `/prijava/` | prvi ekran preloadera (Next.js) :3100; Next ih sam prepisuje na svoju stranicu `/` (DAN-1574) |
+| `/greska.html`, `/_next/*` i sve ostalo | preloader (Next.js) :3100; drugo od GET i HEAD daje `405` |
 | `/admin`, `/admin/*` | Aplication_front :3120 |
 | `/api/v1`, `/api/v1/*` | Institution_server :4000 |
 | `/app/web`, `/app/web/*`, `/app/chrome`, `/app/chrome/*` | front institucije :5173 |
 | `/app/mobile`, `/app/mobile/*` | Institution_web_mobile (`DUCTURA_EDGE_MOBILE`; bez nje preloader, 404) |
 | `/o`, `/o/*` | Web_other (`DUCTURA_EDGE_OTHER`; bez nje preloader, 404) |
 
-Putanje usluga zapisane su samo u `deploy/edge/routes.ts`; iz nje čitaju rewriteovi Nexta i edge, a `test/config-routes.test.ts` provjerava da ih slijede i odredišta u `src/config.ts` (mobilni `/app/mobile/`, ostali `/o/`, uz lokalni `307` s `/app/web/` s početnog ekrana). Promjena basePatha u drugom repozitoriju traži izmjenu te tablice u istom koraku.
+Naslovnica i prvi ekran (odluka vlasnika 26. 11. 2026., DAN-1574) vrijede i na ductura.org: rewriteovi Nexta (`entryRewrites` u `src/rewrites.ts`, `beforeFiles`) daju isto što i edge. Na Vercelu bez `INSTITUTION_FRONT_URL` preloader ostaje i na `/`. `/prijava/x`, `/Prijava` i `/%70rijava` nisu prvi ekran (404). Pojedinosti su u `deploy/edge/README.md`.
+
+Putanje usluga zapisane su samo u `deploy/edge/routes.ts`; iz nje čitaju rewriteovi Nexta i edge, a `test/config-routes.test.ts` provjerava da ih slijede i odredišta u `src/config.ts` (mobilni `/app/mobile/`, ostali `/o/`, uz lokalni `307` s `/app/web/` s prvog ekrana `/prijava`; s naslovnice `/` tog preusmjeravanja nema). Promjena basePatha u drugom repozitoriju traži izmjenu te tablice u istom koraku.
 
 - Putanja se uspoređuje doslovno: bez dekodiranja i bez promjene velikih slova. `/Admin`, `/%61dmin`, `/administracija` i `/api/v2/...` nisu prosljeđeni nego idu preloaderu (404 Nexta).
 - Putanja i upit prosljeđuju se nepromijenjeni: front institucije dobiva `/app/web/...`, ne `/...`.
@@ -95,13 +99,13 @@ Putanje usluga zapisane su samo u `deploy/edge/routes.ts`; iz nje čitaju rewrit
 
 ## 4. Tok u pregledniku (ugovor §3)
 
-1. Otvorite **http://localhost:8000/**. Preloader nudi dva ulaza:
+1. Otvorite **http://localhost:8000/**: to je naslovnica fronta institucije. Prvi ekran preloadera je na **http://localhost:8000/prijava** i nudi dva ulaza:
    - **Prijava preko AAI@EduHr** vodi na `/api/v1/auth/login?returnTo=/app/web/`;
    - **Administracija platforme** vodi na `/admin/prijava`.
 
    Preloader nakon 4 sekunde sam otvara web za Vaš preglednik. Fokus ili dodir na jednom od ova dva ulaza to otkazuje, pa izbor ostaje Vaš.
 2. **Administracija:** na `/admin/prijava` se prijavite kao `admin` s lozinkom iz `Aplication_server/.local/admin-lozinka` (`pnpm sve` je stvara; nije u repozitoriju). Na `/admin` odaberite **+ Dodaj instituciju**: fakultet s popisa, izmišljenu AAI domenu (npr. `lok2.example.invalid`) i broj računa po ulozi. Issuer je `http://localhost:8090` iz `AAI_OIDC_ISSUER`. Aplication_server šalje instituciju Institution_serveru (§2), poslužitelj sa poslužiteljem; preglednik taj poziv nikad ne radi. Stranica institucije zatim pokazuje „Instanca je aktivna”.
-3. **Prijava računa institucije:** vratite se na http://localhost:8000/ i odaberite **Prijava preko AAI@EduHr**. Lokalno to otvara lažni OIDC na :8090 („Demo prijava, samo lokalno i CI”). Odaberite izmišljeni račun iz seeda (npr. „Demo studentica” ili „Demo nastavnik” ustanove `demo.ductus.test`) ili pod „Račun bilo koje ustanove” upišite AAI domenu dodane institucije.
+3. **Prijava računa institucije:** otvorite http://localhost:8000/prijava i odaberite **Prijava preko AAI@EduHr**. Lokalno to otvara lažni OIDC na :8090 („Demo prijava, samo lokalno i CI”). Odaberite izmišljeni račun iz seeda (npr. „Demo studentica” ili „Demo nastavnik” ustanove `demo.ductus.test`) ili pod „Račun bilo koje ustanove” upišite AAI domenu dodane institucije.
 4. Lažni OIDC vraća preglednik na `/api/v1/auth/callback`. Institution_server postavlja kolačić `__Host-ductus_session` i preusmjerava (303) na `/app/web/`.
 5. Front institucije poziva `GET /api/v1/me`. Na `401` šalje preglednik na `/api/v1/auth/login?returnTo=<trenutna adresa>`, na `200` prikazuje početni ekran po ulozi.
 
@@ -110,7 +114,8 @@ Studenti i svi računi institucije prijavljuju se samo preko AAI@EduHr, lokalno 
 ## 5. Provjera da sve radi
 
 - `pnpm sve` ispiše `radi` za svih šest usluga iza edgea (preloader, aplication-server, aplication-front, institution-server, lazni-oidc, front-institucije).
-- `curl -i http://localhost:8000/` vraća preloader s `Content-Security-Policy` (`script-src 'sha256-…'`).
+- `curl -i http://localhost:8000/` vraća naslovnicu fronta institucije (resursi pod `/app/web/_next/`).
+- `curl -i http://localhost:8000/prijava` vraća preloader s `Content-Security-Policy` (`script-src 'sha256-…'`).
 - `curl -i http://localhost:8000/api/v1/health` vraća `200`.
 - `curl -i "http://localhost:8000/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F"` vraća preusmjeravanje na `http://localhost:8090/...`.
 - `curl -i http://localhost:8000/admin/prijava` vraća stranicu prijave administratora.
@@ -121,6 +126,7 @@ Studenti i svi računi institucije prijavljuju se samo preko AAI@EduHr, lokalno 
 | Simptom | Uzrok i rješenje |
 |---|---|
 | `502` na `/admin`, `/api/v1` ili `/app/...` | Ta usluga ne radi. Pogledajte ispis `pnpm sve` (redak `NE ODGOVARA` ili `PRESKOČENO`). |
+| `502` na `/` | Naslovnicu daje front institucije (:5173), koji ne radi. Prvi ekran preloadera je i dalje na `/prijava`. |
 | `EADDRINUSE` | Port iz tablice već koristi drugi proces. Ugasite ga ili promijenite cilj edgea varijablom. |
 | `Institution_server nema skriptu "lokalno"` | Checkout je na staroj grani. Prebacite ga na `migracija/kopija-ductus-backend` (§1). |
 | `institution-server :4000 NE ODGOVARA` | Pogledajte redove `[institution-server]`: najčešće baza (`DATABASE_URL` mora biti superkorisnik na ovom računalu) ili zauzet port 4000/8090. |
@@ -135,6 +141,7 @@ Studenti i svi računi institucije prijavljuju se samo preko AAI@EduHr, lokalno 
 - `test/dev-proxy.test.ts`: rute (i razvojne putanje po Refereru), zaglavlja, kolačići, `Location`, WebSocket i ugašen uzvodni, s lažnim uzvodnim poslužiteljima.
 - `test/sve-lokalno.test.ts`: plan usluga, adrese baza, lozinka administratora, pokretanje bez ljuske i cijeli `pnpm sve` nad lažnim checkoutima: lažni `pnpm lokalno` zapiše token, a Aplication_server ga dobiva (koristi stvarne portove iz tablice, pa ne smije raditi uz pokrenut `pnpm sve`).
 - `test/functional.test.ts` i `e2e/matrix/*.spec.ts`: dva ulaza za prijavu na preloaderu.
+- `test/route-table.test.ts`, `test/next-start.test.ts` i `e2e/vs2/routing.spec.ts`: naslovnica na `/` i prvi ekran na `/prijava`, isti cilj u rewriteovima Nexta i u edgeu (DAN-1574).
 
 ## 8. Rezultat prolaza (LOK-2, 20. 11. 2026.)
 

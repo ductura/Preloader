@@ -2,7 +2,7 @@
 // Isti cilj kao lokalni edge za svaku putanju provjerava test/route-table.test.ts.
 import { describe, expect, test } from 'vitest';
 import { ROUTES, SERVICES as SERVICE_SPECS } from '../deploy/edge/routes.ts';
-import { SERVICES, serviceOrigin, serviceRewrites } from '../src/rewrites.ts';
+import { entryRewrites, SERVICES, serviceOrigin, serviceRewrites } from '../src/rewrites.ts';
 
 const ENV = {
   APLICATION_FRONT_URL: 'https://admin.example.test',
@@ -63,6 +63,25 @@ describe('serviceRewrites', () => {
 
   test('neispravna varijabla ruši izgradnju i kad bi njezina usluga bila zadnja u tablici', () => {
     expect(() => serviceRewrites({ ...ENV, WEB_OTHER_URL: 'https://other.example.test/o' })).toThrow(/WEB_OTHER_URL/);
+  });
+});
+
+describe('entryRewrites (DAN-1574)', () => {
+  test('/ na naslovnicu fronta institucije, zatim /prijava na prvi ekran preloadera', () => {
+    expect(entryRewrites(ENV)).toEqual([
+      { source: '/', destination: 'https://front.example.test/app/web/naslovnica' },
+      { source: '/prijava', destination: '/' },
+    ]);
+  });
+
+  test('bez fronta institucije preloader ostaje i na /, a /prijava ga i dalje otvara', () => {
+    expect(entryRewrites({})).toEqual([{ source: '/prijava', destination: '/' }]);
+    expect(entryRewrites({ ...ENV, INSTITUTION_FRONT_URL: '' })).toEqual([{ source: '/prijava', destination: '/' }]);
+  });
+
+  test('neispravno podrijetlo fronta ruši izgradnju', () => {
+    expect(() => entryRewrites({ INSTITUTION_FRONT_URL: 'https://front.example.test/app' })).toThrow(/INSTITUTION_FRONT_URL/);
+    expect(() => entryRewrites({ INSTITUTION_FRONT_URL: 'http://front.example.test' })).toThrow(/INSTITUTION_FRONT_URL/);
   });
 });
 

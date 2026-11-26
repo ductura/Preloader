@@ -16,7 +16,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createEdge, routeFor, targetsFromEnv } from '../deploy/edge/dev-proxy.mjs';
-import { EDGE_ONLY_REDIRECT, ROUTES, serviceFor, SERVICES, type Service } from '../deploy/edge/routes.ts';
+import { EDGE_ONLY_REDIRECT, ENTRY_REWRITES, FIRST_SCREEN_PATH, ROUTES, serviceFor, SERVICES, type Service } from '../deploy/edge/routes.ts';
 import nextConfig from '../next.config.ts';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -117,6 +117,8 @@ function nextTarget(rewrites: NextRewrites, env: Record<string, string>, target:
   let path = rawPath.length > 1 ? rawPath.replace(/\/+$/, '') : rawPath;
   for (const rule of rewrites.beforeFiles) {
     const destination = applyRewrite(rule, path);
+    // Vanjsko odredište (DAN-1574: `/` na naslovnicu fronta) Next odmah prosljeđuje.
+    if (destination !== null && /^https?:\/\//.test(destination)) return resolve(destination);
     if (destination !== null) path = destination;
   }
   if (PAGES.has(path)) return resolve(path);
@@ -220,8 +222,11 @@ afterAll(async () => {
 
 // ——— Tablica ———
 
-/** Zahtjev s početne stranice istog podrijetla (odabir u preloaderu). */
+/** Zahtjev s prvog ekrana preloadera istog podrijetla (`/prijava`, odabir u preloaderu). */
 const FIRST_SCREEN = 'first-screen';
+/** Zahtjev s naslovnice istog podrijetla (`/`, front institucije; DAN-1574). */
+const HOME = 'home';
+const REFERER_PATH = { [FIRST_SCREEN]: FIRST_SCREEN_PATH, [HOME]: '/' } as const;
 
 /** Zatvoren skup razloga zbog kojih rewrite i lokalni edge smiju dati različit cilj. */
 const DIFFERENCES = {
@@ -232,7 +237,7 @@ const DIFFERENCES = {
 
 interface Row {
   path: string;
-  referer?: typeof FIRST_SCREEN;
+  referer?: keyof typeof REFERER_PATH;
   rewrite: Target;
   /** Izostavljeno: isto kao rewrite. Navedeno samo uz razlog iz `DIFFERENCES`. */
   edge?: Target;
@@ -241,7 +246,14 @@ interface Row {
 
 /** Sve usluge pokrenute i zadane (Vercel s pet varijabli, lokalno `pnpm sve` s pet frontova). */
 const ALL: Row[] = [
-  { path: '/', rewrite: toPreloader(200) },
+  // DAN-1574: naslovnica fronta institucije na `/`, prvi ekran preloadera na `/prijava`; upit ide uz odredište.
+  { path: '/', rewrite: toService('front', '/app/web/naslovnica') },
+  { path: '/?izvor=a', rewrite: toService('front', '/app/web/naslovnica?izvor=a') },
+  { path: '/prijava', rewrite: toPreloader(200) },
+  { path: '/prijava/', rewrite: toPreloader(200) },
+  { path: '/prijava?x=1', rewrite: toPreloader(200) },
+  { path: '/app/web/naslovnica', rewrite: toService('front', '/app/web/naslovnica') },
+  { path: '/app/web/', referer: HOME, rewrite: toService('front', '/app/web/') },
   { path: '/greska.html?status=503', rewrite: toPreloader(200) },
   { path: '/admin', rewrite: toService('admin', '/admin') },
   { path: '/admin/postavke?kartica=1', rewrite: toService('admin', '/admin/postavke?kartica=1') },
@@ -275,14 +287,15 @@ const ALL: Row[] = [
   { path: '/o/?q=1', rewrite: toService('other', '/o?q=1'), edge: toService('other', '/o/?q=1'), why: 'trailingSlash' },
   { path: '/admin/', rewrite: toService('admin', '/admin'), edge: toService('admin', '/admin/'), why: 'trailingSlash' },
   // Nepoznata putanja: 404 u oba (preloader, fallback u next.config.ts).
-  ...['/nema-me', '/api/v2/x', '/api/v1x', '/administracija', '/Admin', '/%61dmin', '/app/webx', '/app/mobilex', '/ostalo', '/O/x', '/%6F/x', '/app'].map(
+  ...['/prijava/x', '/prijavax', '/nema-me', '/api/v2/x', '/api/v1x', '/administracija', '/Admin', '/%61dmin', '/app/webx', '/app/mobilex', '/ostalo', '/O/x', '/%6F/x', '/app'].map(
     (path): Row => ({ path, rewrite: toPreloader(404) }),
   ),
 ];
 
 /** Bez varijabli za Institution_web_mobile i Web_other: njihove putanje daju 404 u oba, ostalo radi. */
 const WITHOUT_VARIANTS: Row[] = [
-  { path: '/', rewrite: toPreloader(200) },
+  { path: '/', rewrite: toService('front', '/app/web/naslovnica') },
+  { path: '/prijava', rewrite: toPreloader(200) },
   { path: '/api/v1/me', rewrite: toService('api', '/api/v1/me') },
   { path: '/app/mobile', rewrite: toPreloader(404) },
   { path: '/app/mobile/zadaci', rewrite: toPreloader(404) },
@@ -296,10 +309,10 @@ describe.each([
   ['sve usluge zadane', ALL, rewriteEnvAll, () => edgeOrigin],
   ['bez Institution_web_mobile i Web_other', WITHOUT_VARIANTS, rewriteEnvWithoutVariants, () => edgeOriginWithoutVariants],
 ] as const)('%s: rewrite i lokalni edge', (_name, rows, env, origin) => {
-  test.each(rows.map((row) => [row.referer ? `${row.path} (s početne stranice)` : row.path, row] as const))('%s', async (_label, row) => {
+  test.each(rows.map((row) => [row.referer ? `${row.path} (${row.referer === HOME ? 's naslovnice' : 's prvog ekrana'})` : row.path, row] as const))('%s', async (_label, row) => {
     const rewrites = await rewritesFor(env());
     const viaRewrite = nextTarget(rewrites, env(), row.path);
-    const referer = row.referer === FIRST_SCREEN ? `${origin()}/` : undefined;
+    const referer = row.referer === undefined ? undefined : `${origin()}${REFERER_PATH[row.referer]}`;
     const viaEdge = await edgeTarget(origin(), row.path, referer);
     expect({ rewrite: viaRewrite, edge: viaEdge }).toEqual({ rewrite: row.rewrite, edge: row.edge ?? row.rewrite });
   });
@@ -309,7 +322,13 @@ describe('tablica', () => {
   test('svaka putanja iz tablice ruta ima redak sa svojom uslugom u oba ulaza', () => {
     const covered = new Set(ALL.filter((row) => row.edge === undefined).map((row) => serviceFor(row.path.split('?')[0] ?? '')));
     for (const { service } of ROUTES) expect(covered).toContain(service);
-    expect(ALL.some((row) => row.path === '/' && row.rewrite === toPreloader(200))).toBe(true);
+    expect(ALL.some((row) => row.path === FIRST_SCREEN_PATH && row.rewrite === toPreloader(200))).toBe(true);
+    for (const entry of ENTRY_REWRITES) {
+      for (const path of entry.paths) {
+        const target = entry.service === null ? toPreloader(200) : toService(entry.service, entry.destination);
+        expect(ALL.some((row) => row.path === path && row.rewrite === target && row.edge === undefined), path).toBe(true);
+      }
+    }
   });
 
   test('svaka izričita razlika ima razlog, a razlog odgovara retku', () => {

@@ -2,13 +2,16 @@
 // Samo za razvoj na jednom računalu; pravi rubni proxy u produkciji je P-0.10.
 //
 // Rute su u tablici `routes.ts`, iz koje čitaju i rewriteovi Nexta (src/rewrites.ts):
-//   /, sve ostalo          -> preloader (Next.js, :3100)
+//   /                      -> naslovnica fronta institucije (:5173, putanja /app/web/naslovnica; DAN-1574)
+//   /prijava               -> prvi ekran preloadera (Next.js, :3100; Next ga prepisuje na /; DAN-1574)
+//   sve ostalo             -> preloader (Next.js, :3100)
 //   /admin, /admin/*       -> Aplication_front (:3120)
 //   /api/v1, /api/v1/*     -> Institution_server (:4000)
 //   /app/web, /app/chrome  -> front institucije (:5173)
 //   /app/mobile            -> Institution_web_mobile (DUCTURA_EDGE_MOBILE; bez nje preloader, 404)
 //   /o                     -> Web_other (DUCTURA_EDGE_OTHER; bez nje preloader, 404)
-// Samo lokalno: /app/web s početne stranice -> 307 na /o/ (EDGE_ONLY_REDIRECT, VS-2).
+// Samo lokalno: /app/web s prvog ekrana preloadera (/prijava) -> 307 na /o/ (EDGE_ONLY_REDIRECT, VS-2).
+// Adresa u pregledniku za / i /prijava ostaje ista; front za / dobiva putanju iz ENTRY_REWRITES uz isti upit.
 //
 // Putanja se uspoređuje doslovno, bez dekodiranja i bez promjene velikih slova (P-0.10,
 // src/sign-in/README.md): `/%61dmin` ili `/Admin` nisu administracija. Host, kolačići,
@@ -18,7 +21,7 @@
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
 import { contentSecurityPolicyFor } from './content-security-policy.ts';
-import { EDGE_ONLY_REDIRECT, SERVICES, serviceFor } from './routes.ts';
+import { EDGE_ONLY_REDIRECT, entryFor, SERVICES, serviceFor } from './routes.ts';
 import { isMain } from '../../scripts/is-main.ts';
 
 /** @typedef {import('./routes.ts').Service} Service */
@@ -97,12 +100,35 @@ export function targetsFromEnv(env = process.env) {
  * @returns {Upstream | Variant}
  */
 export function routeFor(rawPath, referer, targets = {}) {
-  const service = serviceFor(rawPath);
-  if (service !== null) {
-    const spec = /** @type {import('./routes.ts').ServiceSpec} */ (SERVICES[service]);
-    if (spec.edgeDefault !== undefined || targets[service] !== undefined) return service;
-    return 'preloader';
+  return forwardFor(rawPath, referer, targets).route;
+}
+
+/** Usluga iz tablice lokalno postoji: ima zadani cilj ili varijablu. */
+function available(/** @type {Service} */ service, /** @type {Partial<Record<Upstream | Variant, URL>>} */ targets) {
+  const spec = /** @type {import('./routes.ts').ServiceSpec} */ (SERVICES[service]);
+  return spec.edgeDefault !== undefined || targets[service] !== undefined;
+}
+
+/**
+ * Kamo ide zahtjev i s kojom putanjom (bez upita). Ulaz usluge (`/` na naslovnicu fronta; ENTRY_REWRITES,
+ * DAN-1574) mijenja putanju prema uzvodnom; sve ostale putanje idu nepromijenjene. `/prijava` ide preloaderu
+ * kao `/prijava`: njegov Next je sam prepisuje na `/` (src/rewrites.ts, `entryRewrites`). Poslan kao `/`,
+ * preloader izgrađen s `INSTITUTION_FRONT_URL` bi ga opet poslao na naslovnicu. Ulaz čija usluga lokalno
+ * ne postoji ide preloaderu s izvornom putanjom.
+ * @param {string} rawPath
+ * @param {string} [referer]
+ * @param {Partial<Record<Upstream | Variant, URL>>} [targets]
+ * @returns {{ route: Upstream | Variant, path: string }}
+ */
+export function forwardFor(rawPath, referer, targets = {}) {
+  const entry = entryFor(rawPath);
+  if (entry !== null) {
+    if (entry.service === null) return { route: 'preloader', path: rawPath };
+    if (available(entry.service, targets)) return { route: entry.service, path: entry.destination };
+    return { route: 'preloader', path: rawPath };
   }
+  const service = serviceFor(rawPath);
+  if (service !== null) return { route: available(service, targets) ? service : 'preloader', path: rawPath };
   if (rawPath.startsWith('/__nextjs') && referer) {
     let from = '';
     try {
@@ -110,9 +136,9 @@ export function routeFor(rawPath, referer, targets = {}) {
     } catch {
       // Neispravan Referer: preloader.
     }
-    if (from && !from.startsWith('/__nextjs')) return routeFor(from, undefined, targets);
+    if (from && !from.startsWith('/__nextjs')) return { route: routeFor(from, undefined, targets), path: rawPath };
   }
-  return 'preloader';
+  return { route: 'preloader', path: rawPath };
 }
 
 /** Ime hosta za spajanje: IPv6 iz URL-a (`[::1]`) bez uglatih zagrada. */
@@ -126,11 +152,14 @@ function pathOf(/** @type {string} */ target) {
   return path.startsWith('/') ? path : '';
 }
 
-// Samo odabir s početnog ekrana koristi /app/web/ za Web_other. Povratak iz
-// AAI@EduHr, izravni pristup i Chromeovi resursi pod /app/web/ pripadaju postojećem hostu.
+// Samo odabir s prvog ekrana preloadera (`/prijava`, DAN-1574) koristi /app/web/ za Web_other. Povratak iz
+// AAI@EduHr, izravni pristup, poveznice naslovnice (`/`) i Chromeovi resursi pod /app/web/ pripadaju
+// postojećem hostu.
 function fromFirstScreen(/** @type {import('node:http').IncomingMessage} */ req) {
   const source = URL.parse(req.headers.referer ?? '');
-  return source?.protocol === 'http:' && source.host === req.headers.host && source.pathname === '/';
+  if (source?.protocol !== 'http:' || source.host !== req.headers.host) return false;
+  const entry = entryFor(source.pathname);
+  return entry !== null && entry.service === null;
 }
 
 // RFC 9110 §7.6.1: vrijede samo za jednu vezu i ne prosljeđuju se.
@@ -305,7 +334,7 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       res.writeHead(EDGE_ONLY_REDIRECT.status, { Location: location, 'Cache-Control': 'no-store' }).end();
       return;
     }
-    const route = routeFor(rawPath, req.headers.referer, targets);
+    const { route, path } = forwardFor(rawPath, req.headers.referer, targets);
     // Preloader nema obrazaca ni API-ja: drugo od GET i HEAD ne ide dalje.
     if (route === 'preloader' && req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD' }).end();
@@ -319,7 +348,7 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       port: upstream.port || 80,
       // HEAD na preloader ide kao GET: CSP se računa iz tijela, a Node odgovor na HEAD šalje bez njega.
       method: preloader && req.method === 'HEAD' ? 'GET' : req.method,
-      path: target,
+      path: `${path}${target.slice(rawPath.length)}`,
       headers: upstreamHeaders(req, false, preloader),
       setHost: false,
     });
@@ -353,13 +382,13 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
       return;
     }
-    const route = routeFor(rawPath, undefined, targets);
+    const { route, path } = forwardFor(rawPath, undefined, targets);
     const upstream = targets[route] ?? targets.preloader;
     let connected = false;
     const remote = connect({ host: connectHost(upstream), port: Number(upstream.port || 80) }, () => {
       connected = true;
       const headers = upstreamHeaders(req, true);
-      let lines = `${req.method} ${target} HTTP/${req.httpVersion}\r\n`;
+      let lines = `${req.method} ${path}${target.slice(rawPath.length)} HTTP/${req.httpVersion}\r\n`;
       for (let i = 0; i < headers.length; i += 2) lines += `${headers[i]}: ${headers[i + 1]}\r\n`;
       remote.write(`${lines}\r\n`);
       if (head.length > 0) remote.write(head);

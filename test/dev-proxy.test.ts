@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { connect } from 'node:net';
 import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
-import { createEdge, DEFAULT_TARGETS, FALLBACK_CSP, routeFor, targetsFromEnv } from '../deploy/edge/dev-proxy.mjs';
+import { createEdge, DEFAULT_TARGETS, FALLBACK_CSP, forwardFor, routeFor, targetsFromEnv } from '../deploy/edge/dev-proxy.mjs';
 
 interface Seen {
   upstream: string;
@@ -48,6 +48,8 @@ const nextPage = (body: string, script?: string) =>
   `<body><div id="__next">${body}</div>${script === undefined ? '' : `<script>${script}</script>`}</body></html>`;
 const PAGES: Record<string, { status: number; body: string | Buffer; headers?: Record<string, string> }> = {
   '/greska.html': { status: 200, body: nextPage('<p>greška</p>', 'greska()') },
+  // Prvi ekran preloadera na `/prijava` (DAN-1574); Next ga sam prepisuje na `/`.
+  '/prijava?prvi=1': { status: 200, body: nextPage('<p>prvi ekran</p>', 'prvi()') },
   '/html/stranica': { status: 200, body: nextPage('<p>preloader</p>', 'prvi()'), headers: { 'Content-Security-Policy': "script-src 'unsafe-inline'" } },
   '/html/404': { status: 404, body: nextPage('<p>Stranica ne postoji</p>') },
   '/html/304': { status: 304, body: '', headers: { ETag: '"v1"' } },
@@ -135,7 +137,8 @@ function rawRequest(path: string): Promise<{ status: number; text: string }> {
 
 describe('routeFor', () => {
   test.each([
-    ['/', 'preloader'],
+    ['/', 'front'],
+    ['/prijava', 'preloader'],
     ['/greska.html', 'preloader'],
     ['/admin', 'admin'],
     ['/admin/', 'admin'],
@@ -180,7 +183,9 @@ describe('routeFor', () => {
   test('razvojne putanje next dev idu usluzi stranice iz Referera (LOK-2)', () => {
     expect(routeFor('/__nextjs_font/geist-latin.woff2', 'http://localhost:8000/admin/_next/static/chunks/a.css')).toBe('admin');
     expect(routeFor('/__nextjs_original-stack-frames', 'http://localhost:8000/app/web/zadaci')).toBe('front');
-    expect(routeFor('/__nextjs_font/x.woff2', 'http://localhost:8000/')).toBe('preloader');
+    // DAN-1574: `/` je naslovnica fronta institucije, prvi ekran preloadera je `/prijava`.
+    expect(routeFor('/__nextjs_font/x.woff2', 'http://localhost:8000/')).toBe('front');
+    expect(routeFor('/__nextjs_font/x.woff2', 'http://localhost:8000/prijava')).toBe('preloader');
     expect(routeFor('/__nextjs_font/x.woff2', 'http://localhost:8000/__nextjs_font/y')).toBe('preloader');
     expect(routeFor('/__nextjs_font/x.woff2', 'nije url')).toBe('preloader');
     expect(routeFor('/__nextjs_font/x.woff2')).toBe('preloader');
@@ -220,7 +225,7 @@ describe('targetsFromEnv', () => {
 });
 
 describe('preloader (Next.js)', () => {
-  test.each(['/', '/greska.html?status=404', '/nema-me', '/_next/static/chunks/a.js', '/Admin', '/%61dmin', '/../tajna.txt', '/%2e%2e/tajna.txt'])(
+  test.each(['/greska.html?status=404', '/nema-me', '/_next/static/chunks/a.js', '/Admin', '/%61dmin', '/../tajna.txt', '/%2e%2e/tajna.txt'])(
     '%s ide preloaderu doslovno, s istom putanjom i upitom',
     async (path) => {
       seen.length = 0;
@@ -295,7 +300,7 @@ describe('preloader (Next.js)', () => {
 
   test('POST na preloader je 405 i ne ide dalje', async () => {
     seen.length = 0;
-    const res = await get('/', { method: 'POST', body: 'x' });
+    const res = await get('/prijava', { method: 'POST', body: 'x' });
     expect(res.status).toBe(405);
     expect(seen).toEqual([]);
   });
@@ -305,6 +310,93 @@ describe('preloader (Next.js)', () => {
     const reply = await rawUpgrade('/_next/webpack-hmr', 'ping');
     expect(reply).toContain('preloader:ping');
     expect(wsUpgrades[0]?.url).toBe('/_next/webpack-hmr');
+  });
+});
+
+describe('ulazne putanje: naslovnica na /, preloader na /prijava (DAN-1574)', () => {
+  test.each([
+    ['/', 'front', '/app/web/naslovnica'],
+    // Preloaderu nepromijenjeno: njegov Next sam prepisuje `/prijava` na `/` (poslan `/` bi otišao na naslovnicu).
+    ['/prijava', 'preloader', '/prijava'],
+    ['/prijava/', 'preloader', '/prijava/'],
+    // Doslovno i cijela putanja: ništa drugo ne postaje ulaz.
+    ['/prijava/x', 'preloader', '/prijava/x'],
+    ['/prijavax', 'preloader', '/prijavax'],
+    ['/Prijava', 'preloader', '/Prijava'],
+    ['/%70rijava', 'preloader', '/%70rijava'],
+    ['//', 'preloader', '//'],
+    ['/index', 'preloader', '/index'],
+    ['/app/web/naslovnica', 'front', '/app/web/naslovnica'],
+    ['/admin/prijava', 'admin', '/admin/prijava'],
+    ['/app/web/prijava', 'front', '/app/web/prijava'],
+  ] as const)('%s -> %s %s', (path, route, upstreamPath) => {
+    expect(forwardFor(path)).toEqual({ route, path: upstreamPath });
+  });
+
+  test('GET / ide na naslovnicu fronta s istim upitom; adresa se ne preusmjerava', async () => {
+    seen.length = 0;
+    const res = await rawRequest('/?izvor=a&put=%2Fapp%2Fweb%2F');
+    expect(res.text).toContain('odgovor front');
+    expect(res.text).not.toContain('Content-Security-Policy');
+    expect(seen.map((s) => [s.upstream, s.method, s.url, s.headers.host])).toEqual([
+      ['front', 'GET', '/app/web/naslovnica?izvor=a&put=%2Fapp%2Fweb%2F', 'localhost:8000'],
+    ]);
+  });
+
+  test('HEAD i POST na / idu frontu kao i svaka putanja fronta (preloaderovo 405 ne vrijedi)', async () => {
+    seen.length = 0;
+    expect((await get('/', { method: 'HEAD' })).headers.get('x-upstream')).toBe('front');
+    expect((await get('/', { method: 'POST', body: 'x' })).headers.get('x-upstream')).toBe('front');
+    expect(seen.map((s) => [s.upstream, s.method, s.url, s.body])).toEqual([
+      ['front', 'HEAD', '/app/web/naslovnica', ''],
+      ['front', 'POST', '/app/web/naslovnica', 'x'],
+    ]);
+  });
+
+  test('/prijava je prvi ekran preloadera s CSP-om iz hasheva', async () => {
+    seen.length = 0;
+    const res = await get('/prijava?prvi=1');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-security-policy')).toBe(policy(`'${sha('prvi()')}'`, 'b{}'));
+    expect(await res.text()).toContain('<p>prvi ekran</p>');
+    expect(seen.map((s) => [s.upstream, s.url])).toEqual([['preloader', '/prijava?prvi=1']]);
+  });
+
+  test('/prijava/x i /Prijava nisu prvi ekran: preloaderu doslovno (404 Nexta)', async () => {
+    seen.length = 0;
+    await rawRequest('/prijava/x');
+    await rawRequest('/Prijava');
+    expect(seen.map((s) => [s.upstream, s.url])).toEqual([['preloader', '/prijava/x'], ['preloader', '/Prijava']]);
+  });
+
+  test('WebSocket na / ide frontu s putanjom naslovnice', async () => {
+    wsUpgrades = [];
+    expect(await rawUpgrade('/?v=1', 'ping')).toContain('front:ping');
+    expect(wsUpgrades.map((w) => [w.upstream, w.url])).toEqual([['front', '/app/web/naslovnica?v=1']]);
+  });
+
+  test('VS-2: samo odabir s prvog ekrana (/prijava) šalje /app/web/ na Web_other; poveznica s naslovnice ostaje na frontu', async () => {
+    const other = await listen(fakeUpstream('other'));
+    const edge = await createEdge({
+      targets: targetsFromEnv({
+        DUCTURA_EDGE_PRELOADER: `http://127.0.0.1:${preloaderPort}`,
+        DUCTURA_EDGE_FRONT: `http://127.0.0.1:${other}`,
+        DUCTURA_EDGE_OTHER: `http://127.0.0.1:${other}`,
+      }),
+    });
+    const origin = `http://127.0.0.1:${await listen(edge)}`;
+    const open = (referer: string) => fetch(`${origin}/app/web/?a=1`, { redirect: 'manual', headers: { Referer: referer } });
+    for (const first of [`${origin}/prijava`, `${origin}/prijava/`, `${origin}/prijava?x=1`]) {
+      const res = await open(first);
+      expect([res.status, res.headers.get('location')], first).toEqual([307, '/o/?a=1']);
+    }
+    // Naslovnica (`/`), drugo podrijetlo i ostale stranice nisu prvi ekran.
+    for (const notFirst of [`${origin}/`, `${origin}/prijava/x`, 'http://zlo.example/prijava', `${origin}/app/web/`]) {
+      seen.length = 0;
+      const res = await open(notFirst);
+      expect(res.status, notFirst).not.toBe(307);
+      expect(seen.map((s) => s.url)).toEqual(['/app/web/?a=1']);
+    }
   });
 });
 
@@ -402,7 +494,7 @@ describe('uzvodni nije pokrenut', () => {
     expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
     expect(res.headers.get('content-security-policy')).toBe(policy(`'${sha('greska()')}'`, 'b{}'));
     expect(await res.text()).toContain('<p>greška</p>');
-    expect(await (await fetch(`http://127.0.0.1:${port}/`, { redirect: 'manual' })).text()).toBe('odgovor preloader');
+    expect(await (await fetch(`http://127.0.0.1:${port}/prijava`, { redirect: 'manual' })).text()).toBe('odgovor preloader');
     const ws = await rawUpgrade('/admin/_next/webpack-hmr', '', port);
     expect(ws).toMatch(/^HTTP\/1\.1 502/);
   });
@@ -439,7 +531,7 @@ describe('uzvodni nije pokrenut', () => {
       targets: targetsFromEnv({ DUCTURA_EDGE_PRELOADER: 'http://127.0.0.1:9', DUCTURA_EDGE_API: 'http://127.0.0.1:9' }),
     });
     const port = await listen(down);
-    for (const path of ['/', '/api/v1/me']) {
+    for (const path of ['/prijava', '/api/v1/me']) {
       const res = await fetch(`http://127.0.0.1:${port}${path}`);
       expect(res.status).toBe(502);
       expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8');
