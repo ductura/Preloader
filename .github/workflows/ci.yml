@@ -12,6 +12,17 @@ jobs:
     uses: ductura/.github/.github/workflows/ci-node.yml@98f62800577910b24451809d40c247ee1f04c7c1 # main, DAN-735
     with:
       scripts: typecheck test build budget
+  # DAN-1561: the shared scans of ductura/.github, pinned to a commit of its main.
+  # secret-scan reads the full history; dependency-review compares what a pull
+  # request changes, so on push it is skipped (ci-ok allows exactly that skip).
+  secret-scan:
+    permissions: { contents: read }
+    uses: ductura/.github/.github/workflows/secret-scan.yml@f2ad16d2ee7c7694123252ca4d4e8b78366334ee # main, DAN-1561
+  dependency-review:
+    if: ${{ github.event_name == 'pull_request' }}
+    permissions: { contents: read }
+    uses: ductura/.github/.github/workflows/dependency-review.yml@f2ad16d2ee7c7694123252ca4d4e8b78366334ee # main, DAN-1561
+
   # P-0.11: matrica uređaja u tri motora (Chromium, Firefox, WebKit). Opera je ručna provjera.
   # DAN-1101: the job runs in the official Playwright image (tag index, pinned by
   # digest). The image brings the browsers and their system packages, so the job
@@ -66,7 +77,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: ${{ always() }}
-    needs: [node, e2e-matrix]
+    needs: [node, e2e-matrix, secret-scan, dependency-review]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -75,6 +86,8 @@ jobs:
         shell: bash
         env:
           NEEDS: ${{ toJSON(needs) }}
+          # dependency-review runs only on pull requests; there it must not be skipped.
+          ALLOW_SKIPPED: ${{ github.event_name != 'pull_request' && 'dependency-review' || '' }}
         run: |
           # ci-ok:begin
           set -euo pipefail
@@ -82,8 +95,15 @@ jobs:
             echo "::error::needs must be a non-empty JSON object"
             exit 1
           fi
-          problems="$(jq -r 'to_entries[] | ((.value | objects | .result) // "missing") as $r
-            | select($r != "success") | "job \(.key) result: \($r)"' <<< "$NEEDS")"
+          allowed="$(tr -s ' \t\r\n' '\n' <<< "${ALLOW_SKIPPED:-}" | sed '/^$/d' | jq -R . | jq -sc .)"
+          problems="$(jq -r --argjson allowed "$allowed" '
+            (($allowed - keys) | map("allow-skipped names a job that is not in needs: \(.)"))
+            + (to_entries | map(
+                ((.value | objects | .result) // "missing") as $r
+                | if $r == "success" then empty
+                  elif $r == "skipped" and (.key as $k | $allowed | index($k)) then empty
+                  else "job \(.key) result: \($r)" end))
+            | .[]' <<< "$NEEDS")"
           if [ -n "$problems" ]; then
             while IFS= read -r line; do echo "::error::$line"; done <<< "$problems"
             exit 1
