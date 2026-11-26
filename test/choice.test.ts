@@ -170,7 +170,7 @@ describe('ručni izbor na stranici', () => {
     const store = new MemoryStore();
     const { doc, go, cancel, click } = visit({ userAgent: UA.firefoxLinux }, store);
     expect(doc.getElementById('desktop-offer')?.hidden).toBe(true);
-    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.web, 4000);
+    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.web, REDIRECT_DELAY_MS);
     click('[data-package="windows"]');
     expect(cancel).toHaveBeenCalledOnce();
     expect(go).toHaveBeenCalledOnce();
@@ -189,31 +189,77 @@ describe('ručni izbor na stranici', () => {
     expect(first.doc.getElementById('desktop-offer')?.hidden).toBe(true);
     const next = visit({ userAgent: UA.chromeWindows }, store, withMobile);
     expect(next.route.frontend).toBe('mobile');
-    expect(next.go).toHaveBeenCalledWith(withMobile.frontends.mobile, REDIRECT_DELAY_MS);
+    // Zapamćen izbor: odmah i bez unosa u povijest (replace), bez čekanja.
+    expect(next.go).toHaveBeenCalledWith(withMobile.frontends.mobile, 0, true);
     // Bez /mobilna/ isti zapamćeni „Mobitel” vodi na web.
     expect(visit({ userAgent: UA.chromeWindows }, store).route.frontend).toBe('web');
   });
 
-  test('zapamćen „Mobitel”: prije odlaska korisnik može vratiti „Računalo” (pravi timer)', () => {
+  test('prvi posjet: odbrojavanje je vidljivo i javlja se čitaču, uz gumb „Ostani ovdje” (pravi timer)', () => {
     vi.useFakeTimers();
     try {
       const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }, withMobile), 'text/html');
-      const store = stored({ v: 1, view: 'mobile' });
       const assign = vi.fn<(url: string) => void>();
       // Isti oblik kao `src/main.ts`: setTimeout + clearTimeout.
-      applyRoute(doc, { userAgent: UA.chromeWindows }, withMobile, (url, delayMs) => {
+      applyRoute(doc, { userAgent: UA.chromeAndroid }, withMobile, (url, delayMs) => {
         const id = setTimeout(() => assign(url), delayMs);
         return () => clearTimeout(id);
-      }, store);
+      });
+      const countdown = doc.getElementById('countdown') as HTMLElement;
+      const stay = doc.getElementById('stay-here') as HTMLElement;
+      expect(countdown.hidden).toBe(false);
+      expect(countdown.getAttribute('aria-live')).toBe('polite');
+      expect(countdown.textContent).toBe(clientText.countdown(2));
+      expect(stay.hidden).toBe(false);
+      expect(stay.textContent).toBe(clientText.stay);
       vi.advanceTimersByTime(REDIRECT_DELAY_MS - 1);
+      expect(countdown.textContent).toBe(clientText.countdown(1));
       expect(assign).not.toHaveBeenCalled();
-      (doc.querySelector('[data-view="desktop"]') as HTMLElement).click();
-      vi.runAllTimers();
-      expect(assign).not.toHaveBeenCalled();
-      expect(doc.getElementById('open-app')?.getAttribute('href')).toBe(withMobile.frontends.web);
-      expect(readChoice(store).view).toBe('desktop');
+      vi.advanceTimersByTime(1);
+      expect(assign).toHaveBeenCalledWith('/mobilna/prijava');
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  test('„Ostani ovdje” zaustavlja odlazak i odbrojavanje, i skida prefetch', () => {
+    vi.useFakeTimers();
+    try {
+      const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
+      const assign = vi.fn<(url: string) => void>();
+      applyRoute(doc, { userAgent: UA.chromeWindows }, defaultConfig, (url, delayMs) => {
+        const id = setTimeout(() => assign(url), delayMs);
+        return () => clearTimeout(id);
+      });
+      expect(doc.querySelector('link[rel="prefetch"]')?.getAttribute('href')).toBe(defaultConfig.frontends.web);
+      (doc.getElementById('stay-here') as HTMLElement).click();
+      vi.runAllTimers();
+      expect(assign).not.toHaveBeenCalled();
+      expect(doc.getElementById('countdown')?.textContent).toBe(clientText.stayed);
+      expect(doc.getElementById('stay-here')?.hidden).toBe(true);
+      expect(doc.querySelector('link[rel="prefetch"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('zapamćen izbor: odmah replace, bez odbrojavanja i prefetcha', () => {
+    const { doc, go } = visit({ userAgent: UA.chromeWindows }, stored({ v: 1, package: 'macos' }));
+    expect(go).toHaveBeenCalledExactlyOnceWith(defaultConfig.frontends.web, 0, true);
+    expect(doc.getElementById('countdown')?.hidden).toBe(true);
+    expect(doc.getElementById('stay-here')?.hidden).toBe(true);
+    expect(doc.querySelector('link[rel="prefetch"]')).toBeNull();
+  });
+
+  test('?izbor: izbor je prikazan, bez prijelaza, i uz zapamćeni izbor', () => {
+    for (const store of [null, stored({ v: 1, view: 'desktop' })]) {
+      const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
+      const go = vi.fn<(url: string, delayMs: number, replace?: boolean) => void>();
+      applyRoute(doc, { userAgent: UA.chromeWindows }, defaultConfig, go, store, { chooseOnly: true });
+      expect(go).not.toHaveBeenCalled();
+      expect(doc.getElementById('choice')?.hidden).toBe(false);
+      expect(doc.getElementById('countdown')?.hidden).toBe(true);
+      expect(doc.querySelector('link[rel="prefetch"]')).toBeNull();
     }
   });
 

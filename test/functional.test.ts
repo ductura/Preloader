@@ -2,7 +2,7 @@
 // Funkcionalna provjera: Chrome na Macu otvara Chrome sučelje i nudi macOS paket.
 // Chrome na Androidu otvara mobilno sučelje. Sve se odlučuje u pregledniku, bez servera.
 import { describe, expect, test, vi } from 'vitest';
-import { applyRoute } from '../src/client.ts';
+import { applyRoute, REDIRECT_DELAY_MS } from '../src/client.ts';
 import { defaultConfig } from '../src/config.ts';
 import { renderPage } from '../src/page.ts';
 import { UA } from './user-agents.ts';
@@ -25,7 +25,7 @@ describe('stranica preloadera', () => {
     expect(href(doc, 'desktop-download')).toBe('/preuzimanje?sustav=macos');
     expect(doc.getElementById('desktop-offer')?.hidden).toBe(false);
     expect(doc.getElementById('desktop-download')?.textContent).toContain('za macOS');
-    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.web, 4000);
+    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.web, REDIRECT_DELAY_MS);
   });
 
   test('Chrome na Androidu: web (mobilne inačice još nema), bez desktop paketa, vrijeme za ručni izbor', () => {
@@ -33,7 +33,7 @@ describe('stranica preloadera', () => {
     expect(doc.body.dataset['frontend']).toBe('web');
     expect(href(doc, 'open-app')).toBe(defaultConfig.frontends.web);
     expect(doc.getElementById('desktop-offer')?.hidden).toBe(true);
-    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.web, 4000);
+    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.web, REDIRECT_DELAY_MS);
   });
 
   test('Edge na Windowsu: web + Windows paket', () => {
@@ -75,7 +75,7 @@ describe('ulaz bez prijave i administracije', () => {
     expect(defaultConfig.frontends).toEqual({ web: '/aplikacija/prijava' });
     for (const ua of [UA.chromeMac, UA.edgeWindows, UA.firefoxLinux, UA.chromeAndroid, UA.safariIphone]) {
       const { doc, go } = visit(ua);
-      expect(go).toHaveBeenCalledWith('/aplikacija/prijava', 4000);
+      expect(go).toHaveBeenCalledWith('/aplikacija/prijava', REDIRECT_DELAY_MS);
       expect(href(doc, 'open-app')).toBe('/aplikacija/prijava');
     }
   });
@@ -92,15 +92,17 @@ describe('ulaz bez prijave i administracije', () => {
     const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }, withMobile), 'text/html');
     const go = vi.fn<(url: string, delayMs: number) => void>();
     applyRoute(doc, { userAgent: UA.chromeAndroid }, withMobile, go);
-    expect(go).toHaveBeenCalledWith('/mobilna/prijava', 4000);
+    expect(go).toHaveBeenCalledWith('/mobilna/prijava', REDIRECT_DELAY_MS);
     expect(doc.querySelector('[data-view="mobile"]')).not.toBeNull();
   });
 
-  test('interakcija s poveznicom ne otkazuje preusmjeravanje', () => {
-    const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
-    const cancel = vi.fn();
-    applyRoute(doc, { userAgent: UA.chromeMac }, defaultConfig, () => cancel);
-    doc.getElementById('open-app')?.dispatchEvent(new Event('focusin', { bubbles: true }));
-    expect(cancel).not.toHaveBeenCalled();
+  test('klik, tipka ili fokus unutar ekrana zaustavljaju odbrojavanje (P-0.3)', () => {
+    for (const type of ['click', 'keydown', 'focusin']) {
+      const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
+      const cancel = vi.fn();
+      applyRoute(doc, { userAgent: UA.chromeMac }, defaultConfig, () => cancel);
+      doc.getElementById('open-app')?.dispatchEvent(new Event(type, { bubbles: true }));
+      expect(cancel, type).toHaveBeenCalledOnce();
+    }
   });
 });
