@@ -101,7 +101,8 @@ Javne putanje su iz karte adresa (D-318, odluka vlasnika 26. 11. 2026., DAN-1574
 
 - Lokalno je `307`, da preglednik ništa ne zapamti trajno dok se karta uvodi. Trajni `301` i `X-Robots-Tag` na ductura.org daje produkcijski rub (zadatak 10, DAN-939); rewriteovi Nexta stare adrese ne poznaju.
 - Front institucije ima Next `basePath` `/app` i resurse pod `/app/web/_next/`, a Aplication_front osnovu `/admin`. Na `/aplikacija/…` i `/administracija/…` njihov klijent bi bio izvan osnove, a povratak nakon prijave AAI@EduHr je `/app/web/`. Zato do prelaska rub nove adrese prepisuje na staru osnovu, a stare adrese rade i dalje. Prelazak je jedna izmjena u `BASES` (`deploy/edge/routes.ts`): nove adrese tada idu doslovno, a stare počinju preusmjeravati.
-- `/ulaz/x`, `/Ulaz`, `/%75laz`, `/aplikacijax`, `/prijava/x` i `/downloadx` nisu ni javne ni stare adrese (404 preloadera).
+- `/Ulaz`, `/ULAZ` i `/Ulaz/` Next ne razlikuje od `/ulaz`: vraćaju preloader (200) s istim `X-Robots-Tag: noindex` (`headers()` u `next.config.ts`), pa se ne indeksiraju; 404 daju tek `/ulaz/x`, `/ulazx`.
+- `/ulaz/x`, `/aplikacijax`, `/prijava/x` i `/downloadx` nisu ni javne ni stare adrese (404 preloadera).
 
 Putanje usluga zapisane su samo u `deploy/edge/routes.ts`; iz nje čitaju rewriteovi Nexta i edge, a `test/config-routes.test.ts` provjerava da ih slijede i odredišta u `src/config.ts` (mobilni `/app/mobile/`, ostali `/o/`, uz lokalni `307` s `/app/web/` s preloadera `/ulaz`; s naslovnice `/` tog preusmjeravanja nema). Promjena basePatha u drugom repozitoriju traži izmjenu te tablice u istom koraku.
 

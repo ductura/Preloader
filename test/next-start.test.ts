@@ -182,6 +182,24 @@ describe('next start: preloader na /ulaz (karta adresa D-318)', () => {
   });
 });
 
+describe('next start: inačice /ulaz (velika slova, kosa crta) nose noindex', () => {
+  // Next ne razlikuje velika i mala slova, pa ove putanje vraćaju preloader; bez `headers()` u next.config.ts
+  // bile bi 200 bez zaglavlja i tražilice bi ih indeksirale.
+  test.each(['/ulaz', '/ulaz/', '/Ulaz', '/ULAZ', '/Ulaz/', '/ulaz?x=1'])('%s: preloader uz X-Robots-Tag noindex', async (path) => {
+    seen.length = 0;
+    const res = await fetch(`${nextOrigin}${path}`, { redirect: 'manual' });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+    expect(await res.text()).toContain('id="open-app"');
+    expect(seen).toEqual([]);
+  });
+
+  test.each(['/', '/ulaz/x', '/ulazx', '/Ulaz/x'])('%s nema noindex iz Nexta', async (path) => {
+    const res = await fetch(`${nextOrigin}${path}`, { redirect: 'manual' });
+    expect(res.headers.get('x-robots-tag')).toBeNull();
+  });
+});
+
 describe('next start: nepoznata putanja', () => {
   // Stare adrese (`/prijava`, `/download`, `/api/auth`) Next ne poznaje: lokalno ih preusmjerava edge, a na
   // ductura.org produkcijski rub (DAN-939).
