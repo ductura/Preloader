@@ -10,7 +10,7 @@ import { parseManifest } from '../../src/downloads/manifest.ts';
 import { fullManifest } from './fixture.ts';
 
 const [first, , ...windows] = fullManifest.packages;
-const continueOnWeb = ['Nastavi u webu', defaultConfig.frontends.other, false];
+const continueOnWeb = ['Nastavi u webu', defaultConfig.frontends.web, false];
 
 afterEach(() => {
   vi.unstubAllEnvs();

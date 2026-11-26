@@ -21,6 +21,12 @@ const nextConfig: NextConfig = {
       : 'src/components/landing/tsconfig.preloader.json',
   },
   experimental: { globalNotFound: true },
+  // `/ulaz` nosi noindex na samom Nextu, i za inačice koje Next prepisuje na stranicu preloadera: njegovo
+  // podudaranje putanja ne razlikuje velika i mala slova ni završnu kosu crtu, pa `/Ulaz`, `/ULAZ` i `/Ulaz/`
+  // također vraćaju preloader (200). Bez zaglavlja bi ih tražilice indeksirale uz `/ulaz`.
+  async headers() {
+    return [{ source: '/ulaz', headers: [{ key: 'X-Robots-Tag', value: 'noindex' }] }];
+  },
   // Čita se pri izgradnji (`next build`): na Vercelu su varijable postavljene u projektu.
   async rewrites() {
     const services = serviceRewrites(process.env);

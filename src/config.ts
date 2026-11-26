@@ -2,25 +2,21 @@
 // Odredišta slijede tablicu ruta `deploy/edge/routes.ts` (jedini zapis putanja usluga, DAN-1550);
 // `test/config-routes.test.ts` pada čim se razmimoiđu.
 export interface Config {
-  frontends: { chrome: string; mobile: string; other: string };
+  /**
+   * Inačice koje postoje (karta adresa D-318). Preloader sam vodi na ekran prijave aplikacije; prijavu i
+   * administraciju ne nudi. `mobile` nema dok ne postoji `/mobilna/`: mobitel tada ide na web.
+   */
+  frontends: { web: string; mobile?: string };
   downloads: { windows: string; macos: string };
-  /** Prijava (ugovor #2028 §3.1): povratak nakon AAI@EduHr i ulaz administracije platforme. */
-  signIn: { returnTo: string; admin: string };
 }
 
 export const defaultConfig: Config = {
   frontends: {
-    chrome: '/app/chrome/',
-    mobile: '/app/mobile/',
-    other: '/app/web/',
+    web: '/aplikacija/prijava',
   },
   downloads: {
     windows: '/preuzimanje?sustav=windows',
     macos: '/preuzimanje?sustav=macos',
-  },
-  signIn: {
-    returnTo: '/app/web/',
-    admin: '/admin/prijava',
   },
 };
 

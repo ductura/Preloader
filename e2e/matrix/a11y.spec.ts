@@ -12,7 +12,7 @@ const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-prac
 /** Svako kršenje razine serious ili critical, bez obzira na pravilo; `id impact selektori` po retku. */
 async function seriousViolations(page: Page): Promise<string[]> {
   // axe završava svako pravilo kroz `setTimeout`: sat se pokreće tek kad je preusmjeravanje otkazano.
-  await page.locator('#choice button[aria-pressed="true"][data-view]').click();
+  await page.locator('#choice button[data-package]').first().click();
   await page.clock.resume();
   const { violations } = await new AxeBuilder({ page }).withTags(TAGS).analyze();
   expect(new URL(page.url()).pathname).toBe('/');
@@ -33,21 +33,10 @@ test('axe reports button-name and link-name when a label is removed', async ({ p
   await page.evaluate(() => {
     document.querySelector('#choice button[data-package="windows"]')!.textContent = '';
     document.getElementById('open-app')!.textContent = '';
-    document.getElementById('sign-in-admin')!.textContent = '';
   });
   const found = await seriousViolations(page);
   expect(found.some((v) => v.startsWith('button-name ') && v.includes('data-package="windows"'))).toBe(true);
   expect(found.some((v) => v.startsWith('link-name ') && v.includes('#open-app'))).toBe(true);
-  expect(found.some((v) => v.startsWith('link-name ') && v.includes('#sign-in-admin'))).toBe(true);
-});
-
-test('sign-in links are reached first with the keyboard and stop the redirect', async ({ page }) => {
-  await tabTo(page, '#sign-in-aai', 1);
-  await tabTo(page, '#sign-in-admin', 1);
-  await page.clock.runFor(REDIRECT_DELAY_MS * 2);
-  expect(new URL(page.url()).pathname).toBe('/');
-  await page.keyboard.press('Enter');
-  await page.waitForURL('**/admin/prijava');
 });
 
 test('first screen has no serious or critical axe violations', async ({ page }) => {
@@ -69,21 +58,14 @@ async function tabTo(page: Page, selector: string, presses: number): Promise<voi
 }
 
 test('manual choice works with the keyboard alone, focus visible', async ({ page }) => {
-  // Redom: dvije poveznice prijave, „Otvori”, poveznica za preuzimanje (samo kad je paket ponuđen), prikazi, paketi.
-  const before = 2 + (d.pkg ? 2 : 1);
-  const view = d.view === 'desktop' ? 'mobile' : 'desktop';
+  // Redom: „Otvori”, poveznica za preuzimanje (samo kad je paket ponuđen), paketi (izbora prikaza nema, D-318).
+  const before = d.pkg ? 2 : 1;
   const pkg = d.pkg === 'windows' ? 'macos' : 'windows';
-  const viewAt = view === 'desktop' ? 0 : 1;
-  const pkgAt = pkg === 'windows' ? 2 : 3;
+  const pkgAt = pkg === 'windows' ? 0 : 1;
 
-  await tabTo(page, `#choice button[data-view="${view}"]`, before + viewAt + 1);
-  await page.keyboard.press('Enter');
-  await expect(page.locator(`#choice button[data-view="${view}"]`)).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('body')).toHaveAttribute('data-frontend', view === 'mobile' ? 'mobile' : d.desktopFrontend);
-  await expect(page.locator('#choice-status')).toHaveText(clientText.choiceSaved);
-
-  await tabTo(page, `#choice button[data-package="${pkg}"]`, pkgAt - viewAt);
+  await tabTo(page, `#choice button[data-package="${pkg}"]`, before + pkgAt + 1);
   await page.keyboard.press(' ');
   await expect(page.locator(`#choice button[data-package="${pkg}"]`)).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator(`#choice button[data-view="${view}"]`)).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('body')).toHaveAttribute('data-frontend', 'web');
+  await expect(page.locator('#choice-status')).toHaveText(clientText.choiceSaved);
 });
