@@ -6,7 +6,7 @@ import { connect } from 'node:net';
 import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { createEdge, DEFAULT_TARGETS, FALLBACK_CSP, forwardFor, routeFor, targetsFromEnv } from '../deploy/edge/dev-proxy.mjs';
-import { BASES, entriesFor, entryFor, redirectFor, redirectsFor } from '../deploy/edge/routes.ts';
+import { BASES, entriesFor, entryFor, LEGACY_REDIRECTS, redirectFor, redirectsFor } from '../deploy/edge/routes.ts';
 
 interface Seen {
   upstream: string;
@@ -145,7 +145,7 @@ describe('routeFor', () => {
     ['/admin/', 'admin'],
     ['/admin/prijava', 'admin'],
     ['/admin/_next/webpack-hmr', 'admin'],
-    // Karta adresa (D-318): `/administracija` je administracija (Aplication_front, osnova `/admin`).
+    // Karta adresa (D-318): `/administracija` je administracija (Aplication_front, osnova `/administracija`).
     ['/administracija', 'admin'],
     ['/Admin', 'preloader'],
     ['/%61dmin', 'preloader'],
@@ -334,8 +334,8 @@ describe('karta adresa (D-318, DAN-1574): javne putanje', () => {
     ['/aplikacija', 'front', '/app/web', true],
     ['/aplikacija/', 'front', '/app/web/', true],
     ['/aplikacija/rad/7/dnevnik-pristupa', 'front', '/app/web/rad/7/dnevnik-pristupa', true],
-    ['/administracija', 'admin', '/admin', true],
-    ['/administracija/ustanove/3', 'admin', '/admin/ustanove/3', true],
+    ['/administracija', 'admin', '/administracija', true],
+    ['/administracija/ustanove/3', 'admin', '/administracija/ustanove/3', true],
     // Doslovno: ništa drugo ne postaje javna putanja.
     ['/ulaz/x', 'preloader', '/ulaz/x', false],
     ['/ulazx', 'preloader', '/ulazx', false],
@@ -349,7 +349,7 @@ describe('karta adresa (D-318, DAN-1574): javne putanje', () => {
     ['/Stanje', 'preloader', '/Stanje', false],
     ['//', 'preloader', '//', false],
     ['/index', 'preloader', '/index', false],
-    // Stare adrese bez preusmjeravanja dok usluga ne prijeđe: rade kao prije.
+    // Prosljeđivanje ne preusmjerava (stare adrese preusmjerava `redirectFor` prije njega).
     ['/app/web/naslovnica', 'front', '/app/web/naslovnica', false],
     ['/app/web/prijava', 'front', '/app/web/prijava', false],
     ['/admin/prijava', 'admin', '/admin/prijava', false],
@@ -388,14 +388,14 @@ describe('karta adresa (D-318, DAN-1574): javne putanje', () => {
     expect(seen.map((s) => [s.upstream, s.url])).toEqual([['preloader', '/ulaz?prvi=1']]);
   });
 
-  test('/aplikacija/* i /administracija/* idu staroj osnovi usluge s istim upitom, metodom i tijelom', async () => {
+  test('/aplikacija/* ide staroj osnovi fronta, a /administracija/* doslovno, s istim upitom, metodom i tijelom', async () => {
     seen.length = 0;
     const app = await get('/aplikacija/zadaci?godina=2026', { method: 'POST', body: 'tijelo' });
     const admin = await get('/administracija/ustanove?str=2');
     expect([app.headers.get('x-upstream'), admin.headers.get('x-upstream')]).toEqual(['front', 'admin']);
     expect(seen.map((s) => [s.upstream, s.method, s.url, s.body])).toEqual([
       ['front', 'POST', '/app/web/zadaci?godina=2026', 'tijelo'],
-      ['admin', 'GET', '/admin/ustanove?str=2', ''],
+      ['admin', 'GET', '/administracija/ustanove?str=2', ''],
     ]);
     // Kolačići i Location uzvodnog prolaze nepromijenjeni.
     expect(app.headers.getSetCookie()).toHaveLength(2);
@@ -463,21 +463,33 @@ describe('karta adresa (D-318, DAN-1574): javne putanje', () => {
   });
 });
 
-describe('karta adresa (D-318, DAN-1574): stare adrese', () => {
+describe('karta adresa (D-318, DAN-1574): stare adrese (tablica 301)', () => {
   test.each([
-    ['/prijava', 307, '/app/web/prijava'],
-    ['/prijava/', 307, '/app/web/prijava'],
-    ['/prijava?greska=pristup&x=%2F', 307, '/app/web/prijava?greska=pristup&x=%2F'],
-    ['/aplikacija/naslovnica', 307, '/'],
-    ['/aplikacija/naslovnica/?izvor=a', 307, '/?izvor=a'],
-    ['/download', 307, '/preuzimanja'],
-    ['/download/', 307, '/preuzimanja/'],
-    ['/download/windows/Ductura.msi?v=1', 307, '/preuzimanja/windows/Ductura.msi?v=1'],
+    ['/admin', 301, '/administracija'],
+    ['/admin/', 301, '/administracija/'],
+    ['/admin/prijava', 301, '/administracija/prijava'],
+    ['/admin/institucije/x?a=1', 301, '/administracija/institucije/x?a=1'],
+    ['/app/web/naslovnica', 301, '/'],
+    ['/app/web/naslovnica/?izvor=a', 301, '/?izvor=a'],
+    ['/app/web/pristupacnost', 301, '/pristupacnost'],
+    ['/app/web/stanje/', 301, '/stanje/'],
+    ['/prijava', 301, '/app/web/prijava'],
+    ['/prijava/', 301, '/app/web/prijava'],
+    ['/prijava?greska=pristup&x=%2F', 301, '/app/web/prijava?greska=pristup&x=%2F'],
+    ['/aplikacija/naslovnica', 301, '/'],
+    ['/aplikacija/naslovnica/?izvor=a', 301, '/?izvor=a'],
+    ['/download', 301, '/preuzimanja'],
+    ['/download/', 301, '/preuzimanja/'],
+    ['/download/windows/Ductura.msi?v=1', 301, '/preuzimanja/windows/Ductura.msi?v=1'],
+    // Bez mobilnog fronta (`/mobilna/` još ne postoji): privremeno 302 na `/aplikacija/`, upit ostaje.
+    ['/app/mobile', 302, '/aplikacija/'],
+    ['/app/mobile/zadaci/7?returnTo=%2Fx', 302, '/aplikacija/?returnTo=%2Fx'],
     ['/api/auth/logout', 308, '/api/v1/auth/logout'],
     ['/api/auth/login?returnTo=%2Fapp%2Fweb%2F', 308, '/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F'],
     ['/api/auth', 308, '/api/v1/auth'],
     // Ostatak putanje ide iza nove adrese, pa `//host` ne postaje adresa drugog podrijetla.
-    ['/download//zlo.example/x', 307, '/preuzimanja//zlo.example/x'],
+    ['/download//zlo.example/x', 301, '/preuzimanja//zlo.example/x'],
+    ['/admin//zlo.example/x', 301, '/administracija//zlo.example/x'],
   ] as const)('%s -> %i %s, bez poziva uzvodnog', async (path, status, location) => {
     seen.length = 0;
     const res = await rawRequest(path);
@@ -497,30 +509,103 @@ describe('karta adresa (D-318, DAN-1574): stare adrese', () => {
     expect(seen.map((s) => [s.upstream, s.method, s.url, s.body])).toEqual([['api', 'POST', '/api/v1/auth/logout?x=1', 'csrf=1']]);
   });
 
-  test.each(['/prijava/x', '/prijavax', '/Prijava', '/%70rijava', '/downloadx', '/Download/x', '/api/authx', '/api/Auth/logout', '/aplikacija/naslovnica/x'])(
+  test.each([
+    '/prijava/x', '/prijavax', '/Prijava', '/%70rijava', '/downloadx', '/Download/x', '/api/authx', '/api/Auth/logout', '/aplikacija/naslovnica/x',
+    '/adminx', '/Admin/prijava', '/%61dmin/prijava', '/app/web/naslovnica/x', '/app/web/naslovnicax', '/app/web/stanjex', '/app/mobilex', '/App/mobile',
+  ])(
     '%s nije stara adresa: ne preusmjerava se',
     async (path) => {
       expect(redirectFor(path)).toBeNull();
-      expect((await rawRequest(path)).status).not.toBe(307);
+      expect([301, 302, 307, 308]).not.toContain((await rawRequest(path)).status);
     },
   );
 
-  test('/app/web/*, /app/chrome/* i /admin/* ne preusmjeravaju dok usluga nije prešla (stare i nove adrese rade istodobno)', async () => {
-    for (const path of ['/app/web/', '/app/web/zadaci', '/app/chrome/', '/admin/prijava']) {
+  test('301 samo za GET i HEAD: POST na staru adresu ide dalje bez preusmjeravanja', async () => {
+    expect((await get('/admin/prijava', { method: 'HEAD' })).status).toBe(301);
+    expect((await get('/download/x', { method: 'HEAD' })).headers.get('location')).toBe('/preuzimanja/x');
+    seen.length = 0;
+    const admin = await get('/admin/prijava', { method: 'POST', body: 'k=1' });
+    expect([admin.status, admin.headers.get('x-upstream')]).toEqual([303, 'admin']);
+    // Preloader nema obrazaca: POST na `/download` je njegov 405, ne preusmjeravanje.
+    expect((await get('/download/x', { method: 'POST', body: 'x' })).status).toBe(405);
+    expect(seen.map((s) => [s.upstream, s.method, s.url, s.body])).toEqual([['admin', 'POST', '/admin/prijava', 'k=1']]);
+    for (const method of ['POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']) {
+      expect(redirectFor('/admin/prijava', undefined, { method }), method).toBeNull();
+      expect(redirectFor('/app/mobile/', undefined, { method }), method).toBeNull();
+      expect(redirectFor('/api/auth/logout', undefined, { method })?.status, method).toBe(308);
+    }
+  });
+
+  test('/admin/api/… se nikad ne preusmjerava (301 bi POST prijave pretvorio u GET)', async () => {
+    seen.length = 0;
+    const read = await get('/admin/api/v1/institucije?x=1');
+    const login = await get('/admin/api/v1/prijava', { method: 'POST', body: 'korisnik=k' });
+    expect([read.status, login.status]).toEqual([303, 303]);
+    expect(seen.map((s) => [s.upstream, s.method, s.url, s.body])).toEqual([
+      ['admin', 'GET', '/admin/api/v1/institucije?x=1', ''],
+      ['admin', 'POST', '/admin/api/v1/prijava', 'korisnik=k'],
+    ]);
+    for (const path of ['/admin/api', '/admin/api/', '/admin/api/v1/prijava']) {
+      for (const method of ['GET', 'HEAD', 'POST']) expect(redirectFor(path, undefined, { method }), `${method} ${path}`).toBeNull();
+    }
+    // Samo točno `/admin/api`: `/admin/apix` je obična stara adresa.
+    expect(redirectFor('/admin/apix')).toEqual({ status: 301, location: '/administracija/apix' });
+  });
+
+  test('/app/mobile/… uz pokrenut mobilni front (VS-2) ide frontu, bez njega 302 na /aplikacija/', async () => {
+    const running = (service: string) => service === 'mobile';
+    expect(redirectFor('/app/mobile/zadaci', undefined, { running })).toBeNull();
+    expect(redirectFor('/app/mobile/zadaci')).toEqual({ status: 302, location: '/aplikacija/' });
+    const mobile = await listen(fakeUpstream('mobile'));
+    const edge = await createEdge({
+      targets: targetsFromEnv({ DUCTURA_EDGE_PRELOADER: `http://127.0.0.1:${preloaderPort}`, DUCTURA_EDGE_MOBILE: `http://127.0.0.1:${mobile}` }),
+    });
+    const origin = `http://127.0.0.1:${await listen(edge)}`;
+    seen.length = 0;
+    const res = await fetch(`${origin}/app/mobile/zadaci?v=1`, { redirect: 'manual' });
+    expect(res.headers.get('x-upstream')).toBe('mobile');
+    expect(seen.map((s) => [s.upstream, s.url])).toEqual([['mobile', '/app/mobile/zadaci?v=1']]);
+  });
+
+  test('/app/web/* i /app/chrome/* ne preusmjeravaju dok front nije prešao; administracija je prešla', async () => {
+    for (const path of ['/app/web/', '/app/web/zadaci', '/app/web/prijava', '/app/chrome/']) {
       expect(redirectFor(path), path).toBeNull();
       expect((await rawRequest(path)).status, path).toBe(303);
     }
-    expect(BASES).toEqual({ front: '/app/web', admin: '/admin' });
+    expect(BASES).toEqual({ front: '/app/web', admin: '/administracija' });
+  });
+
+  test('tablica 301 ima 12 redova (11 preusmjeravanja i iznimku /admin/api) kad obje usluge prijeđu', () => {
+    const rows = redirectsFor({ front: '/aplikacija', admin: '/administracija' });
+    expect(rows.map((r) => [r.path, r.status, r.location])).toEqual([
+      ['/admin', 301, '/administracija'],
+      ['/app/web/naslovnica', 301, '/'],
+      ['/aplikacija/naslovnica', 301, '/'],
+      ['/app/web/pristupacnost', 301, '/pristupacnost'],
+      ['/app/web/stanje', 301, '/stanje'],
+      ['/prijava', 301, '/aplikacija/prijava'],
+      ['/download', 301, '/preuzimanja'],
+      ['/api/auth', 308, '/api/v1/auth'],
+      ['/app/mobile', 302, '/aplikacija/'],
+      ['/app/web', 301, '/aplikacija'],
+      ['/app/chrome', 301, '/aplikacija'],
+    ]);
+    expect(rows.flatMap((r) => r.except)).toEqual(['/admin/api']);
+    // Danas (front još na `/app/web`) vrijede svi redovi osim dva koja čekaju prelazak fronta.
+    expect(LEGACY_REDIRECTS.map((r) => r.path)).toEqual(rows.map((r) => r.path).filter((p) => p !== '/app/web' && p !== '/app/chrome'));
   });
 
   test('nakon prelaska usluga (zadaci 3 i 9) stare adrese aplikacije preusmjeravaju, a nove idu doslovno', () => {
     const moved = { front: '/aplikacija', admin: '/administracija' };
     const redirects = redirectsFor(moved);
-    expect(redirectFor('/app/web/zadaci?x', redirects)).toEqual({ status: 307, location: '/aplikacija/zadaci?x' });
-    expect(redirectFor('/app/web', redirects)).toEqual({ status: 307, location: '/aplikacija' });
-    expect(redirectFor('/app/chrome/rad/1', redirects)).toEqual({ status: 307, location: '/aplikacija/rad/1' });
-    expect(redirectFor('/admin/prijava', redirects)).toEqual({ status: 307, location: '/administracija/prijava' });
-    expect(redirectFor('/prijava', redirects)).toEqual({ status: 307, location: '/aplikacija/prijava' });
+    expect(redirectFor('/app/web/zadaci?x', redirects)).toEqual({ status: 301, location: '/aplikacija/zadaci?x' });
+    expect(redirectFor('/app/web', redirects)).toEqual({ status: 301, location: '/aplikacija' });
+    expect(redirectFor('/app/chrome/rad/1', redirects)).toEqual({ status: 301, location: '/aplikacija/rad/1' });
+    expect(redirectFor('/admin/prijava', redirects)).toEqual({ status: 301, location: '/administracija/prijava' });
+    expect(redirectFor('/prijava', redirects)).toEqual({ status: 301, location: '/aplikacija/prijava' });
+    // Uža putanja ide prije šire: naslovnica fronta na `/`, ne na `/aplikacija/naslovnica`.
+    expect(redirectFor('/app/web/naslovnica', redirects)).toEqual({ status: 301, location: '/' });
+    expect(redirectFor('/app/web/stanje', redirects)).toEqual({ status: 301, location: '/stanje' });
     expect(redirectFor('/app/webx', redirects)).toBeNull();
     const entries = entriesFor(moved);
     expect(entryFor('/aplikacija/zadaci', entries)?.path).toBe('/aplikacija/zadaci');
@@ -532,8 +617,8 @@ describe('karta adresa (D-318, DAN-1574): stare adrese', () => {
 
 describe('prosljeđivanje', () => {
   test.each([
-    ['/admin', 'admin'],
-    ['/admin/prijava', 'admin'],
+    ['/admin/api/v1/prijava', 'admin'],
+    ['/administracija/prijava', 'admin'],
     ['/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F', 'api'],
     ['/api/v1/me', 'api'],
     ['/app/web/', 'front'],

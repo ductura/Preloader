@@ -81,11 +81,13 @@ test('/ulaz i /aplikacija nisu za tražilice; /aplikacija otvara web aplikaciju 
   expect((await page.request.get('/', { maxRedirects: 0 })).headers()['x-robots-tag']).toBeUndefined();
 });
 
-test('stare adrese preusmjeravaju na nove (lokalno 307, /api/auth 308)', async ({ page }) => {
+test('stare adrese preusmjeravaju na nove (tablica 301, /api/auth 308)', async ({ page }) => {
   const cases = [
-    ['/prijava?greska=x', 307, '/app/web/prijava?greska=x'],
-    ['/aplikacija/naslovnica', 307, '/'],
-    ['/download/windows', 307, '/preuzimanja/windows'],
+    ['/prijava?greska=x', 301, '/app/web/prijava?greska=x'],
+    ['/aplikacija/naslovnica', 301, '/'],
+    ['/app/web/naslovnica', 301, '/'],
+    ['/download/windows', 301, '/preuzimanja/windows'],
+    ['/admin/prijava?x=1', 301, '/administracija/prijava?x=1'],
     ['/api/auth/logout', 308, '/api/v1/auth/logout'],
   ] as const;
   for (const [path, status, location] of cases) {
