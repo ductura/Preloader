@@ -6,7 +6,7 @@ import {
   browserStore, CHOICE_VERSION, readChoice, STORAGE_KEY, writeChoice, type Choice, type ChoiceStore,
 } from '../src/choice/store.ts';
 import { applyRoute, REDIRECT_DELAY_MS } from '../src/client.ts';
-import { defaultConfig } from '../src/config.ts';
+import { defaultConfig, type Config } from '../src/config.ts';
 import { choosePackage, chooseView, type Signals } from '../src/detect/index.ts';
 import { renderPage } from '../src/page.ts';
 import { clientText, text } from '../src/text.ts';
@@ -120,7 +120,7 @@ test('property: zapamćeni izbor kroz pohranu pobjeđuje na stranici, a krivi za
     for (const manual of manuals) {
       const store = new MemoryStore();
       writeChoice(store, manual);
-      const r = visit(s, store).route;
+      const r = visit(s, store, withMobile).route;
       const auto = { view: chooseView(s), package: choosePackage(s) };
       const expected = resolveChoice(auto, manual);
       expect(r.frontend === 'mobile').toBe(expected.view === 'mobile');
@@ -130,11 +130,14 @@ test('property: zapamćeni izbor kroz pohranu pobjeđuje na stranici, a krivi za
   }
 });
 
-function visit(s: Signals, store: ChoiceStore | null = null) {
-  const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
+/** Kad /mobilna postoji (D-318), nudi se i izbor prikaza. */
+const withMobile: Config = { ...defaultConfig, frontends: { web: '/aplikacija/prijava', mobile: '/mobilna/prijava' } };
+
+function visit(s: Signals, store: ChoiceStore | null = null, config: Config = defaultConfig) {
+  const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }, config), 'text/html');
   const cancel = vi.fn();
   const go = vi.fn<(url: string, delayMs: number) => () => void>(() => cancel);
-  const route = applyRoute(doc, s, defaultConfig, go, store);
+  const route = applyRoute(doc, s, config, go, store);
   const click = (selector: string) => (doc.querySelector(selector) as HTMLElement).click();
   const pressed = (selector: string) => doc.querySelector(selector)?.getAttribute('aria-pressed');
   return { doc, go, cancel, route, click, pressed };
@@ -142,7 +145,7 @@ function visit(s: Signals, store: ChoiceStore | null = null) {
 
 describe('ručni izbor na stranici', () => {
   test('kontrole su vidljive, na hrvatskom, gumbi tipkovnicom i označeni', () => {
-    const { doc, pressed } = visit({ userAgent: UA.chromeWindows });
+    const { doc, pressed } = visit({ userAgent: UA.chromeWindows }, null, withMobile);
     const section = doc.getElementById('choice');
     expect(section?.hidden).toBe(false);
     expect(section?.textContent).toContain(text.choiceTitle);
@@ -167,7 +170,7 @@ describe('ručni izbor na stranici', () => {
     const store = new MemoryStore();
     const { doc, go, cancel, click } = visit({ userAgent: UA.firefoxLinux }, store);
     expect(doc.getElementById('desktop-offer')?.hidden).toBe(true);
-    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.other, 4000);
+    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.web, 4000);
     click('[data-package="windows"]');
     expect(cancel).toHaveBeenCalledOnce();
     expect(go).toHaveBeenCalledOnce();
@@ -179,24 +182,26 @@ describe('ručni izbor na stranici', () => {
 
   test('ručni prikaz mijenja poveznicu na web i pamti se za sljedeći posjet', () => {
     const store = new MemoryStore();
-    const first = visit({ userAgent: UA.chromeWindows }, store);
+    const first = visit({ userAgent: UA.chromeWindows }, store, withMobile);
     first.click('[data-view="mobile"]');
-    expect(first.doc.getElementById('open-app')?.getAttribute('href')).toBe(defaultConfig.frontends.mobile);
+    expect(first.doc.getElementById('open-app')?.getAttribute('href')).toBe(withMobile.frontends.mobile);
     expect(first.pressed('[data-view="mobile"]')).toBe('true');
     expect(first.doc.getElementById('desktop-offer')?.hidden).toBe(true);
-    const next = visit({ userAgent: UA.chromeWindows }, store);
+    const next = visit({ userAgent: UA.chromeWindows }, store, withMobile);
     expect(next.route.frontend).toBe('mobile');
-    expect(next.go).toHaveBeenCalledWith(defaultConfig.frontends.mobile, REDIRECT_DELAY_MS);
+    expect(next.go).toHaveBeenCalledWith(withMobile.frontends.mobile, REDIRECT_DELAY_MS);
+    // Bez /mobilna/ isti zapamćeni „Mobitel” vodi na web.
+    expect(visit({ userAgent: UA.chromeWindows }, store).route.frontend).toBe('web');
   });
 
   test('zapamćen „Mobitel”: prije odlaska korisnik može vratiti „Računalo” (pravi timer)', () => {
     vi.useFakeTimers();
     try {
-      const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
+      const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }, withMobile), 'text/html');
       const store = stored({ v: 1, view: 'mobile' });
       const assign = vi.fn<(url: string) => void>();
       // Isti oblik kao `src/main.ts`: setTimeout + clearTimeout.
-      applyRoute(doc, { userAgent: UA.chromeWindows }, defaultConfig, (url, delayMs) => {
+      applyRoute(doc, { userAgent: UA.chromeWindows }, withMobile, (url, delayMs) => {
         const id = setTimeout(() => assign(url), delayMs);
         return () => clearTimeout(id);
       }, store);
@@ -205,7 +210,7 @@ describe('ručni izbor na stranici', () => {
       (doc.querySelector('[data-view="desktop"]') as HTMLElement).click();
       vi.runAllTimers();
       expect(assign).not.toHaveBeenCalled();
-      expect(doc.getElementById('open-app')?.getAttribute('href')).toBe(defaultConfig.frontends.chrome);
+      expect(doc.getElementById('open-app')?.getAttribute('href')).toBe(withMobile.frontends.web);
       expect(readChoice(store).view).toBe('desktop');
     } finally {
       vi.useRealTimers();
@@ -217,15 +222,15 @@ describe('ručni izbor na stranici', () => {
   });
 
   test('zapamćeno računalo pobjeđuje automatski mobilni prikaz', () => {
-    const { route } = visit({ userAgent: UA.chromeAndroid }, stored({ v: 1, view: 'desktop' }));
-    expect(route.frontend).toBe('chrome');
+    const { route } = visit({ userAgent: UA.chromeAndroid }, stored({ v: 1, view: 'desktop' }), withMobile);
+    expect(route.frontend).toBe('web');
   });
 
   test('pohrana koja baca: stranica radi, izbor vrijedi samo na stranici', () => {
-    const { doc, click, route } = visit({ userAgent: UA.safariMac }, throwingStore);
+    const { doc, click, route } = visit({ userAgent: UA.safariMac }, throwingStore, withMobile);
     expect(route.desktopPackage).toBe('macos');
     click('[data-view="mobile"]');
-    expect(doc.getElementById('open-app')?.getAttribute('href')).toBe(defaultConfig.frontends.mobile);
+    expect(doc.getElementById('open-app')?.getAttribute('href')).toBe(withMobile.frontends.mobile);
     expect(doc.getElementById('choice-status')?.textContent).toBe(clientText.choiceNotSaved);
   });
 

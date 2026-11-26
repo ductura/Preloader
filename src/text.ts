@@ -7,16 +7,12 @@ export const text = {
   title: 'Ductura',
   lead: 'Otvaramo Ducturu prilagođenu Vašem uređaju i pregledniku.',
   openApp: 'Otvori Ducturu u pregledniku',
-  signIn: 'Prijava',
-  signInAai: 'Prijava preko AAI@EduHr',
-  signInAdmin: 'Administracija platforme',
   noscript: 'Bez JavaScripta odaberite sami:',
   home: 'Natrag na početnu stranicu',
   choiceTitle: 'Odaberite sami',
   choiceView: 'Prikaz',
   views: { desktop: 'Računalo', mobile: 'Mobitel' },
   choicePackage: 'Desktop paket',
-  frontends: { chrome: 'Sučelje za Chrome', mobile: 'Sučelje za mobitel i tablet', other: 'Sučelje za ostale preglednike' },
 } as const;
 
 /** Stanja greške (P-0.5); ključ bira `errorViewFor` iz `src/errors/`. */
@@ -24,7 +20,7 @@ export const errorText = {
   badRequest: { title: 'Zahtjev nije prihvaćen', body: 'Poslani podaci nisu ispravnog oblika. Učitajte stranicu ponovno.' },
   unauthenticated: { title: 'Potrebna je prijava', body: 'Za nastavak se prijavite.' },
   forbidden: { title: 'Pristup nije dopušten', body: 'Ova stranica nije dostupna Vašem računu.' },
-  notFound: { title: 'Stranica ne postoji', body: 'Provjerite adresu ili se vratite na početnu stranicu.' },
+  notFound: { title: 'Stranica ne postoji', body: 'Na ovoj adresi nema stranice. Provjerite adresu ili se vratite na početnu.' },
   timeout: { title: 'Odgovor nije stigao na vrijeme', body: 'Pokušajte ponovno.' },
   tooManyRequests: { title: 'Previše zahtjeva', body: 'Pričekajte trenutak i pokušajte ponovno.' },
   internal: { title: 'Greška na poslužitelju', body: 'Zahtjev nije izvršen. Pokušajte ponovno za nekoliko minuta.' },

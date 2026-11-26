@@ -2,7 +2,7 @@
 import { resolveChoice, type Decision } from './choice/resolve.ts';
 import { readChoice, writeChoice, type Choice, type ChoiceStore } from './choice/store.ts';
 import type { Config } from './config.ts';
-import { detectBrowser, type DesktopPackage, type Frontend, type Route } from './detect.ts';
+import { availableFrontend, frontendUrl, type DesktopPackage, type Route } from './detect.ts';
 import { choosePackage, chooseView, type Signals, type View } from './detect/index.ts';
 import { clientText as text } from './client-text.ts';
 
@@ -15,17 +15,12 @@ export type Navigate = (url: string, delayMs: number) => (() => void) | void;
  */
 export const REDIRECT_DELAY_MS = 4000;
 
-/** Putanje weba još su iz P-0.1 (odluka 1 otvorena): prikaz računala bira prema pregledniku. */
-function frontendFor(view: View, userAgent: string): Frontend {
-  if (view === 'mobile') return 'mobile';
-  return detectBrowser(userAgent) === 'chrome' ? 'chrome' : 'other';
-}
-
-function toRoute(d: Decision, userAgent: string, config: Config): Route {
-  const frontend = frontendFor(d.view, userAgent);
+/** Preloader uvijek vodi na ekran prijave; mobitel ide na web dok ne postoji `/mobilna/` (D-318). */
+function toRoute(d: Decision, config: Config): Route {
+  const frontend = availableFrontend(d.view === 'mobile' ? 'mobile' : 'web', config);
   return {
     frontend,
-    url: config.frontends[frontend],
+    url: frontendUrl(frontend, config),
     desktopPackage: d.package,
     downloadUrl: d.package ? config.downloads[d.package] : null,
   };
@@ -58,7 +53,7 @@ export function applyRoute(
   const auto: Decision = { view: chooseView(signals), package: choosePackage(signals) };
   let manual: Choice = readChoice(store);
   let decision = resolveChoice(auto, manual);
-  const route = toRoute(decision, signals.userAgent, config);
+  const route = toRoute(decision, config);
   render(doc, route, decision);
 
   const section = doc.getElementById('choice');
@@ -67,10 +62,6 @@ export function applyRoute(
     cancel?.();
     cancel = undefined;
   };
-  // Prijava (#2028 §3.1): fokus ili dodir na njoj otkazuje automatsko preusmjeravanje,
-  // da odlazak na web ne preteče izbor administracije ili AAI@EduHr.
-  const signIn = doc.getElementById('sign-in');
-  for (const type of ['focusin', 'pointerdown'] as const) signIn?.addEventListener(type, stop);
   if (!section) return route;
   section.hidden = false;
   section.addEventListener('click', (event) => {
@@ -84,7 +75,7 @@ export function applyRoute(
     manual = view ? { ...manual, view } : { ...manual, package: pkg ?? undefined };
     const saved = writeChoice(store, manual);
     decision = resolveChoice(auto, manual);
-    render(doc, toRoute(decision, signals.userAgent, config), decision);
+    render(doc, toRoute(decision, config), decision);
     const status = doc.getElementById('choice-status');
     if (status) status.textContent = saved ? text.choiceSaved : text.choiceNotSaved;
   });

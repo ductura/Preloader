@@ -17,29 +17,29 @@ function visit(ua: string) {
 const href = (doc: Document, id: string) => doc.getElementById(id)?.getAttribute('href');
 
 describe('stranica preloadera', () => {
-  test('Chrome na Macu: Chrome sučelje + macOS paket', () => {
+  test('Chrome na Macu: web + macOS paket', () => {
     const { doc, go } = visit(UA.chromeMac);
-    expect(doc.body.dataset['frontend']).toBe('chrome');
-    expect(href(doc, 'open-app')).toBe(defaultConfig.frontends.chrome);
+    expect(doc.body.dataset['frontend']).toBe('web');
+    expect(href(doc, 'open-app')).toBe(defaultConfig.frontends.web);
     // PRE-1301: gumb vodi na /preuzimanje (manifest servera), ne na tvrdo upisanu datoteku.
     expect(href(doc, 'desktop-download')).toBe('/preuzimanje?sustav=macos');
     expect(doc.getElementById('desktop-offer')?.hidden).toBe(false);
     expect(doc.getElementById('desktop-download')?.textContent).toContain('za macOS');
-    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.chrome, 4000);
+    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.web, 4000);
   });
 
-  test('Chrome na Androidu: mobilno sučelje, bez desktop paketa, vrijeme za ručni izbor', () => {
+  test('Chrome na Androidu: web (mobilne inačice još nema), bez desktop paketa, vrijeme za ručni izbor', () => {
     const { doc, go } = visit(UA.chromeAndroid);
-    expect(doc.body.dataset['frontend']).toBe('mobile');
-    expect(href(doc, 'open-app')).toBe(defaultConfig.frontends.mobile);
+    expect(doc.body.dataset['frontend']).toBe('web');
+    expect(href(doc, 'open-app')).toBe(defaultConfig.frontends.web);
     expect(doc.getElementById('desktop-offer')?.hidden).toBe(true);
-    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.mobile, 4000);
+    expect(go).toHaveBeenCalledWith(defaultConfig.frontends.web, 4000);
   });
 
-  test('Edge na Windowsu: ostala sučelja + Windows paket', () => {
+  test('Edge na Windowsu: web + Windows paket', () => {
     expect(visit(UA.edgeWindows).route).toEqual({
-      frontend: 'other',
-      url: defaultConfig.frontends.other,
+      frontend: 'web',
+      url: defaultConfig.frontends.web,
       desktopPackage: 'windows',
       downloadUrl: defaultConfig.downloads.windows,
     });
@@ -56,59 +56,47 @@ describe('stranica preloadera', () => {
 
   test('vrijednosti se escapiraju u HTML-u', () => {
     const html = renderPage({ script: '', css: '' }, {
-      frontends: { chrome: '/a"><x>', mobile: '/m', other: '/o' },
+      frontends: { web: '/a"><x>' },
       downloads: { windows: '/w', macos: '/m' },
-      signIn: { returnTo: '/app/web/', admin: '/adm"><y>' },
     });
     expect(html).not.toContain('"><x>');
     expect(html).toContain('/a&quot;&gt;&lt;x&gt;');
-    expect(html).not.toContain('"><y>');
-    expect(html).toContain('/adm&quot;&gt;&lt;y&gt;');
   });
 });
 
-// Ugovor #2028 §3.1: dva ulaza u prijavu, bez skripte i prije preusmjeravanja.
-describe('prijava s preloadera', () => {
-  const signIn = (doc: Document) => [...doc.querySelectorAll<HTMLAnchorElement>('#sign-in a')];
-
-  test('AAI@EduHr vodi na prijavu s povratkom na /app/web/, administracija na /admin/prijava', () => {
-    const { doc } = visit(UA.chromeMac);
-    expect(signIn(doc).map((a) => [a.textContent, a.getAttribute('href')])).toEqual([
-      ['Prijava preko AAI@EduHr', '/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F'],
-      ['Administracija platforme', '/admin/prijava'],
-    ]);
-    const login = new URL(href(doc, 'sign-in-aai') ?? '', 'http://localhost:8000');
-    expect(login.pathname).toBe('/api/v1/auth/login');
-    expect(login.searchParams.get('returnTo')).toBe('/app/web/');
-    expect(doc.getElementById('sign-in')?.getAttribute('aria-label')).toBe('Prijava');
-  });
-
-  test('jedini ulaz za studente je AAI@EduHr (D-09): nema obrasca ni drugog pružatelja', () => {
+// Karta adresa D-318: preloader na /ulaz nema gumbe za prijavu i administraciju, sam vodi na prijavu aplikacije.
+describe('ulaz bez prijave i administracije', () => {
+  test('nema gumba ni poveznica za prijavu i administraciju, ni prijavnog obrasca (D-09)', () => {
     const html = renderPage({ script: '', css: '' });
-    expect(html).not.toMatch(/<form|<input|type="password"/i);
-    const logins = html.match(/\/api\/v1\/auth\/[a-z-]+/g) ?? [];
-    expect(new Set(logins)).toEqual(new Set(['/api/v1/auth/login']));
+    expect(html).not.toMatch(/id="sign-in|AAI@EduHr|Administracija platforme|\/api\/v1\/auth|\/admin|<form|<input|type="password"/i);
   });
 
-  test('nesigurna povratna adresa iz konfiguracije pada na početnu stranicu', () => {
-    const html = renderPage({ script: '', css: '' }, { ...defaultConfig, signIn: { returnTo: '//evil.example/', admin: '/admin/prijava' } });
-    expect(html).toContain('href="/api/v1/auth/login?returnTo=%2F"');
+  test('sam vodi na /aplikacija/prijava, i mobitel dok /mobilna ne postoji', () => {
+    expect(defaultConfig.frontends).toEqual({ web: '/aplikacija/prijava' });
+    for (const ua of [UA.chromeMac, UA.edgeWindows, UA.firefoxLinux, UA.chromeAndroid, UA.safariIphone]) {
+      const { doc, go } = visit(ua);
+      expect(go).toHaveBeenCalledWith('/aplikacija/prijava', 4000);
+      expect(href(doc, 'open-app')).toBe('/aplikacija/prijava');
+    }
   });
 
-  for (const type of ['focusin', 'pointerdown'] as const) {
-    test(`${type} na prijavi otkazuje automatsko preusmjeravanje`, () => {
-      const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
-      const cancel = vi.fn();
-      applyRoute(doc, { userAgent: UA.chromeMac }, defaultConfig, () => cancel);
-      expect(cancel).not.toHaveBeenCalled();
-      doc.getElementById('sign-in-admin')?.dispatchEvent(new Event(type, { bubbles: true }));
-      expect(cancel).toHaveBeenCalledTimes(1);
-      doc.getElementById('sign-in-aai')?.dispatchEvent(new Event(type, { bubbles: true }));
-      expect(cancel).toHaveBeenCalledTimes(1);
-    });
-  }
+  test('inačica koja ne postoji se ne nudi: nema izbora prikaza, ostaje izbor paketa', () => {
+    const { doc } = visit(UA.chromeWindows);
+    expect(doc.querySelector('[data-view]')).toBeNull();
+    expect(doc.querySelector('[data-package="windows"]')).not.toBeNull();
+    expect(renderPage({ script: '', css: '' })).not.toContain('/app/');
+  });
 
-  test('bez interakcije s prijavom preusmjeravanje ostaje zakazano', () => {
+  test('kad /mobilna postoji, mobitel ide na nju i izbor prikaza se nudi', () => {
+    const withMobile = { ...defaultConfig, frontends: { web: '/aplikacija/prijava', mobile: '/mobilna/prijava' } };
+    const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }, withMobile), 'text/html');
+    const go = vi.fn<(url: string, delayMs: number) => void>();
+    applyRoute(doc, { userAgent: UA.chromeAndroid }, withMobile, go);
+    expect(go).toHaveBeenCalledWith('/mobilna/prijava', 4000);
+    expect(doc.querySelector('[data-view="mobile"]')).not.toBeNull();
+  });
+
+  test('interakcija s poveznicom ne otkazuje preusmjeravanje', () => {
     const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
     const cancel = vi.fn();
     applyRoute(doc, { userAgent: UA.chromeMac }, defaultConfig, () => cancel);

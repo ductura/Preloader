@@ -88,3 +88,12 @@ test('tekst nema imena ustanove (provjeravaju se samo listovi, ne izvorni kod)',
   expect(ROOTS.filter((r) => fold(infoLeaves.join(' ')).includes(r))).toEqual([]);
   expect(ROOTS.filter((r) => fold(`${infoText.title} Pravila fakulteta`).includes(r))).toEqual(['fakult']);
 });
+
+// D-318 (vlasnik 26. 11. 2026., Ductus#2059 c.7203462120): 404 preloadera ima isti tekst kao 404 aplikacije.
+test('errorText.notFound preuzima tekst 404 aplikacije', async () => {
+  const { errorText } = await import('../src/text.ts');
+  expect(errorText.notFound).toEqual({
+    title: 'Stranica ne postoji',
+    body: 'Na ovoj adresi nema stranice. Provjerite adresu ili se vratite na početnu.',
+  });
+});

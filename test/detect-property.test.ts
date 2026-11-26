@@ -20,6 +20,9 @@ interface Impl {
 }
 const real: Impl = { chooseView, choosePackage, resolveChoice, applyRoute };
 
+/** Izbor prikaza postoji samo kad postoji /mobilna/ (D-318): svojstva nad prikazom koriste tu konfiguraciju. */
+const withMobile: Config = { ...defaultConfig, frontends: { web: '/aplikacija/prijava', mobile: '/mobilna/prijava' } };
+
 const RUNS = { seed: 967, numRuns: 200 } as const;
 const VIEWS: readonly unknown[] = ['desktop', 'mobile'];
 const PACKAGES: readonly unknown[] = [null, 'windows', 'macos'];
@@ -63,8 +66,8 @@ class MemoryStore implements ChoiceStore {
 }
 
 /** Svaki posjet dobiva svjež dokument: `applyRoute` dodaje slušatelja na `#choice`. */
-function visit(impl: Impl, s: Signals, chosen: Choice, userClicks: readonly string[], config: Config = defaultConfig) {
-  const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }), 'text/html');
+function visit(impl: Impl, s: Signals, chosen: Choice, userClicks: readonly string[], config: Config = withMobile) {
+  const doc = new DOMParser().parseFromString(renderPage({ script: '', css: '' }, config), 'text/html');
   const store = new MemoryStore();
   writeChoice(store, chosen);
   const go = vi.fn<(url: string, delayMs: number) => () => void>(() => () => undefined);
@@ -106,7 +109,7 @@ const manualWins = (impl: Impl) =>
     expect(afterLoad).toEqual({ view: [d.view], package: d.package ? [d.package] : [] });
   });
 
-const noDownload = (impl: Impl, config: Config = defaultConfig) =>
+const noDownload = (impl: Impl, config: Config = withMobile) =>
   fc.property(signals, manual, clicks, (s, chosen, userClicks) => {
     const { go, link, linkClick } = visit(impl, s, chosen, userClicks, config);
     expect(go).toHaveBeenCalledOnce();
@@ -141,7 +144,7 @@ describe('property (DAN-967): ulaz → odluka', () => {
       },
     }))).toBe(true);
     // Preusmjeravanje vodi na datoteku paketa.
-    const broken: Config = { ...defaultConfig, frontends: { ...defaultConfig.frontends, chrome: defaultConfig.downloads.windows } };
+    const broken: Config = { ...withMobile, frontends: { ...withMobile.frontends, web: defaultConfig.downloads.windows } };
     expect(fails(noDownload(real, broken))).toBe(true);
   });
 

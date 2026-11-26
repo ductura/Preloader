@@ -262,7 +262,9 @@ describe('pnpm sve nad lažnim checkoutima', () => {
       expect(await json('/aplikacija/zadaci')).toMatchObject({ name: 'front-institucije', url: '/app/web/zadaci' });
       expect(await json('/administracija/prijava')).toMatchObject({ name: 'aplication-front', url: '/admin/prijava' });
       const page = await fetch('http://localhost:8000/ulaz');
-      expect(await page.text()).toContain('Prijava preko AAI@EduHr');
+      const entry = await page.text();
+      expect(entry).toContain('href="/aplikacija/prijava"');
+      expect(entry).not.toContain('Prijava preko AAI@EduHr');
       // Izgrađen preloader (`next start`) iza edgea: CSP iz hasheva, ne stroga zamjenska politika.
       expect(page.headers.get('content-security-policy')).toMatch(/script-src 'sha256-[A-Za-z0-9+/]{43}='/);
       // Aplication_server dobiva token koji je Institution_server zapisao, issuer simulatora i tajnu kolačića.
