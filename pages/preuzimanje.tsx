@@ -35,7 +35,7 @@ export default function Page({ css, packages }: Props) {
             </a>
           </p>
         ))}
-        <p><a href={defaultConfig.frontends.other}>{text.continueOnWeb}</a></p>
+        <p><a href={defaultConfig.frontends.web}>{text.continueOnWeb}</a></p>
       </main>
     </StaticPage>
   );

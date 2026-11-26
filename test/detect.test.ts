@@ -31,9 +31,9 @@ test('isMobile', () => {
 });
 
 test('chooseFrontend', () => {
-  expect(chooseFrontend(UA.chromeWindows)).toBe('chrome');
-  expect(chooseFrontend(UA.edgeWindows)).toBe('other');
-  expect(chooseFrontend(UA.safariMac)).toBe('other');
+  expect(chooseFrontend(UA.chromeWindows)).toBe('web');
+  expect(chooseFrontend(UA.edgeWindows)).toBe('web');
+  expect(chooseFrontend(UA.safariMac)).toBe('web');
   expect(chooseFrontend(UA.safariIphone)).toBe('mobile');
 });
 

@@ -176,7 +176,8 @@ describe('next start: preloader na /ulaz (karta adresa D-318)', () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('<html lang="hr">');
-    expect(html).toContain('id="sign-in-aai"');
+    expect(html).toContain('id="open-app" class="button" href="/aplikacija/prijava"');
+    expect(html).not.toMatch(/sign-in|AAI@EduHr|Administracija platforme/);
     expect(seen).toEqual([]);
   });
 });

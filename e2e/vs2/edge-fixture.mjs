@@ -24,7 +24,7 @@ async function fixture(frontend, paths, pages = {}) {
 try {
   await main({
     DUCTURA_EDGE_PRELOADER: PRELOADER_ORIGIN,
-    DUCTURA_EDGE_FRONT: await fixture('chrome', ['/app/chrome/', '/app/web/'], { '/app/web/naslovnica': 'naslovnica' }),
+    DUCTURA_EDGE_FRONT: await fixture('chrome', ['/app/chrome/', '/app/web/'], { '/app/web/naslovnica': 'naslovnica', '/app/web/prijava': 'prijava' }),
     DUCTURA_EDGE_MOBILE: await fixture('mobile', ['/app/mobile/']),
     DUCTURA_EDGE_OTHER: await fixture('other', ['/o/']),
   });
