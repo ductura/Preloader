@@ -8,7 +8,7 @@ Ulaz u Ducturu (ductura.org). Next.js aplikacija (next 16.4.6, react 19.3.1) či
 | Mobitel ili tablet (bilo koji preglednik) | `mobile` | – |
 | Firefox, Safari, Edge, Opera i ostali na računalu | `other` | Windows ili macOS |
 
-Prvi ekran nudi i dva ulaza za prijavu (ugovor Ductus #2028 §3.1): **Prijava preko AAI@EduHr** (`/api/v1/auth/login?returnTo=/app/web/`) i **Administracija platforme** (`/admin/prijava`). Fokus ili dodir na njima otkazuje automatsko preusmjeravanje.
+Prvi ekran nudi i dva ulaza za prijavu (ugovor Ductus #2028 §3.1): **Prijava preko AAI@EduHr** (`/api/v1/auth/login?returnTo=/app/web/`) i **Administracija platforme** (`/admin/prijava`). Automatski prijelaz (P-0.3, odluka 27. 11. 2026.): zapamćen izbor ide odmah (`location.replace`); prvi posjet čeka 1500 ms uz odbrojavanje i gumb „Ostani ovdje”; klik, tipka ili fokus na ekranu ga zaustavlja; `/ulaz?izbor` uvijek prikazuje izbor bez prijelaza.
 
 Bez JavaScripta stranica nudi sve izbore. Putanje su u `src/config.ts`. Stranice su `pages/index.tsx` (`/`), `pages/greska.tsx` (`/greska`, i kao `/greska.html`), `pages/404.tsx` i `pages/500.tsx`, sa sadržajem iz `src/ui/`. Prvi ekran mora ostati malen (P-0.1), pa su to stranice Pages Routera s `unstable_runtimeJS: false`: Next ih pri izgradnji iscrta u statičan HTML bez ijedne svoje skripte i bez Reacta u pregledniku. Stil (`src/style.css`) i vlastita skripta (`src/main.ts`, odnosno `src/errors/main.ts`) ugrađuju se u stranicu kao i prije, a gradi ih `scripts/page-assets.ts` (esbuild) u `getStaticProps`. Tako stranica izgleda i radi isto kao statična, piksel za piksel.
 

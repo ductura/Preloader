@@ -74,6 +74,17 @@ Ovisi o `@ductura/contracts` (generirani klijent, katalog grešaka, vektori), `@
 | P-0.10 | Proxy na domeni i lokalni sistemski stog | S-1H.7 | S-1H.7 (treba pravi server) | critical |
 | VS-1 | Vertikalni presjek (ulaz i preusmjeravanje) | S-1E-a, S-1D-d, S-1M-a, S-M-5, E-0.2, P-0.1 | isto | critical |
 
+**P-0.3, odluka vlasnika 27. 11. 2026. (zamjenjuje čekanje od 4 s na `/ulaz`):**
+
+| Slučaj | Ponašanje | Prije | Poslije |
+|---|---|---|---|
+| Zapamćen izbor (prikaz ili paket) | `location.replace` na cilj, bez čekanja i bez unosa u povijest | 4 s | 0 s |
+| Prvi posjet, automatsko prepoznavanje | vidljivo odbrojavanje (`aria-live="polite"`), gumb „Ostani ovdje”, `<link rel=prefetch>` na cilj; prijelaz nakon 1500 ms | 4 s | 1,5 s |
+| Klik, tipka ili fokus unutar ekrana | zaustavlja odbrojavanje, prijelaz i prefetch | samo klik na izbor | klik, `keydown`, `focusin` |
+| `/ulaz?izbor` | uvijek prikazuje izbor, bez automatskog prijelaza (put za promjenu zapamćenog izbora) | nije postojalo | novo |
+
+Vrijeme do prijave: zapamćen izbor 4 s → 0 s, prvi posjet 4 s → 1,5 s (uz prefetch ciljne stranice).
+
 Za `critical` zadatke (P-0.6, P-0.7) PRIJEDLOG: gradi se nad lažnim serverom, a spaja tek kad pravi serverski zadatak prođe iste vektore. P-0.7 ne gradi prijavu admina aplikacije (pitanje 8).
 
 ## 6. Testovi (prepoznavanje, usmjeravanje, greške, pristanak)

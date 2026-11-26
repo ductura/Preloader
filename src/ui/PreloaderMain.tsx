@@ -24,6 +24,8 @@ export function PreloaderMain({ config = defaultConfig }: { config?: Config }) {
       <h1 className="brand">Ductur<span>a</span></h1>
       <p className="lead">{text.lead}</p>
       <p><a id="open-app" className="button" href={config.frontends.web}>{text.openApp}</a></p>
+      <p id="countdown" aria-live="polite" hidden></p>
+      <p><button id="stay-here" type="button" hidden>{clientText.stay}</button></p>
       <p id="desktop-offer" hidden><a id="desktop-download" href=""></a></p>
       <section id="choice" className="choice" aria-labelledby="choice-title" hidden>
         <h2 id="choice-title">{text.choiceTitle}</h2>

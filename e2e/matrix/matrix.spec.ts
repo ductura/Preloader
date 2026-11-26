@@ -54,8 +54,28 @@ test('manual choice is remembered after a reload', async ({ page }) => {
   await page.clock.runFor(REDIRECT_DELAY_MS * 2);
   expect(new URL(page.url()).pathname).toBe('/');
 
-  await page.reload();
+  // Zapamćen izbor odmah vodi dalje; put za promjenu izbora je `/?izbor` (bez automatskog prijelaza).
+  await page.goto('/?izbor');
   await expectState(page, pkg);
+  await page.clock.runFor(REDIRECT_DELAY_MS * 2);
+  expect(new URL(page.url()).pathname).toBe('/');
+});
+
+test('a remembered choice opens the web at once, without waiting', async ({ page }) => {
+  await page.locator('#choice button[data-package]').first().click();
+  await expect(page.locator('#choice-status')).toHaveText(clientText.choiceSaved);
+  await page.goto('/');
+  await page.waitForURL(`**${target}`);
+});
+
+test('first visit shows a polite countdown and "Stay here" stops it', async ({ page }) => {
+  await expect(page.locator('#countdown')).toBeVisible();
+  await expect(page.locator('#countdown')).toHaveAttribute('aria-live', 'polite');
+  await expect(page.locator('link[rel="prefetch"]')).toHaveCount(1);
+  await page.locator('#stay-here').click();
+  await expect(page.locator('#countdown')).toHaveText(clientText.stayed);
+  await page.clock.runFor(REDIRECT_DELAY_MS * 2);
+  expect(new URL(page.url()).pathname).toBe('/');
 });
 
 test('opens the web in the right view after the delay', async ({ page }) => {

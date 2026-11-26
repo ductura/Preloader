@@ -13,10 +13,14 @@ export function startPreloader(): void {
   if (started) return;
   started = true;
   const signals = signalsFrom(navigator);
-  applyRoute(document, signals, defaultConfig, (url, delayMs) => {
+  applyRoute(document, signals, defaultConfig, (url, delayMs, replace) => {
+    if (replace) {
+      location.replace(url);
+      return;
+    }
     const id = setTimeout(() => location.assign(url), delayMs);
     return () => clearTimeout(id);
-  }, browserStore(window));
+  }, browserStore(window), { chooseOnly: new URLSearchParams(location.search).has('izbor') });
   // Nakon zakazanog preusmjeravanja; ne čeka odgovor (P-0.8).
   sendClientContext((path, init) => fetch(path, init), signals, innerWidth, APP_VERSION);
 }
