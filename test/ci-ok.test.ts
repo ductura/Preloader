@@ -62,8 +62,9 @@ const steps: Obj[] = Array.isArray(ciOk?.['steps']) ? (ciOk['steps'] as Obj[]) :
 const step = steps.find((s) => typeof s['run'] === 'string' && s['run'].includes('# ci-ok:begin'));
 const script = typeof step?.['run'] === 'string' ? step['run'] : '';
 
-const run = (value: string): { code: number | null; out: string } => {
-  const r = spawnSync('bash', ['-c', script], { env: { PATH: process.env.PATH, NEEDS: value } as unknown as NodeJS.ProcessEnv, encoding: 'utf8' });
+const run = (value: string, allowSkipped?: string): { code: number | null; out: string } => {
+  const env = { PATH: process.env.PATH, NEEDS: value, ...(allowSkipped === undefined ? {} : { ALLOW_SKIPPED: allowSkipped }) };
+  const r = spawnSync('bash', ['-c', script], { env: env as unknown as NodeJS.ProcessEnv, encoding: 'utf8' });
   return { code: r.status, out: r.stdout + r.stderr };
 };
 const needs = (o: Record<string, string>): string => JSON.stringify(Object.fromEntries(Object.entries(o).map(([k, v]) => [k, { result: v, outputs: {} }])));
@@ -100,6 +101,30 @@ test('ci-ok names the failing job, not the good one', () => {
   const r = run(needs({ good: 'success', bad: 'failure' }));
   assert.match(r.out, /::error::job bad result: failure/);
   assert.doesNotMatch(r.out, /::error::.*good/);
+});
+
+// DAN-1561: dependency-review is skipped on push; that is the only skip ci-ok allows.
+test('ci-ok allows a skip only for the job named in ALLOW_SKIPPED', () => {
+  const n = needs({ a: 'success', 'dependency-review': 'skipped' });
+  assert.equal(run(n, 'dependency-review').code, 0);
+  assert.equal(run(n, '').code, 1);
+  assert.equal(run(n).code, 1);
+  assert.equal(run(needs({ a: 'skipped', 'dependency-review': 'success' }), 'dependency-review').code, 1);
+  assert.equal(run(needs({ a: 'success', 'dependency-review': 'failure' }), 'dependency-review').code, 1);
+  assert.equal(run(needs({ 'dependency-review': 'cancelled' }), 'dependency-review').code, 1);
+  assert.match(run(needs({ a: 'success' }), 'nope').out, /allow-skipped names a job that is not in needs: nope/);
+});
+
+// DAN-1561: the shared scans of ductura/.github are called, pinned to a full SHA, and counted by ci-ok.
+test('ci.yml calls the shared secret-scan and dependency-review pinned to a SHA', () => {
+  const jobs = jobsOf(workflow);
+  for (const name of ['secret-scan', 'dependency-review']) {
+    assert.match(String(jobs[name]?.['uses']), new RegExp(`^ductura/\\.github/\\.github/workflows/${name}\\.yml@[0-9a-f]{40}$`));
+    assert.ok(needsOf(ciOk).includes(name), `ci-ok needs ${name}`);
+  }
+  assert.match(String(jobs['dependency-review']?.['if']), /github\.event_name == 'pull_request'/);
+  assert.equal(jobs['secret-scan']?.['if'], undefined, 'secret-scan runs on every event');
+  assert.ok(String((step?.['env'] as Obj)['ALLOW_SKIPPED']).includes("'dependency-review'"));
 });
 
 test('ci-ok explains input that is not a non-empty object', () => {
