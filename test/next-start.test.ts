@@ -150,8 +150,8 @@ describe('next start: rewriteovi do usluga', () => {
     ['PATCH', '/app/chrome/a/b?c=d', 'front', '/app/chrome/a/b?c=d'],
     ['GET', '/app/web', 'front', '/app/web/'],
     ['GET', '/app/web/assets/x.js', 'front', '/app/web/assets/x.js'],
-    // Karta adresa (D-318, DAN-1574): naslovnica na `/`, javne stranice na vrhu, nove adrese aplikacije i
-    // administracije prepisane na staru osnovu usluge; upit ide uz odredište.
+    // Karta adresa (D-318, DAN-1574): naslovnica na `/`, javne stranice na vrhu, nova adresa aplikacije
+    // prepisana na staru osnovu fronta, administracija doslovno (Aplication_front#24); upit ide uz odredište.
     ['GET', '/', 'front', '/app/web/naslovnica'],
     ['GET', '/?izvor=a&put=%2Fapp%2Fweb%2F', 'front', '/app/web/naslovnica?izvor=a&put=%2Fapp%2Fweb%2F'],
     ['GET', '/pomoc', 'front', '/app/web/pomoc'],
@@ -159,8 +159,8 @@ describe('next start: rewriteovi do usluga', () => {
     ['GET', '/preuzimanja/windows/a.msi', 'front', '/app/web/preuzimanja/windows/a.msi'],
     ['GET', '/aplikacija', 'front', '/app/web/'],
     ['POST', '/aplikacija/zadaci?godina=2026', 'front', '/app/web/zadaci?godina=2026'],
-    ['GET', '/administracija', 'admin', '/admin'],
-    ['GET', '/administracija/prijava', 'admin', '/admin/prijava'],
+    ['GET', '/administracija', 'admin', '/administracija'],
+    ['GET', '/administracija/prijava', 'admin', '/administracija/prijava'],
   ])('%s %s ide na %s kao %s', async (method, path, upstream, url) => {
     seen.length = 0;
     const res = await fetch(`${nextOrigin}${path}`, { method, redirect: 'manual' });

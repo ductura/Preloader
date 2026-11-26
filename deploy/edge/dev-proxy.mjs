@@ -7,15 +7,15 @@
 //   /preuzimanja, /pomoc, /kontakt, /uvjeti-koristenja, /privatnost, /pristupacnost, /stanje
 //                          -> front institucije, ista putanja pod /app/web
 //   /aplikacija, /aplikacija/*         -> front institucije, /app/web/* (dok front ne prijeđe na /aplikacija)
-//   /administracija, /administracija/* -> Aplication_front, /admin/* (dok ne prijeđe na /administracija)
+//   /administracija, /administracija/* -> Aplication_front (:3120), ista putanja (osnova /administracija)
 //   sve ostalo             -> preloader (Next.js, :3100)
-//   /admin, /admin/*       -> Aplication_front (:3120)
+//   /admin, /admin/*       -> GET i HEAD 301 na /administracija/*; /admin/api/* i ostale metode Aplication_frontu
 //   /api/v1, /api/v1/*     -> Institution_server (:4000)
 //   /app/web, /app/chrome  -> front institucije (:5173)
-//   /app/mobile            -> Institution_web_mobile (DUCTURA_EDGE_MOBILE; bez nje preloader, 404)
+//   /app/mobile            -> Institution_web_mobile (DUCTURA_EDGE_MOBILE; bez nje 302 na /aplikacija/)
 //   /o                     -> Web_other (DUCTURA_EDGE_OTHER; bez nje preloader, 404)
 // Adresa u pregledniku za javne putanje ostaje ista; usluga dobiva putanju iz ENTRY_REWRITES uz isti upit.
-// Samo lokalno: stare adrese (LEGACY_REDIRECTS) -> 307 (`/api/auth/*` 308) na nove, i /app/web s preloadera
+// Stare adrese (LEGACY_REDIRECTS, tablica 301) -> 301 na nove (`/api/auth/*` 308, `/app/mobile/*` 302), i /app/web s preloadera
 // (/ulaz) -> 307 na /o/ (EDGE_ONLY_REDIRECT, VS-2). /ulaz, /aplikacija i /administracija nose
 // `X-Robots-Tag: noindex`.
 //
@@ -344,8 +344,12 @@ export async function createEdge({ targets = targetsFromEnv({}), log = () => {} 
       res.writeHead(EDGE_ONLY_REDIRECT.status, { Location: location, 'Cache-Control': 'no-store' }).end();
       return;
     }
-    // Stara adresa (karta adresa D-318): samo lokalno, 307 (`/api/auth/*` 308); upit ide uz novu adresu.
-    const moved = redirectFor(rawPath);
+    // Stara adresa (tablica 301 karte adresa D-318): 301 samo za GET i HEAD (`/admin/api/*` nikad), `/api/auth/*`
+    // 308 za svaku metodu, `/app/mobile/*` 302 na `/aplikacija/` dok mobilni front lokalno ne radi; upit ide uz novu adresu.
+    const moved = redirectFor(rawPath, undefined, {
+      method: req.method ?? 'GET',
+      running: (service) => available(service, targets),
+    });
     if (moved !== null) {
       res.writeHead(moved.status, { Location: `${moved.location}${target.slice(rawPath.length)}`, 'Cache-Control': 'no-store' }).end();
       return;

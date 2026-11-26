@@ -2,7 +2,7 @@
 // rewriteovi Nexta na Vercelu (`src/rewrites.ts`) i lokalni edge (`dev-proxy.mjs`). Nova usluga ili
 // putanja dodaje se samo ovdje. Karta adresa (D-318, DAN-1574): javne putanje (`/` naslovnica, `/ulaz`
 // preloader, javne stranice, `/aplikacija`, `/administracija`) su u `ENTRY_REWRITES`, a stare adrese koje lokalni
-// edge preusmjerava u `LEGACY_REDIRECTS`. Putanja koja nije ni u jednoj tablici ide preloaderu: njegove
+// edge preusmjerava (tablica 301) u `LEGACY_REDIRECTS`. Putanja koja nije ni u jednoj tablici ide preloaderu: njegove
 // stranice, a sve ostalo je 404. Kod je čisti TypeScript bez `node:` uvoza (Node ga izvršava bez prevođenja).
 
 /** Usluga iza jedinog podrijetla. Preloader nije usluga: on je sve što nije u tablici. */
@@ -89,19 +89,19 @@ export function serviceFor(rawPath: string): Service | null {
 
 /**
  * Osnova usluge kod same usluge, dok ne prijeđe na javnu adresu iz karte adresa (D-318, DAN-1574). Front
- * institucije ima Next `basePath` `/app` i `assetPrefix` `/app/web`, a Aplication_front `/admin`; preglednik na
- * `/aplikacija/…` ili `/administracija/…` bi njihovom klijentu bio izvan osnove. Zato rub do prelaska javnu
+ * institucije ima Next `basePath` `/app` i `assetPrefix` `/app/web`; preglednik na `/aplikacija/…` bi njegovu
+ * klijentu bio izvan osnove. Aplication_front je prešao na `/administracija` (zadatak 9, Aplication_front#24). Zato rub do prelaska javnu
  * adresu prepisuje na osnovu usluge, a stara adresa radi i dalje (zadaci 3 i 9 karte). Kad usluga prijeđe,
  * ovdje se upisuje javna adresa: prepisivanje postaje doslovno, a stara adresa počinje preusmjeravati.
  */
 export interface Bases {
   /** Osnova fronta institucije (`/app/web`, nakon zadatka 3 `/aplikacija`). */
   readonly front: string;
-  /** Osnova Aplication_fronta (`/admin`, nakon zadatka 9 `/administracija`). */
+  /** Osnova Aplication_fronta: `/administracija` (zadatak 9, Aplication_front#24; prije `/admin`). */
   readonly admin: string;
 }
 
-export const BASES: Bases = Object.freeze({ front: '/app/web', admin: '/admin' });
+export const BASES: Bases = Object.freeze({ front: '/app/web', admin: '/administracija' });
 
 /** Javne adrese iz karte adresa (D-318). */
 export const APP_PATH = '/aplikacija';
@@ -183,49 +183,95 @@ export function entryFor(
 }
 
 /**
- * Stara adresa koju lokalni edge preusmjerava na novu (karta adresa D-318). Lokalno `307`, da preglednik
- * ništa trajno ne zapamti dok se karta uvodi; trajni `301` je tek na produkcijskom rubu (zadatak 10, DAN-939).
- * `/api/auth/…` ide sa `308`, jer odjava i prijava šalju POST, a `308` zadržava metodu i tijelo.
+ * Stara adresa koju rub preusmjerava na novu: tablica 301 karte adresa (D-318, DAN-1574; vlasnik 26. 11. 2026.).
+ * Stare adrese preusmjeravaju trajno (`301`) i samo za GET i HEAD: `301` bi POST pretvorio u GET. Iznimke:
+ * `/api/auth/…` ide sa `308` za svaku metodu, jer odjava i prijava šalju POST, a `308` zadržava metodu i tijelo;
+ * `/app/mobile/…` ide privremeno (`302`) na `/aplikacija/` dok ne postoji `/mobilna/` (tada postaje `301` na
+ * `/mobilna/…`). Lokalni edge uz preusmjeravanje šalje `Cache-Control: no-store`, da preglednik ne zapamti
+ * odredište koje se mijenja s prelaskom usluge.
  */
+export type RedirectStatus = 301 | 302 | 308;
+
 export interface LegacyRedirect {
   readonly path: string;
   readonly prefix: boolean;
-  readonly status: 307 | 308;
-  /** Nova adresa; uz prefiks se dodaje ostatak putanje, a uvijek upit. */
+  readonly status: RedirectStatus;
+  /** Nova adresa; uz `keepRest` se dodaje ostatak putanje, a upit uvijek. */
   readonly location: string;
+  /** Ostatak putanje iza `path` ide iza `location` (inače se odbacuje). */
+  readonly keepRest: boolean;
+  /** Putanje ispod `path` (s prefiksom) koje se nikad ne preusmjeravaju, npr. `/admin/api`. */
+  readonly except: readonly string[];
+  /** Preusmjerava se samo dok ta usluga lokalno nije pokrenuta (`/app/mobile` uz VS-2 front ostaje frontu). */
+  readonly unlessRunning?: Service;
+}
+
+/** Metode koje stara adresa preusmjerava: `308` svaku, ostali statusi samo GET i HEAD. */
+export function redirectsMethod(status: RedirectStatus, method: string): boolean {
+  return status === 308 || method === 'GET' || method === 'HEAD';
 }
 
 /**
- * Stare adrese za zadane osnove. `/app/web/…`, `/app/chrome/…` i `/admin/…` preusmjeravaju tek kad je usluga
- * prešla na novu osnovu: dotad je stara adresa jedina na kojoj klijent usluge radi (i povratak nakon prijave
- * AAI@EduHr je `/app/web/`), pa stare i nove adrese rade istodobno. Ostale stare adrese preusmjeravaju odmah,
- * na adresu na kojoj stranica danas radi.
+ * Tablica 301 za zadane osnove, redom usporedbe (prvi pogodak vrijedi, pa uže putanje idu prije šire).
+ * `/admin/…` preusmjerava kad je Aplication_front prešao na `/administracija` (zadatak 9), a `/app/web/…` i
+ * `/app/chrome/…` kad front institucije prijeđe na `/aplikacija` (zadatak 3): dotad je stara adresa jedina na
+ * kojoj klijent fronta radi (i povratak nakon prijave AAI@EduHr je `/app/web/`). Stranice koje već imaju javnu
+ * adresu (`/app/web/naslovnica`, `/app/web/pristupacnost`, `/app/web/stanje`) i ostale stare adrese
+ * preusmjeravaju odmah, na adresu na kojoj stranica danas radi.
  */
 export function redirectsFor(bases: Bases): readonly LegacyRedirect[] {
-  const redirect = (path: string, prefix: boolean, location: string, status: 307 | 308 = 307) =>
-    Object.freeze<LegacyRedirect>({ path, prefix, status, location });
-  const list = [
+  const redirect = (
+    path: string,
+    prefix: boolean,
+    location: string,
+    options: { status?: RedirectStatus; keepRest?: boolean; except?: readonly string[]; unlessRunning?: Service } = {},
+  ) =>
+    Object.freeze<LegacyRedirect>({
+      path,
+      prefix,
+      status: options.status ?? 301,
+      location,
+      keepRest: options.keepRest ?? prefix,
+      except: Object.freeze([...(options.except ?? [])]),
+      ...(options.unlessRunning === undefined ? {} : { unlessRunning: options.unlessRunning }),
+    });
+  const list: LegacyRedirect[] = [];
+  if (bases.admin !== '/admin') list.push(redirect('/admin', true, bases.admin, { except: ['/admin/api'] }));
+  list.push(
+    redirect('/app/web/naslovnica', false, '/'),
     redirect(`${APP_PATH}/naslovnica`, false, '/'),
+    redirect('/app/web/pristupacnost', true, '/pristupacnost'),
+    redirect('/app/web/stanje', true, '/stanje'),
     redirect('/prijava', false, `${bases.front}/prijava`),
     redirect('/download', true, '/preuzimanja'),
-    redirect('/api/auth', true, '/api/v1/auth', 308),
-  ];
+    redirect('/api/auth', true, '/api/v1/auth', { status: 308 }),
+    redirect('/app/mobile', true, `${APP_PATH}/`, { status: 302, keepRest: false, unlessRunning: 'mobile' }),
+  );
   if (bases.front !== '/app/web') list.push(redirect('/app/web', true, bases.front), redirect('/app/chrome', true, bases.front));
-  if (bases.admin !== '/admin') list.push(redirect('/admin', true, bases.admin));
   return Object.freeze(list);
 }
 
 export const LEGACY_REDIRECTS: readonly LegacyRedirect[] = redirectsFor(BASES);
 
+/** Zahtjev za `redirectFor`: metoda (zadano GET) i koje usluge bez zadanog cilja lokalno rade (zadano nijedna). */
+export interface RedirectRequest {
+  readonly method?: string;
+  readonly running?: (service: Service) => boolean;
+}
+
 /** Preusmjeravanje stare adrese (putanja bez upita, kako ju je poslao preglednik), ili null. */
 export function redirectFor(
   rawPath: string,
   redirects: readonly LegacyRedirect[] = LEGACY_REDIRECTS,
-): { readonly status: 307 | 308; readonly location: string } | null {
+  { method = 'GET', running = () => false }: RedirectRequest = {},
+): { readonly status: RedirectStatus; readonly location: string } | null {
   for (const redirect of redirects) {
     const rest = restOf(rawPath, redirect.path, redirect.prefix);
     if (rest === null) continue;
-    return { status: redirect.status, location: redirect.prefix ? `${redirect.location}${rest}` : redirect.location };
+    if (redirect.except.some((path) => restOf(rawPath, path, true) !== null)) continue;
+    if (!redirectsMethod(redirect.status, method)) continue;
+    if (redirect.unlessRunning !== undefined && running(redirect.unlessRunning)) continue;
+    return { status: redirect.status, location: redirect.keepRest ? `${redirect.location}${rest}` : redirect.location };
   }
   return null;
 }

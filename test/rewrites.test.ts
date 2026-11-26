@@ -82,8 +82,8 @@ describe('entryRewrites (karta adresa D-318, DAN-1574)', () => {
       // Gola osnova fronta dobiva kosu crtu (Vite/Next osnova `/app/web/`), kao `serviceRewrites`.
       { source: '/aplikacija', destination: `${front}/app/web/` },
       { source: '/aplikacija/:path*', destination: `${front}/app/web/:path*` },
-      { source: '/administracija', destination: `${admin}/admin` },
-      { source: '/administracija/:path*', destination: `${admin}/admin/:path*` },
+      { source: '/administracija', destination: `${admin}/administracija` },
+      { source: '/administracija/:path*', destination: `${admin}/administracija/:path*` },
     ]);
   });
 
