@@ -1,0 +1,2 @@
+# DAN-1561: the RFC 6455 sample Sec-WebSocket-Key (dGhlIHNhbXBsZSBub25jZQ==) in a test, not a secret.
+9f46bd692d944129ded5925e604797dd94efc96c:test/dev-proxy.test.ts:generic-api-key:343
