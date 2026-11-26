@@ -20,10 +20,6 @@ describe('serviceRewrites', () => {
       { source: '/admin/:path*', destination: 'https://admin.example.test/admin/:path*' },
       { source: '/api/v1', destination: 'https://api.example.test/api/v1' },
       { source: '/api/v1/:path*', destination: 'https://api.example.test/api/v1/:path*' },
-      { source: '/app/web', destination: 'https://front.example.test/app/web/' },
-      { source: '/app/web/:path*', destination: 'https://front.example.test/app/web/:path*' },
-      { source: '/app/chrome', destination: 'https://front.example.test/app/chrome/' },
-      { source: '/app/chrome/:path*', destination: 'https://front.example.test/app/chrome/:path*' },
       // Next frontovi s basePathom: gola putanja bez dodane kose crte, kao lokalni edge.
       { source: '/app/mobile', destination: 'https://mobile.example.test/app/mobile' },
       { source: '/app/mobile/:path*', destination: 'https://mobile.example.test/app/mobile/:path*' },
@@ -36,7 +32,8 @@ describe('serviceRewrites', () => {
     expect(SERVICES).toEqual({
       APLICATION_FRONT_URL: ['/admin'],
       INSTITUTION_SERVER_URL: ['/api/v1'],
-      INSTITUTION_FRONT_URL: ['/app/web', '/app/chrome'],
+      // Front institucije je samo na javnim putanjama (`entryRewrites`); stara osnova nema rewritea (KA-11-EDGE).
+      INSTITUTION_FRONT_URL: [],
       INSTITUTION_WEB_MOBILE_URL: ['/app/mobile'],
       WEB_OTHER_URL: ['/o'],
     });
@@ -49,6 +46,13 @@ describe('serviceRewrites', () => {
     ['WEB_OTHER_URL', ['/o', '/o/:path*']],
   ] as const)('%s sam daje samo svoje putanje', (name, sources) => {
     expect(serviceRewrites({ [name]: ENV[name] }).map((r) => r.source)).toEqual(['/greska.html', ...sources]);
+  });
+
+  test('front institucije nema rewrite stare osnove /app/web ni /app/chrome (KA-11-EDGE)', () => {
+    expect(serviceRewrites({ INSTITUTION_FRONT_URL: ENV.INSTITUTION_FRONT_URL })).toEqual([{ source: '/greska.html', destination: '/greska' }]);
+    const sources = serviceRewrites(ENV).map((r) => r.source);
+    for (const old of ['/app/web', '/app/web/:path*', '/app/chrome', '/app/chrome/:path*']) expect(sources).not.toContain(old);
+    expect(() => serviceRewrites({ INSTITUTION_FRONT_URL: 'https://front.example.test/app' })).toThrow(/INSTITUTION_FRONT_URL/);
   });
 
   test('bez varijabli samo stranica greške: putanje usluga daju 404, početna radi', () => {
@@ -73,15 +77,16 @@ describe('entryRewrites (karta adresa D-318, DAN-1574)', () => {
 
   test('/ na naslovnicu, /ulaz na preloader, javne stranice i /aplikacija na front, /administracija na admin', () => {
     expect(entryRewrites(ENV)).toEqual([
-      { source: '/', destination: `${front}/app/web/naslovnica` },
+      { source: '/', destination: `${front}/aplikacija/naslovnica` },
       { source: '/ulaz', destination: '/' },
       ...pages.flatMap((page) => [
-        { source: page, destination: `${front}/app/web${page}` },
-        { source: `${page}/:path*`, destination: `${front}/app/web${page}/:path*` },
+        { source: page, destination: `${front}/aplikacija${page}` },
+        { source: `${page}/:path*`, destination: `${front}/aplikacija${page}/:path*` },
       ]),
-      // Gola osnova fronta dobiva kosu crtu (Vite/Next osnova `/app/web/`), kao `serviceRewrites`.
-      { source: '/aplikacija', destination: `${front}/app/web/` },
-      { source: '/aplikacija/:path*', destination: `${front}/app/web/:path*` },
+      // Osnova fronta je `/aplikacija` (Next basePath, KA-03-WEB): gola putanja bez kose crte, jer Next
+      // `/aplikacija/` preusmjerava na `/aplikacija` (308) i kosa crta bi dala petlju.
+      { source: '/aplikacija', destination: `${front}/aplikacija` },
+      { source: '/aplikacija/:path*', destination: `${front}/aplikacija/:path*` },
       { source: '/administracija', destination: `${admin}/administracija` },
       { source: '/administracija/:path*', destination: `${admin}/administracija/:path*` },
     ]);
@@ -95,7 +100,7 @@ describe('entryRewrites (karta adresa D-318, DAN-1574)', () => {
 
   test('stare adrese nisu rewrite (na ductura.org ih preusmjerava produkcijski rub, DAN-939)', () => {
     const sources = entryRewrites(ENV).map((r) => r.source);
-    for (const old of ['/prijava', '/download', '/api/auth', '/app/web', '/admin']) expect(sources).not.toContain(old);
+    for (const old of ['/prijava', '/download', '/api/auth', '/app/web', '/app/chrome', '/admin']) expect(sources).not.toContain(old);
   });
 
   test('neispravno podrijetlo fronta ili admina ruši izgradnju', () => {

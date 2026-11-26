@@ -30,10 +30,11 @@ test('automatski vodi na /aplikacija/prijava kroz lokalni edge', async ({ page, 
   await page.waitForURL((url) => url.pathname === '/aplikacija/prijava');
   if (info.config.metadata['fixture']) {
     expect(response.headers()['x-vs2-frontend']).toBe('prijava');
-    const callbackTarget = await page.request.get('/app/web/', {
-      headers: { Referer: `${EDGE_ORIGIN}/api/v1/auth/callback` },
-      maxRedirects: 0,
-    });
+    // Povratak nakon prijave AAI@EduHr je `/aplikacija/` (KA-11-EDGE); stari povratak na `/app/web/` ide 301 onamo.
+    const referer = { Referer: `${EDGE_ORIGIN}/api/v1/auth/callback` };
+    const oldCallback = await page.request.get('/app/web/', { headers: referer, maxRedirects: 0 });
+    expect([oldCallback.status(), oldCallback.headers()['location']]).toEqual([301, '/aplikacija/']);
+    const callbackTarget = await page.request.get('/aplikacija/', { headers: referer, maxRedirects: 0 });
     expect(callbackTarget.status()).toBe(200);
     expect(callbackTarget.headers()['x-vs2-frontend']).toBe('chrome');
   }
@@ -48,15 +49,16 @@ test('/ poslužuje naslovnicu fronta institucije, adresa ostaje /', async ({ pag
     expect(response?.headers()['x-vs2-frontend']).toBe('naslovnica');
     await expect(page.getByRole('heading', { name: 'naslovnica' })).toBeVisible();
   } else {
-    // Pravi front institucije: stranica i njezini resursi dolaze s fronta (`/app/web/_next/`), ne s preloadera.
+    // Pravi front institucije: stranica i njezini resursi dolaze s fronta (`/aplikacija/_next/`), ne s preloadera.
     const html = (await response?.text()) ?? '';
-    expect(html).toContain('/app/web/_next/');
+    expect(html).toContain('/aplikacija/_next/');
     expect(html).not.toContain('id="sign-in-aai"');
   }
 });
 
 test('/ulaz i /aplikacija nisu za tražilice; /aplikacija otvara web aplikaciju bez preusmjeravanja', async ({ page }) => {
-  for (const path of ['/ulaz', '/aplikacija/']) {
+  // `/aplikacija` bez kose crte: Next fronta `/aplikacija/` preusmjerava na `/aplikacija` (308, KA-03-WEB).
+  for (const path of ['/ulaz', '/aplikacija']) {
     const response = await page.request.get(path, { maxRedirects: 0 });
     expect(response.status(), path).toBe(200);
     expect(response.headers()['x-robots-tag'], path).toBe('noindex');
@@ -67,19 +69,23 @@ test('/ulaz i /aplikacija nisu za tražilice; /aplikacija otvara web aplikaciju 
 
 test('stare adrese preusmjeravaju na nove (tablica 301, /api/auth 308)', async ({ page }) => {
   const cases = [
-    ['/prijava?greska=x', 301, '/app/web/prijava?greska=x'],
+    ['/prijava?greska=x', 301, '/aplikacija/prijava?greska=x'],
     ['/aplikacija/naslovnica', 301, '/'],
     ['/app/web/naslovnica', 301, '/'],
     ['/download/windows', 301, '/preuzimanja/windows'],
     ['/admin/prijava?x=1', 301, '/administracija/prijava?x=1'],
     ['/api/auth/logout', 308, '/api/v1/auth/logout'],
+    // Stara osnova fronta (KA-11-EDGE): samo 301 na `/aplikacija/…`, s ostatkom putanje i upitom.
+    ['/app/web/', 301, '/aplikacija/'],
+    ['/app/web/zadaci?x=1', 301, '/aplikacija/zadaci?x=1'],
+    ['/app/chrome/', 301, '/aplikacija/'],
   ] as const;
   for (const [path, status, location] of cases) {
     const response = await page.request.get(path, { maxRedirects: 0 });
     expect([response.status(), response.headers()['location']], path).toEqual([status, location]);
   }
-  // Dok front ne prijeđe na `/aplikacija`, stara adresa aplikacije radi bez preusmjeravanja.
-  expect((await page.request.get('/app/web/', { maxRedirects: 0 })).status()).toBe(200);
+  // 301 bi POST pretvorio u GET: ostale metode na staroj osnovi ne idu frontu (405 preloadera).
+  expect((await page.request.post('/app/web/zadaci', { data: 'x', maxRedirects: 0 })).status()).toBe(405);
 });
 
 test('nepoznata putanja vraća hrvatsku stranicu greške sa statusom 404', async ({ page }) => {

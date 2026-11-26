@@ -1,7 +1,8 @@
 // Tablica ruta (deploy/edge/routes.ts, P-0.10): rewriteovi Nexta (src/rewrites.ts kroz next.config.ts) i
 // lokalni edge (deploy/edge/dev-proxy.mjs) za istu putanju daju isti cilj. Namjerne razlike su u tablici
 // izričito: `/app/web` s preloadera lokalni edge šalje s 307 na `/o/`, a stare adrese iz karte adresa (D-318,
-// tablica 301) lokalni edge preusmjerava, dok ih rewrite ne poznaje (produkcijski rub, DAN-939). Usluge su lažni
+// tablica 301, uz staru osnovu fronta `/app/web` i `/app/chrome`) lokalni edge preusmjerava, dok ih rewrite ne
+// poznaje (produkcijski rub, DAN-939). Usluge su lažni
 // poslužitelji na 127.0.0.1; mreže izvan računala nema.
 //
 // Strana rewritea: pravila iz `next.config.ts` primjenjuju se redom kojim ih Next primjenjuje
@@ -233,7 +234,6 @@ const REFERER_PATH = { [FIRST_SCREEN]: FIRST_SCREEN_PATH, [HOME]: '/' } as const
 const DIFFERENCES = {
   edgeOnlyRedirect: 'samo lokalni edge (VS-2): odabir „ostala sučelja” s preloadera otvara Web_other',
   legacyRedirect: 'samo lokalni edge: stara adresa iz karte adresa (D-318); na ductura.org je preusmjerava produkcijski rub (DAN-939)',
-  bareSlash: 'ista usluga; rewrite gole putanje dodaje kosu crtu za Vite base fronta institucije',
   trailingSlash: 'ista usluga; Next uspoređuje i prosljeđuje bez završne kose crte, edge putanju ne mijenja',
 } as const;
 
@@ -249,60 +249,54 @@ interface Row {
 /** Sve usluge pokrenute i zadane (Vercel s pet varijabli, lokalno `pnpm sve` s pet frontova). */
 const ALL: Row[] = [
   // Karta adresa (D-318): naslovnica fronta institucije na `/`, preloader na `/ulaz`; upit ide uz odredište.
-  { path: '/', rewrite: toService('front', '/app/web/naslovnica') },
-  { path: '/?izvor=a', rewrite: toService('front', '/app/web/naslovnica?izvor=a') },
+  { path: '/', rewrite: toService('front', '/aplikacija/naslovnica') },
+  { path: '/?izvor=a', rewrite: toService('front', '/aplikacija/naslovnica?izvor=a') },
   { path: '/ulaz', rewrite: toPreloader(200) },
   { path: '/ulaz/', rewrite: toPreloader(200) },
   { path: '/ulaz?x=1', rewrite: toPreloader(200) },
-  // Javne stranice na vrhu adrese, iz fronta institucije (dok je on na `/app/web`).
-  { path: '/preuzimanja', rewrite: toService('front', '/app/web/preuzimanja') },
-  { path: '/preuzimanja/windows/ductura.msi', rewrite: toService('front', '/app/web/preuzimanja/windows/ductura.msi') },
-  { path: '/pomoc', rewrite: toService('front', '/app/web/pomoc') },
-  { path: '/kontakt?tema=pilot', rewrite: toService('front', '/app/web/kontakt?tema=pilot') },
-  { path: '/uvjeti-koristenja', rewrite: toService('front', '/app/web/uvjeti-koristenja') },
-  { path: '/privatnost', rewrite: toService('front', '/app/web/privatnost') },
-  { path: '/pristupacnost', rewrite: toService('front', '/app/web/pristupacnost') },
-  { path: '/stanje', rewrite: toService('front', '/app/web/stanje') },
-  // Aplikacija na novoj adresi, prepisana na staru osnovu fronta; administracija doslovno (Aplication_front#24).
-  { path: '/aplikacija/zadaci?x=1', rewrite: toService('front', '/app/web/zadaci?x=1') },
-  { path: '/aplikacija/prijava', rewrite: toService('front', '/app/web/prijava') },
+  // Javne stranice na vrhu adrese, iz fronta institucije pod njegovom osnovom `/aplikacija` (KA-11-EDGE).
+  { path: '/preuzimanja', rewrite: toService('front', '/aplikacija/preuzimanja') },
+  { path: '/preuzimanja/windows/ductura.msi', rewrite: toService('front', '/aplikacija/preuzimanja/windows/ductura.msi') },
+  { path: '/pomoc', rewrite: toService('front', '/aplikacija/pomoc') },
+  { path: '/kontakt?tema=pilot', rewrite: toService('front', '/aplikacija/kontakt?tema=pilot') },
+  { path: '/uvjeti-koristenja', rewrite: toService('front', '/aplikacija/uvjeti-koristenja') },
+  { path: '/privatnost', rewrite: toService('front', '/aplikacija/privatnost') },
+  { path: '/pristupacnost', rewrite: toService('front', '/aplikacija/pristupacnost') },
+  { path: '/stanje', rewrite: toService('front', '/aplikacija/stanje') },
+  // Aplikacija i administracija doslovno: obje usluge su prešle na javnu adresu (KA-03-WEB, Aplication_front#24).
+  { path: '/aplikacija', rewrite: toService('front', '/aplikacija') },
+  { path: '/aplikacija/zadaci?x=1', rewrite: toService('front', '/aplikacija/zadaci?x=1') },
+  { path: '/aplikacija/prijava', rewrite: toService('front', '/aplikacija/prijava') },
   { path: '/administracija', rewrite: toService('admin', '/administracija') },
   { path: '/administracija/prijava', rewrite: toService('admin', '/administracija/prijava') },
-  { path: '/app/web/', referer: HOME, rewrite: toService('front', '/app/web/') },
   { path: '/greska.html?status=503', rewrite: toPreloader(200) },
   // `/admin/api/…` se nikad ne preusmjerava (301 bi POST prijave pretvorio u GET): oba ulaza ga prosljeđuju.
   { path: '/admin/api/v1/prijava', rewrite: toService('admin', '/admin/api/v1/prijava') },
   { path: '/api/v1', rewrite: toService('api', '/api/v1') },
-  { path: '/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F', rewrite: toService('api', '/api/v1/auth/login?returnTo=%2Fapp%2Fweb%2F') },
-  { path: '/app/chrome/assets/x.js', rewrite: toService('front', '/app/chrome/assets/x.js') },
+  { path: '/api/v1/auth/login?returnTo=%2Faplikacija%2F', rewrite: toService('api', '/api/v1/auth/login?returnTo=%2Faplikacija%2F') },
   { path: '/app/mobile', rewrite: toService('mobile', '/app/mobile') },
   { path: '/app/mobile/zadaci?v=1', rewrite: toService('mobile', '/app/mobile/zadaci?v=1') },
   { path: '/o', rewrite: toService('other', '/o') },
   { path: '/o/zadaci/7', rewrite: toService('other', '/o/zadaci/7') },
-  // /app/web bez dolaska s početne stranice (izravni ulaz, povratak iz AAI@EduHr): oba na front institucije.
-  { path: '/app/web/zadaci', rewrite: toService('front', '/app/web/zadaci') },
   // Izričite razlike.
   {
     path: '/app/web/',
     referer: FIRST_SCREEN,
-    rewrite: toService('front', '/app/web/'),
+    rewrite: toPreloader(404),
     edge: toRedirect(EDGE_ONLY_REDIRECT.status, EDGE_ONLY_REDIRECT.location),
     why: 'edgeOnlyRedirect',
   },
   {
     path: '/app/web?x=1',
     referer: FIRST_SCREEN,
-    rewrite: toService('front', '/app/web/?x=1'),
+    rewrite: toPreloader(404),
     edge: toRedirect(307, '/o/?x=1'),
     why: 'edgeOnlyRedirect',
   },
-  { path: '/app/web/', rewrite: toService('front', '/app/web/') },
-  { path: '/app/chrome', rewrite: toService('front', '/app/chrome/'), edge: toService('front', '/app/chrome'), why: 'bareSlash' },
   { path: '/app/mobile/', rewrite: toService('mobile', '/app/mobile'), edge: toService('mobile', '/app/mobile/'), why: 'trailingSlash' },
   { path: '/o/?q=1', rewrite: toService('other', '/o?q=1'), edge: toService('other', '/o/?q=1'), why: 'trailingSlash' },
-  { path: '/aplikacija', rewrite: toService('front', '/app/web/'), edge: toService('front', '/app/web'), why: 'bareSlash' },
-  { path: '/aplikacija/', rewrite: toService('front', '/app/web/') },
-  { path: '/pomoc/', rewrite: toService('front', '/app/web/pomoc'), edge: toService('front', '/app/web/pomoc/'), why: 'trailingSlash' },
+  { path: '/aplikacija/', rewrite: toService('front', '/aplikacija'), edge: toService('front', '/aplikacija/'), why: 'trailingSlash' },
+  { path: '/pomoc/', rewrite: toService('front', '/aplikacija/pomoc'), edge: toService('front', '/aplikacija/pomoc/'), why: 'trailingSlash' },
   // Stare adrese (tablica 301): lokalni edge preusmjerava, rewrite ih ne poznaje (DAN-939).
   { path: '/admin', rewrite: toService('admin', '/admin'), edge: toRedirect(301, '/administracija'), why: 'legacyRedirect' },
   { path: '/admin/', rewrite: toService('admin', '/admin'), edge: toRedirect(301, '/administracija/'), why: 'legacyRedirect' },
@@ -312,23 +306,31 @@ const ALL: Row[] = [
     edge: toRedirect(301, '/administracija/postavke?kartica=1'),
     why: 'legacyRedirect',
   },
-  { path: '/app/web/naslovnica', rewrite: toService('front', '/app/web/naslovnica'), edge: toRedirect(301, '/'), why: 'legacyRedirect' },
-  { path: '/app/web/stanje?x=1', rewrite: toService('front', '/app/web/stanje?x=1'), edge: toRedirect(301, '/stanje?x=1'), why: 'legacyRedirect' },
-  { path: '/app/web/pristupacnost', rewrite: toService('front', '/app/web/pristupacnost'), edge: toRedirect(301, '/pristupacnost'), why: 'legacyRedirect' },
-  { path: '/prijava', rewrite: toPreloader(404), edge: toRedirect(301, '/app/web/prijava'), why: 'legacyRedirect' },
-  { path: '/prijava?greska=pristup', rewrite: toPreloader(404), edge: toRedirect(301, '/app/web/prijava?greska=pristup'), why: 'legacyRedirect' },
+  // Stara osnova fronta (`/app/web`, `/app/chrome`) više nema rewritea; lokalni edge je preusmjerava na `/aplikacija`.
+  // Povratak iz AAI@EduHr i poveznice naslovnice na `/app/web/` tako stižu u aplikaciju (KA-11-EDGE).
+  { path: '/app/web/', referer: HOME, rewrite: toPreloader(404), edge: toRedirect(301, '/aplikacija/'), why: 'legacyRedirect' },
+  { path: '/app/web/', rewrite: toPreloader(404), edge: toRedirect(301, '/aplikacija/'), why: 'legacyRedirect' },
+  { path: '/app/web', rewrite: toPreloader(404), edge: toRedirect(301, '/aplikacija'), why: 'legacyRedirect' },
+  { path: '/app/web/zadaci?x=1', rewrite: toPreloader(404), edge: toRedirect(301, '/aplikacija/zadaci?x=1'), why: 'legacyRedirect' },
+  { path: '/app/chrome', rewrite: toPreloader(404), edge: toRedirect(301, '/aplikacija'), why: 'legacyRedirect' },
+  { path: '/app/chrome/assets/x.js', rewrite: toPreloader(404), edge: toRedirect(301, '/aplikacija/assets/x.js'), why: 'legacyRedirect' },
+  { path: '/app/web/naslovnica', rewrite: toPreloader(404), edge: toRedirect(301, '/'), why: 'legacyRedirect' },
+  { path: '/app/web/stanje?x=1', rewrite: toPreloader(404), edge: toRedirect(301, '/stanje?x=1'), why: 'legacyRedirect' },
+  { path: '/app/web/pristupacnost', rewrite: toPreloader(404), edge: toRedirect(301, '/pristupacnost'), why: 'legacyRedirect' },
+  { path: '/prijava', rewrite: toPreloader(404), edge: toRedirect(301, '/aplikacija/prijava'), why: 'legacyRedirect' },
+  { path: '/prijava?greska=pristup', rewrite: toPreloader(404), edge: toRedirect(301, '/aplikacija/prijava?greska=pristup'), why: 'legacyRedirect' },
   { path: '/download/windows?v=2', rewrite: toPreloader(404), edge: toRedirect(301, '/preuzimanja/windows?v=2'), why: 'legacyRedirect' },
   { path: '/api/auth/logout', rewrite: toPreloader(404), edge: toRedirect(308, '/api/v1/auth/logout'), why: 'legacyRedirect' },
-  { path: '/aplikacija/naslovnica', rewrite: toService('front', '/app/web/naslovnica'), edge: toRedirect(301, '/'), why: 'legacyRedirect' },
+  { path: '/aplikacija/naslovnica', rewrite: toService('front', '/aplikacija/naslovnica'), edge: toRedirect(301, '/'), why: 'legacyRedirect' },
   // Nepoznata putanja: 404 u oba (preloader, fallback u next.config.ts).
-  ...['/ulaz/x', '/ulazx', '/Ulaz', '/%75laz', '/prijava/x', '/nema-me', '/api/v2/x', '/api/v1x', '/administracijax', '/Aplikacija', '/pomocx', '/Admin', '/%61dmin', '/app/webx', '/app/mobilex', '/ostalo', '/O/x', '/%6F/x', '/app', '/api/authx'].map(
+  ...['/ulaz/x', '/ulazx', '/Ulaz', '/%75laz', '/prijava/x', '/nema-me', '/api/v2/x', '/api/v1x', '/administracijax', '/Aplikacija', '/aplikacijax', '/%61plikacija', '/pomocx', '/Admin', '/%61dmin', '/app/webx', '/App/web/', '/app/chromex', '/app/mobilex', '/ostalo', '/O/x', '/%6F/x', '/app', '/api/authx'].map(
     (path): Row => ({ path, rewrite: toPreloader(404) }),
   ),
 ];
 
 /** Bez varijabli za Institution_web_mobile i Web_other: njihove putanje daju 404 u oba, ostalo radi. */
 const WITHOUT_VARIANTS: Row[] = [
-  { path: '/', rewrite: toService('front', '/app/web/naslovnica') },
+  { path: '/', rewrite: toService('front', '/aplikacija/naslovnica') },
   { path: '/ulaz', rewrite: toPreloader(200) },
   { path: '/api/v1/me', rewrite: toService('api', '/api/v1/me') },
   // Dok `/mobilna/` ne postoji, `/app/mobile/…` bez mobilnog fronta lokalni edge šalje s 302 na `/aplikacija/`.
@@ -336,8 +338,8 @@ const WITHOUT_VARIANTS: Row[] = [
   { path: '/app/mobile/zadaci?v=1', rewrite: toPreloader(404), edge: toRedirect(302, '/aplikacija/?v=1'), why: 'legacyRedirect' },
   { path: '/o', rewrite: toPreloader(404) },
   { path: '/o/zadaci', rewrite: toPreloader(404) },
-  // Bez Web_other nema ni preusmjeravanja: i lokalni edge šalje na front institucije.
-  { path: '/app/web/', referer: FIRST_SCREEN, rewrite: toService('front', '/app/web/') },
+  // Bez Web_other nema 307 na `/o/`: i s prvog ekrana `/app/web/` ide 301 u aplikaciju.
+  { path: '/app/web/', referer: FIRST_SCREEN, rewrite: toPreloader(404), edge: toRedirect(301, '/aplikacija/'), why: 'legacyRedirect' },
 ];
 
 describe.each([
@@ -382,7 +384,8 @@ describe('tablica', () => {
       if (row.why === 'edgeOnlyRedirect') {
         expect(EDGE_ONLY_REDIRECT.paths).toContain(path);
         expect(row.referer).toBe(FIRST_SCREEN);
-        expect(row.rewrite.startsWith('front ')).toBe(true);
+        // Stara osnova fronta nema rewritea (KA-11-EDGE): na Vercelu je to 404 preloadera, lokalno 307 na Web_other.
+        expect(row.rewrite).toBe(toPreloader(404));
         expect(row.edge.startsWith(`${EDGE_ONLY_REDIRECT.status} -> ${EDGE_ONLY_REDIRECT.location}`)).toBe(true);
       } else if (row.why === 'legacyRedirect') {
         const moved = redirectFor(path);
@@ -397,9 +400,7 @@ describe('tablica', () => {
         expect(row.rewrite.split(' ')[0]).toBe(owner);
         expect(row.edge.split(' ')[0]).toBe(owner);
         expect(strip(row.rewrite)).toBe(strip(row.edge));
-        const base = entry?.path === path ? entry.destination : path;
-        if (row.why === 'bareSlash') expect(ROUTES.some((r) => r.prefix === base && SERVICES[r.service].bareSlash)).toBe(true);
-        if (row.why === 'trailingSlash') expect(path.endsWith('/')).toBe(true);
+        expect(path.endsWith('/')).toBe(true);
       }
     }
     expect(ALL.filter((row) => row.why === 'edgeOnlyRedirect').length).toBeGreaterThan(0);
